@@ -59,6 +59,8 @@ button:active{filter:brightness(1.3)}
 #mapwrap{position:relative;flex:1 1 auto;min-height:0}
 #map{position:absolute;inset:0;background:#dfe5ea}
 body.night #map{background:#0b0f13}
+/* night: darken only the basemap (radar sits in its own pane and keeps its colours) */
+body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6)}
 #controls{position:absolute;right:12px;top:12px;z-index:800;display:flex;flex-direction:column;gap:8px}
 #controls button{width:62px;height:56px;padding:0;font-weight:800;font-size:19px;background:rgba(13,20,27,.88);color:#fff;border-color:rgba(255,255,255,.18);line-height:1}
 #controls button small{display:block;font-size:11px;font-weight:600;opacity:.75;margin-top:1px}
@@ -482,9 +484,10 @@ document.addEventListener('pointerdown', () => { const a = audio(); if (a && a.s
 /* -------------------------------- map ------------------------------ */
 const map = L.map('map', { zoomControl: false, zoomSnap: 0.25, attributionControl: true }).setView([38.5, -96.5], 4);
 map.attributionControl.setPrefix(false);
-const baseOpts = { subdomains: 'abcd', maxZoom: 19, attribution: '© OpenStreetMap © CARTO · Radar: Iowa Environmental Mesonet · Weather: NWS' };
-const baseDay = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', baseOpts);
-const baseNight = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', baseOpts);
+// OpenStreetMap standard tiles: no key needed (night mode darkens them with a CSS filter)
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: Iowa Environmental Mesonet · Weather: NWS'
+}).addTo(map);
 map.createPane('radar'); map.getPane('radar').style.zIndex = 350;
 map.createPane('alerts'); map.getPane('alerts').style.zIndex = 360;
 
@@ -551,8 +554,6 @@ function isNightNow() {
 function applyNight() {
   const night = isNightNow(), was = document.body.classList.contains('night');
   document.body.classList.toggle('night', night);
-  if (night) { if (map.hasLayer(baseDay)) map.removeLayer(baseDay); if (!map.hasLayer(baseNight)) baseNight.addTo(map); }
-  else { if (map.hasLayer(baseNight)) map.removeLayer(baseNight); if (!map.hasLayer(baseDay)) baseDay.addTo(map); }
   const label = S.night === 'auto' ? 'auto' : S.night;
   $('#btnNight').innerHTML = (night ? ICON_MOON : ICON_SUN) + '<small>' + label + '</small>';
   if (was !== night) drawRings();
