@@ -408,7 +408,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [] };
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms' };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -486,14 +486,73 @@ const map = L.map('map', { zoomControl: false, zoomSnap: 0.25, attributionContro
 map.attributionControl.setPrefix(false);
 // OpenStreetMap standard tiles: no key needed (night mode darkens them with a CSS filter)
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: Iowa Environmental Mesonet · Weather: NWS'
+  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: NOAA MRMS / Iowa Environmental Mesonet · Weather: NWS'
 }).addTo(map);
 map.createPane('radar'); map.getPane('radar').style.zIndex = 350;
 map.createPane('alerts'); map.getPane('alerts').style.zIndex = 360;
 
-const radarUrl = (off, extra) => IEM_TILES + 'nexrad-n0q-900913' + (off ? '-m' + String(off).padStart(2, '0') + 'm' : '') +
+/* Two radar sources:
+   mrms = NOAA MRMS quality-controlled base reflectivity (ground clutter, bugs, birds filtered) — default
+   iem  = raw NEXRAD composite from Iowa Environmental Mesonet — backup */
+const MRMS = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/radar/radar_base_reflectivity_time/ImageServer';
+const MERC = 20037508.342789244;
+const iemUrl = (off, extra) => IEM_TILES + 'nexrad-n0q-900913' + (off ? '-m' + String(off).padStart(2, '0') + 'm' : '') +
   '/{z}/{x}/{y}.png?_=' + bucket() + (extra || '');
-const radarLayers = FRAMES.map(off => L.tileLayer(radarUrl(off), { pane: 'radar', opacity: 0, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 1 }).addTo(map));
+function mrmsExportUrl(minx, miny, maxx, maxy, w, h, t) {
+  return MRMS + '/exportImage?bbox=' + [minx, miny, maxx, maxy].map(v => v.toFixed(1)).join(',') +
+    '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=png32&transparent=true&interpolation=RSP_NearestNeighbor' +
+    (t ? '&time=' + t : '') + '&f=image';
+}
+const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's exportImage for one valid time
+  initialize(t, opts) { this._t = t; L.TileLayer.prototype.initialize.call(this, '', opts); },
+  setTime(t) { if (t !== this._t) { this._t = t; this.redraw(); } },
+  getTileUrl(c) {
+    const size = 2 * MERC / 2 ** c.z, minx = -MERC + c.x * size, maxy = MERC - c.y * size;
+    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t);
+  }
+});
+const radarOpts = () => S.source === 'mrms'
+  ? { pane: 'radar', opacity: 0, tileSize: 512, zoomOffset: -1, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 0 }
+  : { pane: 'radar', opacity: 0, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 1 };
+function nearestTime(times, target) { let b = times[0]; for (const t of times) if (Math.abs(t - target) < Math.abs(b - target)) b = t; return b; }
+// Work out the valid time of each loop frame (and the latest radar time)
+async function updateFrameTimes() {
+  if (S.source === 'mrms') {
+    let times = null;
+    try {
+      const r = await fetchT(MRMS + '/query?where=1%3D1&outFields=idp_validtime&returnGeometry=false&f=json', {}, 15000);
+      const j = await r.json();
+      times = [...new Set((j.features || []).map(f => f.attributes && f.attributes.idp_validtime).filter(Boolean))].sort((a, b) => a - b);
+      if (!times.length) times = null;
+    } catch (e) { times = null; }
+    st.timesFromServer = !!times;
+    if (!times) {          // fall back to asking for instants; server returns the scan covering each time
+      const latest = Math.floor((Date.now() - 6 * 60000) / 120000) * 120000;
+      times = []; for (let m = 60; m >= 0; m -= 2) times.push(latest - m * 60000);
+    }
+    st.radarTimes = times;
+    const latest = times[times.length - 1];
+    st.frames = FRAMES.map(off => ({ t: nearestTime(times, latest - off * 60000) }));
+    st.latestRadar = latest;
+  } else {
+    const latest = bucket() * 300000 - NC.latencyMin * 60000;
+    st.frames = FRAMES.map(off => ({ off, t: latest - off * 60000 }));
+    st.radarTimes = null; st.latestRadar = latest; st.timesFromServer = false;
+  }
+}
+let radarLayers = [];
+function buildRadarLayers() {
+  radarLayers.forEach(l => map.removeLayer(l));
+  radarLayers = st.frames.map(f => (S.source === 'mrms' ? new MrmsLayer(f.t, radarOpts()) : L.tileLayer(iemUrl(f.off), radarOpts())).addTo(map));
+  showFrame(Math.min(frameIdx, radarLayers.length - 1));
+}
+async function refreshRadarTiles(rebuild) {
+  await updateFrameTimes();
+  if (rebuild || radarLayers.length !== st.frames.length) return buildRadarLayers();
+  radarLayers.forEach((l, i) => S.source === 'mrms' ? l.setTime(st.frames[i].t) : l.setUrl(iemUrl(st.frames[i].off)));
+  showFrame(frameIdx);
+}
+const radarLag = () => st.latestRadar ? Math.max(0, (Date.now() - st.latestRadar) / 60000) : NC.latencyMin;
 const alertLayer = L.layerGroup().addTo(map);
 let meMarker = null, ringLayer = L.layerGroup().addTo(map);
 
@@ -525,10 +584,11 @@ const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="
 function showFrame(i) {
   frameIdx = i;
   radarLayers.forEach((l, j) => l.setOpacity(j === i ? S.opacity : 0));
-  const off = FRAMES[i];
-  const t = bucket() * 300000 - (off + NC.latencyMin) * 60000;
+  const f = st.frames && st.frames[i]; if (!f) return;
+  const off = Math.round((st.latestRadar - f.t) / 60000);
   const dots = FRAMES.map((_, j) => '<i class="' + (j === i ? 'on' : '') + '"></i>').join('');
-  $('#frameInfo').innerHTML = (off ? '−' + off + ' min' : 'Latest') + ' · ≈' + clock(t) + '<span class="dots">' + dots + '</span>';
+  $('#frameInfo').innerHTML = (off > 0 ? '−' + off + ' min' : 'Latest') + ' · ' + (st.timesFromServer ? '' : '≈') + clock(f.t) +
+    '<span class="dots">' + dots + '</span>';
 }
 function animStep() {
   showFrame((frameIdx + 1) % FRAMES.length);
@@ -540,7 +600,6 @@ function setAnim(on) {
   $('#btnPlay').innerHTML = on ? ICON_PAUSE : ICON_PLAY;
 }
 $('#btnPlay').addEventListener('click', () => { S.animate = !S.animate; save(); setAnim(S.animate); });
-function refreshRadarTiles() { radarLayers.forEach((l, i) => l.setUrl(radarUrl(FRAMES[i]))); }
 
 /* --------------------------- night mode ---------------------------- */
 const ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>';
@@ -815,12 +874,25 @@ function lonLatToPx(lon, lat, z) {
 function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('tile')); i.src = url; });
 }
-async function radarComposite(off, center, R, z) {
+// One frame of radar around the user, as RGBA pixels. f = {t, off} from st.frames-style timing.
+async function radarComposite(f, center, R, z) {
   const ox = Math.round(center.x) - R, oy = Math.round(center.y) - R, size = 2 * R;
+  if (S.source === 'mrms') {
+    const res = 2 * MERC / (256 * 2 ** z);
+    let img;
+    try { img = await loadImg(mrmsExportUrl(ox * res - MERC, MERC - (oy + size) * res, (ox + size) * res - MERC, MERC - oy * res, size, size, f.t)); }
+    catch (e) { throw new Error("couldn't load NOAA radar for tracking (offline, or the server blocked pixel access)"); }
+    const cv = document.createElement('canvas'); cv.width = cv.height = size;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, size, size);
+    try { return { data: ctx.getImageData(0, 0, size, size).data, w: size, h: size }; }
+    catch (e) { throw new Error('NOAA radar server blocks pixel access (CORS) — try Raw NEXRAD in Settings, or add a relay'); }
+  }
+  const off = f.off;
   const tiles = [];
   for (let ty = Math.floor(oy / 256); ty <= Math.floor((oy + size - 1) / 256); ty++)
     for (let tx = Math.floor(ox / 256); tx <= Math.floor((ox + size - 1) / 256); tx++) tiles.push({ tx, ty });
-  const tmpl = radarUrl(off, '&cors=1');
+  const tmpl = iemUrl(off, '&cors=1');
   const imgs = await Promise.allSettled(tiles.map(t => loadImg(tmpl.replace('{z}', z).replace('{x}', t.tx).replace('{y}', t.ty))));
   const cv = document.createElement('canvas'); cv.width = cv.height = size;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -839,12 +911,20 @@ async function runNowcast() {
     const z = NC.zoom, center = lonLatToPx(st.loc.lon, st.loc.lat, z);
     const mpp = 156543.03392 * Math.cos(st.loc.lat * Math.PI / 180) / 2 ** z;
     const R = Math.round(NC.radiusMi * MI / mpp);
-    const raw = await Promise.all([30, 15, 0].map(off => radarComposite(off, center, R, z)));
+    if (!st.frames) await updateFrameTimes();
+    // frames ~30 min ago, ~15 min ago and latest, with their real time gaps
+    let fr;
+    if (S.source === 'mrms') {
+      const T = st.radarTimes, latest = T[T.length - 1];
+      fr = [nearestTime(T, latest - 30 * 60000), nearestTime(T, latest - 15 * 60000), latest].map(t => ({ t }));
+    } else fr = [30, 15, 0].map(off => ({ off, t: st.latestRadar - off * 60000 }));
+    const dt1 = (fr[2].t - fr[0].t) / 60000, dt2 = (fr[2].t - fr[1].t) / 60000;
+    const raw = await Promise.all(fr.map(f => radarComposite(f, center, R, z)));
     const fine = raw.map(f => despeckle(gridFromRGBA(f.data, f.w, f.h, NC.fineCellPx), 15));
     const coarse = fine.map(g => downsampleMax(g, NC.coarse));
     const fineKm = mpp * NC.fineCellPx / 1000, coarseKm = fineKm * NC.coarse;
-    let motion = estimateMotion(coarse[0], coarse[2], 30, coarseKm, { maxKmh: NC.maxKmh });
-    if (!motion.ok) { const m2 = estimateMotion(coarse[1], coarse[2], 15, coarseKm, { maxKmh: NC.maxKmh }); if (m2.ok) motion = m2; }
+    let motion = dt1 >= 10 ? estimateMotion(coarse[0], coarse[2], dt1, coarseKm, { maxKmh: NC.maxKmh }) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
+    if (!motion.ok && dt2 >= 6) { const m2 = estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: NC.maxKmh }); if (m2.ok) motion = m2; }
     const vel = makeVelocityField(motion, NC.coarse);
     const c = R / NC.fineCellPx;
     const res = predictRain(despeckle(fine[2], S.threshDbz), fineKm, c, c, vel,
@@ -863,7 +943,7 @@ function computeStatus() {
   const stale = !st.ncAt || Date.now() - st.ncAt > 15 * 60000;
   if (!st.nc && !st.ncErr) { out.main = 'Checking radar…'; return out; }
   if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return out; }
-  const { res, motion } = st.nc, hit = res.hit, lat = NC.latencyMin;
+  const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
   out.rings = res.rings;
   const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
     : motion.ok ? 'Rain nearly stationary' : '';
@@ -943,6 +1023,7 @@ document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') &
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = [
   ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
+  ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ['threshDbz', 'Count as rain', [[20, 'Light and up'], [30, 'Moderate and up']]],
   ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
   ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
@@ -966,6 +1047,7 @@ function renderDiag() {
   const m = st.nc && st.nc.motion;
   d.textContent = [
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + (st.timesFromServer ? '' : ' (estimated)') : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
     'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
@@ -992,6 +1074,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'night') applyNight();
   if (k === 'animate') setAnim(v);
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
+  if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
@@ -1006,6 +1089,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 /* -------------------------------- start ---------------------------- */
 $('#soundChip').addEventListener('click', () => { const a = audio(); if (a) a.resume().then(updateSoundChip); });
 setAnim(S.animate);
+refreshRadarTiles(true);
 applyNight();
 fitRange();
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
@@ -1016,7 +1100,7 @@ renderStatus();
 keepAwake();
 setTimeout(updateSoundChip, 800);
 
-setInterval(() => { refreshRadarTiles(); runNowcast(); }, 5 * 60000);
+setInterval(() => { refreshRadarTiles().then(runNowcast); }, 5 * 60000);
 setInterval(refreshAlerts, 2 * 60000);
 setInterval(() => { if (st.wx.points) refreshObs().catch(() => {}); }, 15 * 60000);
 setInterval(() => { if (st.wx.points) refreshForecast().then(applyNight).catch(() => {}); }, 30 * 60000);
