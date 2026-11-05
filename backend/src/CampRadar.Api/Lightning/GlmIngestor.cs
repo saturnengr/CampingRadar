@@ -125,7 +125,7 @@ public sealed class GlmIngestor
     }
 
     // ---- HDF5 helpers (tolerant of the few type variants NOAA uses) ----
-    private static bool TryDataset(IH5File file, string name, out IH5Dataset? ds)
+    private static bool TryDataset(IH5Group file, string name, out IH5Dataset? ds)
     {
         try { ds = file.Dataset(name); return true; } catch { ds = null; return false; }
     }
