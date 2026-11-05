@@ -1751,15 +1751,31 @@ function updateSpeakBtns() { document.querySelectorAll('[data-speak]').forEach(b
 const sayTime = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
 
 // Everything the briefing is built from, as plain data (also what the backend's writer receives)
+const localDate = ms => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+function hourStats(hs) {
+  if (!hs.length) return null;
+  const rainy = hs.filter(h => h.pop >= 40), thunder = hs.filter(h => (h.thunder || 0) >= 20);
+  const gust = hs.reduce((b, h) => Math.max(h.wind, h.gust || 0) > Math.max(b.wind, b.gust || 0) ? h : b);
+  return { from: sayTime(hs[0].t), to: sayTime(hs[hs.length - 1].t + 3600e3), maxPop: Math.max(...hs.map(h => h.pop)), rainFrom: rainy.length ? sayTime(rainy[0].t) : null, rainTo: rainy.length ? sayTime(rainy[rainy.length - 1].t + 3600e3) : null, allRain: rainy.length === hs.length,
+    thunderFrom: thunder.length ? sayTime(thunder[0].t) : null, thunderTo: thunder.length ? sayTime(thunder[thunder.length - 1].t + 3600e3) : null, maxThunder: Math.max(0, ...hs.map(h => h.thunder || 0)),
+    hi: Math.max(...hs.map(h => h.temp)), lo: Math.min(...hs.map(h => h.temp)), feelsHi: Math.max(...hs.map(h => h.feels)), feelsLo: Math.min(...hs.map(h => h.feels)),
+    topGust: Math.max(gust.wind, gust.gust || 0), gustAt: sayTime(gust.t), windDir: hs[0].dir, windDirLater: hs[Math.min(hs.length - 1, 5)].dir, windNow: hs[0].wind, sky: hs[Math.floor(hs.length / 2)].text };
+}
 function briefingFacts() {
-  const now = Date.now(), today = new Date().toISOString().slice(0, 10);
-  const hours = dayHours(new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)).filter(h => h.t + 3600e3 > now);
-  const next = hours.slice(0, 12);
-  const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) : null;
+  const now = Date.now(), today = localDate(now), tomorrow = localDate(now + 864e5), hourNow = new Date().getHours();
+  const todayHours = dayHours(today).filter(h => h.t + 3600e3 > now);
+  const next = todayHours.slice(0, 8);
+  const morning = hourNow < 12;
+  // before noon: the rest of today (afternoon + evening); from noon: tomorrow
+  const outlookHours = morning ? dayHours(today).filter(h => new Date(h.t).getHours() >= 12) : dayHours(tomorrow);
+  const daily = d => ({ day: st.wx.daily.find(p => p.startTime.slice(0, 10) === d && p.isDaytime), night: st.wx.daily.find(p => p.startTime.slice(0, 10) === d && !p.isDaytime) });
+  const td = daily(today), tm = daily(tomorrow);
+  const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, today) : null, sunTm = st.loc ? sunTimes(st.loc.lat, st.loc.lon, tomorrow) : null;
   const status = computeStatus();
   const nc = st.nc && st.nc.res, hit = nc && nc.hit;
+  const period = p => p && { hi: p.isDaytime ? p.temperature : null, lo: p.isDaytime ? null : p.temperature, text: p.shortForecast, detail: p.detailedForecast, pop: popOf(p), wind: p.windSpeed, windDir: p.windDirection };
   return {
-    place: ($('#nowPlace').textContent || '').replace(/^Near /, ''), activity: S.activity, time: sayTime(now),
+    place: ($('#nowPlace').textContent || '').replace(/^Near /, ''), activity: S.activity, time: sayTime(now), morning,
     now: { temp: $('#nowTemp').textContent, cond: $('#nowCond').textContent, wind: $('#nowWind').textContent },
     status: { level: status.level, main: status.main, sub: status.sub },
     rain: hit ? { etaMin: Math.max(0, Math.round(hit.etaMin - radarLag())), endMin: Math.round(hit.endMin), intensity: intensityWord(hit.maxDbz), from: compassLong(hit.fromBearing), trend: hit.trend && hit.trend.word, fizzles: !!hit.fizzles } : null,
@@ -1769,16 +1785,22 @@ function briefingFacts() {
     alerts: st.alerts.map(a => ({ event: a.event, ends: a.ends ? sayTime(Date.parse(a.ends)) : null, critical: CRITICAL.includes(a.event) })),
     hazards: hazardLines().map(l => l.replace(/^[^\w]+/, '')),
     next: next.map(h => ({ at: sayTime(h.t), temp: h.temp, feels: h.feels, pop: h.pop, thunder: h.thunder, wind: h.wind, gust: h.gust, dir: h.dir, sky: h.text })),
-    today: (() => { const d = st.wx.daily.find(p => p.startTime.slice(0, 10) === today && p.isDaytime), n = st.wx.daily.find(p => p.startTime.slice(0, 10) === today && !p.isDaytime); return { day: d && { hi: d.temperature, text: d.shortForecast, detail: d.detailedForecast }, night: n && { lo: n.temperature, text: n.shortForecast } }; })(),
+    nextStats: hourStats(next),
+    today: { day: period(td.day), night: period(td.night) },
+    outlook: { label: morning ? 'this afternoon and evening' : 'tomorrow', stats: hourStats(outlookHours), day: morning ? null : period(tm.day), night: morning ? period(td.night) : period(tm.night),
+      sun: morning ? (sun && sun.rise ? { set: sayTime(sun.set), dusk: sayTime(sun.dusk) } : null) : (sunTm && sunTm.rise ? { rise: sayTime(sunTm.rise), set: sayTime(sunTm.set), dawn: sayTime(sunTm.dawn) } : null) },
     sun: sun && sun.rise ? { rise: sayTime(sun.rise), set: sayTime(sun.set), dusk: sayTime(sun.dusk), minsToSunset: Math.round((sun.set - now) / 60000) } : null,
+    moon: moonPhase(now),
     pressure: st.wx.pressure ? { inHg: +st.wx.pressure.inHg.toFixed(2), word: st.wx.pressure.word, fast: st.wx.pressure.fast } : null,
   };
 }
-// Plain-language briefing written on the device (the backend's language model, when available, replaces this text)
-function composeBriefing(f) {
-  const out = [], act = f.activity;
-  const hi = f.today.day && f.today.day.hi, lo = f.today.night && f.today.night.lo;
-  out.push(`Here's your ${act === 'rv' ? 'RV' : act === 'hunting' ? 'hunting' : act === 'trail' ? 'trail' : 'camp'} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
+
+/* ---- device-written briefings: a shared safety lead, then one writer per activity, then the outlook ---- */
+const deg = t => t == null ? '' : Math.round(t) + '';
+function leadSentences(f) {
+  const out = [];
+  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail' }[f.activity] || 'camp';
+  out.push(`Here's your ${name} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Right now it's ${f.now.temp.replace('°', ' degrees')}${f.now.cond ? ' and ' + f.now.cond.toLowerCase() : ''}${f.now.wind ? ', ' + f.now.wind.toLowerCase().replace('wind ', 'wind from the ') : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
   if (f.rain) {
@@ -1789,21 +1811,75 @@ function composeBriefing(f) {
   else out.push('No rain is heading your way right now.');
   if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Lightning is within ten miles, nearest about ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and getting closer' : ''}. Get to shelter.` : `Lightning is ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and approaching' : f.lightning.trend === 'receding' ? ' and moving away' : ''}.`);
   for (const h of f.hazards) out.push(h + '.');
-  // next hours by activity
-  const n = f.next; if (n.length) {
-    const rainy = n.filter(h => h.pop >= 40), thunder = n.filter(h => (h.thunder || 0) >= 20), gusty = n.filter(h => Math.max(h.wind, h.gust || 0) >= 20);
-    const temps = n.map(h => h.temp), feels = n.map(h => h.feels);
-    if (rainy.length) out.push(`Looking ahead, rain is most likely ${rainy.length === n.length ? 'all day' : 'around ' + rainy[0].at + (rainy.length > 1 ? ' through ' + rainy[rainy.length - 1].at : '')}, up to ${Math.max(...n.map(h => h.pop))} percent.`);
-    else out.push(`The next ${n.length} hours look ${Math.max(...n.map(h => h.pop)) >= 20 ? 'mostly dry' : 'dry'}.`);
-    if (thunder.length) out.push(`Thunderstorms are possible around ${thunder[0].at}${thunder.length > 1 ? ' to ' + thunder[thunder.length - 1].at : ''}.`);
-    if (act === 'rv') { const g = n.reduce((b, h) => Math.max(h.wind, h.gust || 0) > Math.max(b.wind, b.gust || 0) ? h : b); const top = Math.max(g.wind, g.gust || 0); out.push(top >= 30 ? `Wind is the story: gusts to ${top} around ${g.at}. Bring the awning in and expect a rough drive if you're moving.` : top >= 20 ? `Gusts reach about ${top} around ${g.at}; keep an eye on the awning.` : `Winds stay light, under 20.`); }
-    else if (gusty.length) out.push(`Gusts over 20 around ${gusty[0].at}${gusty.length > 1 ? ' through ' + gusty[gusty.length - 1].at : ''}.`);
-    if (act === 'hunting') { const w = n[0]; out.push(`Wind is from the ${w.dir || 'variable'} at ${w.wind}${n.length > 4 && n[4].dir && n[4].dir !== w.dir ? ', shifting to the ' + n[4].dir + ' by ' + n[4].at : ''}.`); if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}.`); }
-    if (act === 'trail') { const hot = Math.max(...feels), cold = Math.min(...feels); if (hot >= 90) out.push(`It'll feel like ${hot} at the peak; carry water and go early.`); else if (cold <= 25) out.push(`Wind chill gets down to ${cold}; cover up.`); else out.push(`Temperatures run ${Math.min(...temps)} to ${Math.max(...temps)}, comfortable for exertion.`); }
-    else if (hi != null || lo != null) out.push(`${hi != null ? 'High near ' + hi : ''}${hi != null && lo != null ? ', ' : ''}${lo != null ? 'low tonight around ' + lo : ''}.`);
+  return out;
+}
+const rainSentence = (s, when) => !s ? '' : s.rainFrom ? `Rain ${s.allRain ? 'most of ' + when : 'around ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' to ' + s.rainTo : '')}, up to ${s.maxPop} percent.` : s.maxPop >= 20 ? `A small chance of rain ${when}, ${s.maxPop} percent at most.` : `${when[0].toUpperCase() + when.slice(1)} looks dry.`;
+const thunderSentence = s => s && s.thunderFrom ? `Thunderstorms are possible around ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' to ' + s.thunderTo : ''}.` : '';
+function campingBody(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  if (s.topGust >= 25) out.push(`Wind picks up to about ${s.topGust} around ${s.gustAt}; stake the tarps and keep the fire small.`);
+  else if (s.topGust >= 15) out.push(`A breeze to ${s.topGust} around ${s.gustAt}.`);
+  else out.push('Winds stay light.');
+  if (f.today.night && f.today.night.lo != null) out.push(`Tonight drops to around ${deg(f.today.night.lo)}${f.today.night.text ? ', ' + f.today.night.text.toLowerCase() : ''}.`);
+  if (f.sun && f.sun.minsToSunset > 0 && f.sun.minsToSunset < 360) out.push(`Sunset is at ${f.sun.set}, ${fmtDur(f.sun.minsToSunset)} from now.`);
+  return out;
+}
+function rvBody(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(s.topGust >= 30 ? `Wind is the story: gusts to ${s.topGust} around ${s.gustAt}. Bring the awning in, and it's a rough drive for a high-profile rig.` : s.topGust >= 20 ? `Gusts reach about ${s.topGust} around ${s.gustAt}; keep an eye on the awning.` : `Winds stay under 20; the awning is fine.`);
+  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  if (s.maxThunder >= 40) out.push('With storms that strong, hail is possible; the live radar is the thing to watch.');
+  out.push(`Temperatures run ${deg(s.lo)} to ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' overnight' : ''}.`);
+  return out;
+}
+function huntingBody(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(`Wind is from the ${s.windDir || 'variable'} at ${s.windNow}${s.windDirLater && s.windDirLater !== s.windDir ? ', shifting to the ' + s.windDirLater + ' later' : ', holding steady'}${s.topGust >= 20 ? ', gusting to ' + s.topGust : ''}.`);
+  if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}${f.pressure.word === 'falling' ? '; a front is likely on the way' : f.pressure.word === 'rising' ? '; conditions are settling' : ''}.`);
+  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  out.push(`Temperatures ${deg(s.lo)} to ${deg(s.hi)}.`);
+  if (f.sun) out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}; legal light runs about half an hour either side. Moon is ${f.moon.ill} percent, ${f.moon.name.toLowerCase()}.`);
+  return out;
+}
+function trailBody(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  if (s.feelsHi >= 90) out.push(`It'll feel like ${deg(s.feelsHi)} at the peak; carry extra water and go early.`);
+  else if (s.feelsLo <= 25) out.push(`Wind chill gets down to ${deg(s.feelsLo)}; cover up.`);
+  else out.push(`Temperatures run ${deg(s.lo)} to ${deg(s.hi)}, comfortable for exertion.`);
+  if (s.topGust >= 20) out.push(`Gusts to ${s.topGust} around ${s.gustAt}${f.activity === 'trail' ? '; expect a headwind on exposed stretches' : ''}.`);
+  if (f.sun && f.sun.minsToSunset > 0) out.push(`Sunset is at ${f.sun.set}, ${fmtDur(f.sun.minsToSunset)} from now; plan to be back by ${f.sun.dusk}.`);
+  return out;
+}
+function outlookSentences(f) {
+  const o = f.outlook, s = o.stats, out = [];
+  if (!s && !o.day && !o.night) return out;
+  out.push(`Looking at ${o.label}:`);
+  if (f.morning) {
+    if (s) { out.push(rainSentence(s, 'this afternoon and evening'), thunderSentence(s)); }
+    if (f.activity === 'rv' && s) out.push(s.topGust >= 20 ? `Gusts to ${s.topGust} around ${s.gustAt}.` : 'Winds stay light.');
+    if (f.activity === 'hunting' && s) out.push(`Evening wind from the ${s.windDirLater || s.windDir || 'variable'}${o.sun ? ', last light about ' + o.sun.dusk : ''}.`);
+    if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} at the warmest${o.sun ? ', sunset ' + o.sun.set : ''}.`);
+    if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Overnight low around ${deg(o.night.lo)}${o.night.text ? ', ' + o.night.text.toLowerCase() : ''}.`);
+    else if (o.night && o.night.lo != null && f.activity !== 'camping') out.push(`Low tonight around ${deg(o.night.lo)}.`);
+  } else {
+    if (o.day) out.push(`Tomorrow: ${o.day.text ? o.day.text.toLowerCase() : ''}${o.day.hi != null ? ', high near ' + deg(o.day.hi) : ''}${o.day.pop >= 20 ? ', ' + o.day.pop + ' percent chance of rain' : ''}.`);
+    if (s) out.push(thunderSentence(s));
+    if (f.activity === 'rv' && (s || o.day)) out.push(s && s.topGust >= 20 ? `Gusts to ${s.topGust} around ${s.gustAt}; plan the awning and any driving around that.` : `Winds look manageable${o.day && o.day.wind ? ', ' + o.day.wind + ' from the ' + (o.day.windDir || '') : ''}.`);
+    if (f.activity === 'hunting') out.push(`${s && s.windDir ? 'Morning wind from the ' + s.windDir + (s.windDirLater && s.windDirLater !== s.windDir ? ', going ' + s.windDirLater + ' by midday' : '') + '. ' : ''}${o.sun ? 'First light about ' + o.sun.dawn + ', sunrise ' + o.sun.rise + '.' : ''}`);
+    if (f.activity === 'trail' && s) out.push(s.feelsHi >= 90 ? `It'll feel like ${deg(s.feelsHi)} by afternoon; start early.` : s.feelsLo <= 25 ? `Cold start, wind chill near ${deg(s.feelsLo)}.` : `Temperatures ${deg(s.lo)} to ${deg(s.hi)}${o.sun ? ', sunset ' + o.sun.set : ''}.`);
+    if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Tomorrow night around ${deg(o.night.lo)}.`);
   }
-  if (f.sun) { if (act === 'hunting') out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}; legal light runs about half an hour either side.`); else if (f.sun.minsToSunset > 0 && f.sun.minsToSunset < 300) out.push(`Sunset is at ${f.sun.set}, ${fmtDur(f.sun.minsToSunset)} from now${act === 'trail' ? '; plan to be back by ' + f.sun.dusk : ''}.`); else out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}.`); }
-  return out.join(' ').replace(/\s+/g, ' ');
+  return out;
+}
+function composeBriefing(f) {
+  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody }[f.activity] || campingBody;
+  return [...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1');
 }
 async function getBriefing() {
   const facts = briefingFacts();

@@ -33,7 +33,15 @@ public sealed class BriefingWriter
         hunting = wind direction and shifts, pressure trend, legal light, moon; trail = rain and thunder timing,
         feels-like temperature, daylight remaining; camping = rain timing, overnight low, wind, lightning.
         Give the arrival time of rain and say whether it is strengthening, weakening, or likely to fizzle, when the facts say so.
+        Structure: (1) the current picture and the next few hours ("next"/"nextStats"); (2) the outlook in "outlook":
+        when "morning" is true this is the rest of today, this afternoon and evening, so say when rain or storms arrive
+        and the overnight low; when false it is tomorrow, so give tomorrow's shape, high, rain chance, wind, and for hunting
+        the first light and morning wind. Write the outlook as its own short paragraph beginning "Looking at <label>".
+        Make each activity's briefing sound different: an RV briefing is about wind, gusts, hail and the awning; a hunting
+        briefing about wind direction and shifts, pressure, legal light and the moon; a trail briefing about rain and thunder
+        timing, feels-like temperature and daylight; a camp briefing about rain timing, the overnight low, wind and lightning.
         Never contradict or soften an NWS warning. Never invent facts that are not in the JSON. End with one practical sentence.
+        Target 110 to 170 words in total.
         """;
 
     public async Task<string?> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct)
