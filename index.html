@@ -1133,6 +1133,7 @@ function handleLightningEvent(lvl) {
 /* --------------------------- map layers: floods, fire, smoke, wind, clouds --------------------------- */
 map.createPane('hazards'); map.getPane('hazards').style.zIndex = 355;
 map.createPane('imagery'); map.getPane('imagery').style.zIndex = 340;
+map.createPane('clouds'); map.getPane('clouds').style.zIndex = 345; map.getPane('clouds').style.mixBlendMode = 'screen';   // only the bright cloud tops show through
 const LAYER_INFO = {
   flood: ['Flood alerts', 'NWS flood and flash-flood warnings, watches and advisories, drawn where they apply'],
   gauges: ['River gauges', 'NOAA gauges; colour shows action / minor / moderate / major flood stage'],
@@ -1165,7 +1166,7 @@ const smokeLayer = new SmokeLayer({ pane: 'imagery', tileSize: 512, opacity: 0.5
 let cloudLayer = null;
 function cloudWmsLayer() {
   const night = st.wx.isDay === false || (st.wx.isDay == null && (new Date().getHours() < 7 || new Date().getHours() >= 18));
-  return L.tileLayer.wms(NOWCOAST, { layers: night ? 'satellite:goes_longwave_imagery' : 'satellite:goes_visible_imagery', format: 'image/png', transparent: true, version: '1.3.0', pane: 'imagery', opacity: 0.6, maxZoom: 19, uppercase: true, _: bucket() });
+  return L.tileLayer.wms(NOWCOAST, { layers: night ? 'satellite:goes_longwave_imagery' : 'satellite:goes_visible_imagery', format: 'image/png', transparent: true, version: '1.3.0', pane: 'clouds', opacity: 0.85, maxZoom: 19, uppercase: true, _: bucket() });
 }
 
 function applyLayers() {
