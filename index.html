@@ -408,7 +408,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {} };
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [] };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -578,14 +578,58 @@ function updatePickHint() {
   $('#btnPick').classList.toggle('on', st.picking || S.locMode === 'manual');
 }
 function setPicking(on) { st.picking = on; updatePickHint(); }
-$('#btnPick').addEventListener('click', () => setPicking(!st.picking));
+$('#btnPick').addEventListener('click', () => { if (st.picking) setPicking(false); else openLocation(); });
 $('#pickCancel').addEventListener('click', () => setPicking(false));
 map.on('click', e => {
   if (!st.picking && st.loc) return;
-  S.locMode = 'manual'; S.manual = { lat: e.latlng.lat, lon: e.latlng.lng }; save();
   st.picking = false;
-  setLocation(e.latlng.lat, e.latlng.lng, 'manual');
+  setManual(e.latlng.lat, e.latlng.lng, 'Map pin ' + e.latlng.lat.toFixed(3) + ', ' + e.latlng.lng.toFixed(3));
 });
+function setManual(lat, lon, label) {
+  S.locMode = 'manual'; S.manual = { lat, lon, label };
+  S.recent = [{ lat, lon, label }].concat((S.recent || []).filter(r => distMi(r, { lat, lon }) > 1)).slice(0, 6);
+  save(); closeModal();
+  setLocation(lat, lon, 'manual');
+}
+
+/* Location panel: GPS, tap the map, search a place, or type coordinates */
+function openLocation() {
+  const sh = $('#sheet');
+  const cur = !st.loc ? 'Not set yet' : S.locMode === 'gps'
+    ? 'Using GPS' + (st.gpsAcc ? ' (±' + Math.round(st.gpsAcc) + ' m)' : lastGps ? '' : ' — waiting for a fix')
+    : 'Set manually: ' + ((S.manual && S.manual.label) || st.loc.lat.toFixed(3) + ', ' + st.loc.lon.toFixed(3));
+  sh.innerHTML = '<h2>Location</h2><div class="row" id="locCur"></div>' +
+    '<div class="btns"><button data-loc="gps">Use GPS</button><button data-loc="tap">Tap on the map</button></div>' +
+    '<div class="row"><label>Search a town, ZIP code or address — or type coordinates (e.g. 32.78, -96.80)</label>' +
+    '<form id="locForm" style="display:flex;gap:8px"><input id="locQ" type="search" autocomplete="off" ' +
+    'style="flex:1;min-height:48px;font:inherit;font-size:18px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#0b1117;color:var(--text)">' +
+    '<button type="submit">Search</button></form><div id="locMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div id="locRes" class="btns" style="flex-direction:column"></div></div>' +
+    ((S.recent || []).length ? '<div class="row"><label>Recent spots</label><div id="locRecent" class="btns" style="flex-direction:column"></div></div>' : '') +
+    '<button class="done" data-act="close">Close</button>';
+  $('#locCur').textContent = cur;
+  const addBtns = (box, list) => list.forEach(r => {
+    const b = document.createElement('button'); b.textContent = r.label; b.style.textAlign = 'left'; b.style.padding = '8px 14px';
+    b.onclick = () => setManual(r.lat, r.lon, r.label); box.appendChild(b);
+  });
+  if ($('#locRecent')) addBtns($('#locRecent'), S.recent);
+  $('#locForm').onsubmit = async ev => {
+    ev.preventDefault();
+    const q = $('#locQ').value.trim(), msg = $('#locMsg'), res = $('#locRes');
+    res.innerHTML = ''; if (!q) return;
+    const m = /^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/.exec(q);
+    if (m && Math.abs(+m[1]) <= 90 && Math.abs(+m[2]) <= 180) return setManual(+m[1], +m[2], (+m[1]).toFixed(4) + ', ' + (+m[2]).toFixed(4));
+    msg.textContent = 'Searching…';
+    try {
+      const r = await fetchT('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=us&q=' + encodeURIComponent(q), {}, 15000);
+      const j = await r.json();
+      if (!j.length) { msg.textContent = 'No matches — try adding the state, e.g. "Broken Bow, OK".'; return; }
+      msg.textContent = 'Tap the right one:';
+      addBtns(res, j.map(x => ({ lat: +x.lat, lon: +x.lon, label: x.display_name.replace(/, United States$/, '') })));
+    } catch (e) { msg.textContent = 'Search failed — check the internet connection, or type coordinates instead.'; }
+  };
+  $('#modal').hidden = false;
+  setTimeout(() => { const i = $('#locQ'); if (i && !st.loc) i.focus(); }, 50);
+}
 let lastGps = null;
 function startGps() {
   if (!navigator.geolocation) { st.gpsErr = 'not supported'; updatePickHint(); return; }
@@ -902,11 +946,12 @@ const SETTINGS = [
   ['threshDbz', 'Count as rain', [[20, 'Light and up'], [30, 'Moderate and up']]],
   ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
   ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
-  ['locMode', 'Location', [['gps', 'GPS'], ['manual', 'Tap map to set']]],
 ];
 function openSettings() {
   const sh = $('#sheet');
-  sh.innerHTML = '<h2>Settings</h2>' + SETTINGS.map(([k, label, opts]) =>
+  sh.innerHTML = '<h2>Settings</h2>' +
+    '<div class="row"><label>Location</label><div class="btns"><button data-act="loc">' +
+    (S.locMode === 'gps' ? 'Using GPS' : 'Set manually') + ' — change…</button></div></div>' + SETTINGS.map(([k, label, opts]) =>
     '<div class="row"><label>' + label + '</label><div class="seg">' +
     opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div></div>').join('') +
     '<div class="row"><label>Radar opacity</label><input type="range" min="0.3" max="1" step="0.05" data-slider="opacity" value="' + S.opacity + '"></div>' +
@@ -936,6 +981,9 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'close') return closeModal();
   if (b.dataset.act === 'rain') return playChime('rain');
   if (b.dataset.act === 'warn') return playWarning();
+  if (b.dataset.act === 'loc') return openLocation();
+  if (b.dataset.loc === 'gps') { useGps(); closeModal(); return; }
+  if (b.dataset.loc === 'tap') { closeModal(); setPicking(true); return; }
   const k = b.dataset.k; if (!k) return;
   const cur = S[k], raw = b.dataset.v;
   const v = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw;
@@ -944,7 +992,6 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'night') applyNight();
   if (k === 'animate') setAnim(v);
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
-  if (k === 'locMode') { if (v === 'gps') useGps(); else { closeModal(); setPicking(true); } }
 });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
