@@ -1645,12 +1645,12 @@ $('#days').addEventListener('click', e => { const d = e.target.closest('.day'); 
 
 // NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
 async function fetchGrid(P) {
-  if (st.wx.grid && Date.now() - st.wx.grid.at < 30 * 60000) return;
+  if (st.wx.grid && Date.now() - st.wx.grid.at < 30 * 60000 && st.wx.grid.loc && st.loc && distMi(st.wx.grid.loc, st.loc) < 2) return;
   const g = (await nws(P.forecastGridData)).properties;
   const expand = (series, conv) => { const m = {}; for (const v of (series && series.values) || []) {
     const [startS, dur] = v.validTime.split('/'); const start = Date.parse(startS); const hrs = durHours(dur);
     for (let h = 0; h < hrs; h++) m[start + h * 3600e3] = conv ? conv(v.value) : v.value; } return m; };
-  st.wx.grid = { at: Date.now(), gust: expand(g.windGust, kmhToMph), thunder: expand(g.probabilityOfThunder), feels: expand(g.apparentTemperature, cToF),
+  st.wx.grid = { at: Date.now(), loc: st.loc ? { ...st.loc } : null, gust: expand(g.windGust, kmhToMph), thunder: expand(g.probabilityOfThunder), feels: expand(g.apparentTemperature, cToF),
     qpf: expand(g.quantitativePrecipitation), sky: expand(g.skyCover), snow: expand(g.snowfallAmount, mm => mm / 25.4), snowLevel: expand(g.snowLevel, m => m * 3.28084), vis: expand(g.visibility, m => m / 1609.344), windChill: expand(g.windChill, cToF), wave: expand(g.waveHeight, m => m * 3.28084) };
   // snowfallAmount is a per-period total spread over its hours; keep per-hour share so sums over hours are right
   for (const v of (g.snowfallAmount && g.snowfallAmount.values) || []) { const [startS, dur] = v.validTime.split('/'); const start = Date.parse(startS), hrs = durHours(dur); for (let h = 0; h < hrs; h++) st.wx.grid.snow[start + h * 3600e3] = (v.value || 0) / 25.4 / hrs; }
@@ -1702,7 +1702,7 @@ function dayHours(dateStr) {
   return st.wx.hourly.filter(p => p.startTime.slice(0, 10) === dateStr).map(p => {
     const t = Date.parse(p.startTime), g = st.wx.grid || {};
     const temp = p.temperature, rh = rhOf(p), wind = windMph(p), gust = g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null;
-    const feels = g.feels && g.feels[t] != null ? Math.round(g.feels[t]) : (temp >= 80 ? heatIndexF(temp, rh) : windChillF(temp, wind));
+    const feels = g.windChill && g.windChill[t] != null && temp <= 50 ? Math.round(g.windChill[t]) : g.feels && g.feels[t] != null ? Math.round(g.feels[t]) : (temp >= 80 ? heatIndexF(temp, rh) : windChillF(temp, wind));
     return { t, temp, feels, rh, wind, gust, dir: p.windDirection, pop: popOf(p), thunder: g.thunder ? Math.round(g.thunder[t] || 0) : null, text: p.shortForecast, day: p.isDaytime,
       snow: g.snow ? (g.snow[t] || 0) : 0, snowLevel: g.snowLevel ? g.snowLevel[t] : null, vis: g.vis ? g.vis[t] : null, wave: g.wave ? g.wave[t] : null };
   });
@@ -1746,7 +1746,7 @@ async function openDay(dateStr) {
   const visVals = hours.map(h => h.vis).filter(v => v != null), visMin = visVals.length ? Math.min(...visVals) : null;
   const visTile = tile('Visibility', visMin == null ? (st.wx.visMi != null ? st.wx.visMi.toFixed(1) + '<small> mi now</small>' : '—') : (visMin < 0.3 ? '¼<small> mi</small>' : visMin.toFixed(1) + '<small> mi</small>'), visMin != null && visMin < 0.5 ? 'Whiteout-level at times' : visMin != null && visMin < 2 ? 'Reduced at times' : 'Good', visMin != null && visMin < 0.5 ? 'bad' : visMin != null && visMin < 2 ? 'warn' : 'good');
   const liftTile = tile('Lifts / ridge wind', Math.max(maxWind, maxGust) + '<small> mph</small>', Math.max(maxWind, maxGust) >= 40 ? 'Wind holds likely on exposed lifts' : Math.max(maxWind, maxGust) >= 25 ? 'Upper lifts may slow or hold' : 'Lifts should run normally', Math.max(maxWind, maxGust) >= 40 ? 'bad' : Math.max(maxWind, maxGust) >= 25 ? 'warn' : 'good');
-  const sn = st.snow || {}, site = sn.site, mdl = sn.model;
+  const sn = st.snow && st.loc && distMi(st.snow.loc, st.loc) < 2 ? st.snow : {}, site = sn.site, mdl = sn.model;
   const groundVal = site && site.depthIn != null ? site.depthIn : mdl && mdl.depthIn != null ? mdl.depthIn : null;
   const groundTile = tile('Snow on the ground', groundVal == null ? '—' : (groundVal < 1 ? (groundVal < 0.3 ? 'Trace' : '<1') : Math.round(groundVal)) + '<small> in</small>',
     site && site.depthIn != null ? site.name + ' SNOTEL, ' + Math.round(site.distMi) + ' mi, ' + site.elevFt.toLocaleString() + ' ft' + (site.change24In != null ? ' · ' + (site.change24In >= 0 ? '+' : '') + Math.round(site.change24In) + ' in / 24 h' : '') + (site.change72In != null ? ', ' + (site.change72In >= 0 ? '+' : '') + Math.round(site.change72In) + ' in / 3 days' : '')
@@ -1957,7 +1957,7 @@ function briefingFacts() {
     beach: S.activity === 'beach' && st.beach ? { station: st.beach.station && st.beach.station.name, tides: nextTides(now).map(x => ({ type: x.type === 'H' ? 'high' : 'low', at: sayTime(x.t), ft: x.ft })), waterF: st.beach.wtemp && Math.round(st.beach.wtemp.f),
       uvMaxToday: st.beach.uv && st.beach.uv.max[0] != null ? Math.round(st.beach.uv.max[0]) : null, uvMaxTomorrow: st.beach.uv && st.beach.uv.max[1] != null ? Math.round(st.beach.uv.max[1]) : null, rip: ripRisk(), alerts: beachAlerts().map(a => a.event) } : null,
     tropical: st.alerts.filter(a => TROPICAL_EVENTS.test(a.event)).map(a => ({ event: a.event, headline: a.headline })),
-    snowGround: st.snow ? { site: st.snow.site && st.snow.site.depthIn != null ? { name: st.snow.site.name, distMi: Math.round(st.snow.site.distMi), elevFt: st.snow.site.elevFt, depthIn: st.snow.site.depthIn, change24In: st.snow.site.change24In, change72In: st.snow.site.change72In, sweIn: st.snow.site.sweIn } : null,
+    snowGround: st.snow && st.loc && distMi(st.snow.loc, st.loc) < 2 ? { site: st.snow.site && st.snow.site.depthIn != null ? { name: st.snow.site.name, distMi: Math.round(st.snow.site.distMi), elevFt: st.snow.site.elevFt, depthIn: st.snow.site.depthIn, change24In: st.snow.site.change24In, change72In: st.snow.site.change72In, sweIn: st.snow.site.sweIn } : null,
       modelDepthIn: st.snow.model && st.snow.model.depthIn != null ? +st.snow.model.depthIn.toFixed(1) : null, modelChange24In: st.snow.model && st.snow.model.change24In != null ? +st.snow.model.change24In.toFixed(1) : null } : null,
   };
 }
@@ -1966,7 +1966,7 @@ function briefingFacts() {
 const deg = t => t == null ? '' : Math.round(t) + '';
 function leadSentences(f) {
   const out = [];
-  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail' }[f.activity] || 'camp';
+  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail', beach: 'beach', skiing: 'ski' }[f.activity] || 'camp';
   out.push(`Here's your ${name} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Right now it's ${f.now.temp.replace('°', ' degrees')}${f.now.cond ? ' and ' + f.now.cond.toLowerCase() : ''}${f.now.wind ? ', ' + f.now.wind.toLowerCase().replace('wind ', 'wind from the ') : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
