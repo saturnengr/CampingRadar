@@ -609,7 +609,7 @@ const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false },
   brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
-  voice: { enabled: false, key: '', keyword: 'Computer', confirm: true, sensitivity: 0.6 } };
+  voice: { enabled: false, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
@@ -1946,7 +1946,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 /* ------------------------------ voice control ---------------------- */
 const VOICE_LIBS = { porcupine: 'https://cdn.jsdelivr.net/npm/@picovoice/porcupine-web@4.0.1/dist/iife/index.min.js', wvp: 'https://cdn.jsdelivr.net/npm/@picovoice/web-voice-processor@4.0.10/dist/iife/index.min.js',
   model: 'https://cdn.jsdelivr.net/gh/Picovoice/porcupine@v4.0/lib/common/porcupine_params.pv' };
-const WAKE_WORDS = ['Computer', 'Jarvis', 'Porcupine', 'Picovoice', 'Bumblebee', 'Grasshopper', 'Terminator', 'Blueberry', 'Americano', 'Grapefruit'];
+const WAKE_WORDS = ['Bumblebee', 'Computer', 'Jarvis', 'Porcupine', 'Picovoice', 'Grasshopper', 'Terminator', 'Blueberry', 'Americano', 'Grapefruit'];
 const COMMANDS_HELP = 'Say the wake word, then: briefing, zoom in, zoom out, snooze (one, two, four or eight hours), stop, center, ten / thirty / fifty miles, night mode, day mode, status, or help.';
 const voice = { worker: null, running: false, status: 'off', listening: false, rec: null, err: null };
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1959,7 +1959,7 @@ async function startWakeWord() {
   setVoiceStatus('starting…');
   try {
     await Promise.all([loadScript(VOICE_LIBS.porcupine), loadScript(VOICE_LIBS.wvp)]);
-    const kw = WAKE_WORDS.includes(S.voice.keyword) ? S.voice.keyword : 'Computer';
+    const kw = WAKE_WORDS.includes(S.voice.keyword) ? S.voice.keyword : 'Bumblebee';
     voice.worker = await PorcupineWeb.PorcupineWorker.create(S.voice.key.trim(), [{ builtin: kw, sensitivity: +S.voice.sensitivity || 0.6 }], onWakeWord,
       { publicPath: VOICE_LIBS.model, customWritePath: 'porcupine_params_v4.pv' });
     await WebVoiceProcessor.WebVoiceProcessor.subscribe(voice.worker);
