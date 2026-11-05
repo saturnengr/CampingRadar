@@ -23,6 +23,10 @@ public sealed class MrmsClient
     private readonly SemaphoreSlim _noaaGate = new(6);   // be polite to NOAA
 
     public IReadOnlyList<long> Times { get; private set; } = Array.Empty<long>();
+    /// <summary>Scan time → NOAA raster object id (CONUS only). The service also holds Alaska, Hawaii, Guam and
+    /// Caribbean rasters in the same time list, and the newest scan's time window is zero-length, so rasters are
+    /// requested by id, never by time.</summary>
+    private Dictionary<long, long> _ids = new();
     public long Latest => Times.Count > 0 ? Times[^1] : 0;
     public DateTimeOffset TimesRefreshedAt { get; private set; }
 
@@ -38,14 +42,15 @@ public sealed class MrmsClient
     {
         try
         {
-            var url = Service + "/query?where=1%3D1&outFields=idp_validtime&returnGeometry=false&f=json";
+            var url = Service + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json";
             using var doc = JsonDocument.Parse(await _http.GetStringAsync(url, ct));
-            var set = new SortedSet<long>();
+            var ids = new Dictionary<long, long>();
             if (doc.RootElement.TryGetProperty("features", out var feats))
                 foreach (var f in feats.EnumerateArray())
-                    if (f.TryGetProperty("attributes", out var a) && a.TryGetProperty("idp_validtime", out var t) && t.ValueKind == JsonValueKind.Number)
-                        set.Add(t.GetInt64());
-            if (set.Count > 0) { Times = set.ToList(); TimesRefreshedAt = DateTimeOffset.UtcNow; }
+                    if (f.TryGetProperty("attributes", out var a) && a.TryGetProperty("idp_validtime", out var t) && t.ValueKind == JsonValueKind.Number
+                        && a.TryGetProperty("objectid", out var id) && id.ValueKind == JsonValueKind.Number)
+                        ids[t.GetInt64()] = id.GetInt64();
+            if (ids.Count > 0) { _ids = ids; Times = ids.Keys.OrderBy(x => x).ToList(); TimesRefreshedAt = DateTimeOffset.UtcNow; }
             else _log.LogWarning("MRMS time query returned no features");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -70,17 +75,18 @@ public sealed class MrmsClient
         return offsetsMin.Select(o => NearestTime(latest - o * 60000L)).ToList();
     }
 
-    public static string ExportUrl(double minx, double miny, double maxx, double maxy, int w, int h, long? t)
+    public static string ExportUrl(double minx, double miny, double maxx, double maxy, int w, int h, long? rasterId)
     {
         static string F(double v) => v.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        var rule = rasterId is null ? "" : "&mosaicRule=" + Uri.EscapeDataString("{\"mosaicMethod\":\"esriMosaicLockRaster\",\"lockRasterIds\":[" + rasterId + "]}");
         return $"{Service}/exportImage?bbox={F(minx)},{F(miny)},{F(maxx)},{F(maxy)}&bboxSR=3857&imageSR=3857&size={w},{h}" +
-               "&format=png32&transparent=true&interpolation=RSP_NearestNeighbor" + (t is null ? "" : $"&time={t}") + "&f=image";
+               "&format=png32&transparent=true&interpolation=RSP_NearestNeighbor" + rule + "&f=image";
     }
+    private long RasterId(long t) => _ids.TryGetValue(t, out var id) ? id : throw new InvalidOperationException("unknown radar scan time " + t);
 
     /// <summary>A 512-px tile at (z, x, y) in the standard Web-Mercator grid, as PNG bytes. Cached per scan time.</summary>
     public async Task<byte[]> TileAsync(long t, int z, int x, int y, CancellationToken ct)
     {
-        bool live = t == Latest;      // newest scan has no end time yet; NOAA only returns it when no time is given
         var key = $"{t}/{z}/{x}/{y}";
         var path = Path.Combine(_cacheDir, t.ToString(), z.ToString(), $"{x}_{y}.png");
         if (File.Exists(path)) return await File.ReadAllBytesAsync(path, ct);
@@ -88,7 +94,7 @@ public sealed class MrmsClient
         {
             double size = 2 * Merc / (256.0 * Math.Pow(2, z) / 512.0);
             double minx = -Merc + x * size, maxy = Merc - y * size;
-            var url = ExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, live ? null : t);
+            var url = ExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, RasterId(t));
             var bytes = await FetchAsync(url, ct);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllBytesAsync(path, bytes, ct);
@@ -101,13 +107,12 @@ public sealed class MrmsClient
     /// <summary>Square radar image centered on a point: RGBA pixels, for the tracking engine.</summary>
     public async Task<(byte[] Rgba, int Size, double MetersPerPx)> AnalysisFrameAsync(long t, double lat, double lon, int zoom, double radiusMi, CancellationToken ct)
     {
-        bool live = t == Latest;
         var (cx, cy) = LonLatToPx(lon, lat, zoom);
         double mpp = 156543.03392 * Math.Cos(lat * Math.PI / 180) / Math.Pow(2, zoom);
         int R = (int)Math.Round(radiusMi * 1609.344 / mpp), size = 2 * R;
         double res = 2 * Merc / (256 * Math.Pow(2, zoom));
         double ox = Math.Round(cx) - R, oy = Math.Round(cy) - R;
-        var url = ExportUrl(ox * res - Merc, Merc - (oy + size) * res, (ox + size) * res - Merc, Merc - oy * res, size, size, live ? null : t);
+        var url = ExportUrl(ox * res - Merc, Merc - (oy + size) * res, (ox + size) * res - Merc, Merc - oy * res, size, size, RasterId(t));
         var bytes = await FetchAsync(url, ct);
         using var img = Image.Load<Rgba32>(bytes);
         var rgba = new byte[img.Width * img.Height * 4];

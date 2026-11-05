@@ -558,10 +558,14 @@ const MRMS = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/rad
 const MERC = 20037508.342789244;
 const iemUrl = (off, extra) => IEM_TILES + 'nexrad-n0q-900913' + (off ? '-m' + String(off).padStart(2, '0') + 'm' : '') +
   '/{z}/{x}/{y}.png?_=' + bucket() + (extra || '');
+// NOAA's service holds five regions (CONUS, Alaska, Hawaii, Guam, Caribbean) in one time list, and the newest
+// scan's time window is zero-length, so asking by time can return the wrong scan. We ask for the exact CONUS raster
+// by its object id instead (st.radarIds maps scan time → id); time is only a fallback.
 function mrmsExportUrl(minx, miny, maxx, maxy, w, h, t) {
+  const id = st.radarIds && t ? st.radarIds[t] : null;
   return MRMS + '/exportImage?bbox=' + [minx, miny, maxx, maxy].map(v => v.toFixed(1)).join(',') +
     '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=png32&transparent=true&interpolation=RSP_NearestNeighbor' +
-    (t ? '&time=' + t : '') + '&f=image';
+    (id ? '&mosaicRule=' + encodeURIComponent('{"mosaicMethod":"esriMosaicLockRaster","lockRasterIds":[' + id + ']}') : t ? '&time=' + t : '') + '&f=image';
 }
 const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's exportImage for one valid time
   initialize(f, opts) { this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts); },
@@ -570,8 +574,7 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
     // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
     const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
     if (BE() && st.timesFromBackend) return BE() + '/radar/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png';
-    // the newest scan has no end time yet, so NOAA only returns it when no time is given
-    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._live ? null : this._t) + (this._live ? '&_=' + this._t : '');
+    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t);
   }
 });
 const radarOpts = () => S.source === 'mrms'
@@ -587,15 +590,18 @@ async function updateFrameTimes() {
       try {
         const r = await fetchT(BE() + '/radar/times', {}, 10000);
         const j = await r.json();
-        if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; }
+        if (j.times && j.times.length) { times = j.times; st.radarIds = null; st.timesFromBackend = true; st.backendOk = true; }
       } catch (e) { st.backendOk = false; }
     }
     if (!times) try {
-      const r = await fetchT(MRMS + '/query?where=1%3D1&outFields=idp_validtime&returnGeometry=false&f=json', {}, 15000);
+      const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", {}, 15000);
       const j = await r.json();
-      times = [...new Set((j.features || []).map(f => f.attributes && f.attributes.idp_validtime).filter(Boolean))].sort((a, b) => a - b);
+      const ids = {};
+      for (const f of j.features || []) { const a = f.attributes || {}; if (a.idp_validtime && a.objectid) ids[a.idp_validtime] = a.objectid; }
+      times = Object.keys(ids).map(Number).sort((a, b) => a - b);
+      st.radarIds = times.length ? ids : null;
       if (!times.length) times = null;
-    } catch (e) { times = null; }
+    } catch (e) { times = null; st.radarIds = null; }
     st.timesFromServer = !!times;
     if (!times) {          // fall back to asking for instants; server returns the scan covering each time
       const latest = Math.floor((Date.now() - 6 * 60000) / 120000) * 120000;
@@ -958,7 +964,7 @@ async function radarComposite(f, center, R, z) {
   if (S.source === 'mrms') {
     const res = 2 * MERC / (256 * 2 ** z);
     let img;
-    try { img = await loadImg(mrmsExportUrl(ox * res - MERC, MERC - (oy + size) * res, (ox + size) * res - MERC, MERC - oy * res, size, size, f.live ? null : f.t) + (f.live ? '&_=' + f.t : '')); }
+    try { img = await loadImg(mrmsExportUrl(ox * res - MERC, MERC - (oy + size) * res, (ox + size) * res - MERC, MERC - oy * res, size, size, f.t)); }
     catch (e) { throw new Error("couldn't load NOAA radar for tracking (offline, or the server blocked pixel access)"); }
     const cv = document.createElement('canvas'); cv.width = cv.height = size;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
