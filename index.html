@@ -1417,7 +1417,7 @@ function summarizeHazards() {
 function hazardLines() {
   const n = st.hz.nearest || {}, lines = [];
   if (n.fire) lines.push('🔥 ' + n.fire.name + ' fire ' + Math.max(1, Math.round(n.fire.d)) + ' mi ' + compass(bearingTo(st.loc, n.fire)) + (n.fire.acres ? ', ' + Math.round(n.fire.acres).toLocaleString() + ' ac' : '') + (n.fire.contained != null ? ', ' + Math.round(n.fire.contained) + '% contained' : ''));
-  if (n.gauge) lines.push('🌊 ' + n.gauge.location + ': ' + n.gauge.status + ' flooding, ' + Math.max(1, Math.round(n.gauge.d)) + ' mi ' + compass(bearingTo(st.loc, n.gauge)));
+  if (n.gauge) lines.push('🌊 River gauge at ' + n.gauge.location + ' reports ' + n.gauge.status + ' flooding, ' + Math.max(1, Math.round(n.gauge.d)) + ' mi ' + compass(bearingTo(st.loc, n.gauge)));
   else if (n.floodAlert) lines.push('🌊 ' + n.floodAlert.event + (n.floodAlert.bounds.contains(L.latLng(st.loc.lat, st.loc.lon)) ? ' in effect here' : ' nearby'));
   if (n.firewx) lines.push('🔥 ' + n.firewx.event + ' in effect here');
   return lines;
@@ -1813,12 +1813,13 @@ function leadSentences(f) {
   for (const h of f.hazards) out.push(h + '.');
   return out;
 }
-const rainSentence = (s, when) => !s ? '' : s.rainFrom ? `Rain ${s.allRain ? 'most of ' + when : 'around ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' to ' + s.rainTo : '')}, up to ${s.maxPop} percent.` : s.maxPop >= 20 ? `A small chance of rain ${when}, ${s.maxPop} percent at most.` : `${when[0].toUpperCase() + when.slice(1)} looks dry.`;
+// `when` is the period in words; `subject` is how to refer to it at the start of a sentence (e.g. "The next few hours look", "It looks")
+const rainSentence = (s, when, subject) => !s ? '' : s.rainFrom ? `Rain ${s.allRain ? 'most of ' + when : 'around ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' to ' + s.rainTo : '')}, up to ${s.maxPop} percent.` : s.maxPop >= 20 ? `A small chance of rain ${when}, ${s.maxPop} percent at most.` : `${subject || (when[0].toUpperCase() + when.slice(1) + ' looks')} dry.`;
 const thunderSentence = s => s && s.thunderFrom ? `Thunderstorms are possible around ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' to ' + s.thunderTo : ''}.` : '';
 function campingBody(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
-  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
   if (s.topGust >= 25) out.push(`Wind picks up to about ${s.topGust} around ${s.gustAt}; stake the tarps and keep the fire small.`);
   else if (s.topGust >= 15) out.push(`A breeze to ${s.topGust} around ${s.gustAt}.`);
   else out.push('Winds stay light.');
@@ -1839,7 +1840,7 @@ function rvBody(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
   out.push(awningSentence(s, 'the next few hours'));
-  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
   if (s.maxThunder >= 40) out.push('With storms that strong, hail is possible; the live radar is the thing to watch.');
   out.push(`Temperatures run ${deg(s.lo)} to ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' overnight' : ''}.`);
   return out;
@@ -1849,7 +1850,7 @@ function huntingBody(f) {
   if (!s) return out;
   out.push(`Wind is from the ${s.windDir || 'variable'} at ${s.windNow}${s.windDirLater && s.windDirLater !== s.windDir ? ', shifting to the ' + s.windDirLater + ' later' : ', holding steady'}${s.topGust >= 20 ? ', gusting to ' + s.topGust : ''}.`);
   if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}${f.pressure.word === 'falling' ? '; a front is likely on the way' : f.pressure.word === 'rising' ? '; conditions are settling' : ''}.`);
-  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
   out.push(`Temperatures ${deg(s.lo)} to ${deg(s.hi)}.`);
   if (f.sun) out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}; legal light runs about half an hour either side. Moon is ${f.moon.ill} percent, ${f.moon.name.toLowerCase()}.`);
   return out;
@@ -1857,7 +1858,7 @@ function huntingBody(f) {
 function trailBody(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
-  out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
+  out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
   if (s.feelsHi >= 90) out.push(`It'll feel like ${deg(s.feelsHi)} at the peak; carry extra water and go early.`);
   else if (s.feelsLo <= 25) out.push(`Wind chill gets down to ${deg(s.feelsLo)}; cover up.`);
   else out.push(`Temperatures run ${deg(s.lo)} to ${deg(s.hi)}, comfortable for exertion.`);
@@ -1870,7 +1871,7 @@ function outlookSentences(f) {
   if (!s && !o.day && !o.night) return out;
   out.push(`Looking at ${o.label}:`);
   if (f.morning) {
-    if (s) { out.push(rainSentence(s, 'this afternoon and evening'), thunderSentence(s)); }
+    if (s) { out.push(rainSentence(s, 'this afternoon and evening', 'It looks'), thunderSentence(s)); }
     if (f.activity === 'rv' && s) out.push(awningSentence(s, 'this afternoon and evening'));
     if (f.activity === 'hunting' && s) out.push(`Evening wind from the ${s.windDirLater || s.windDir || 'variable'}${o.sun ? ', last light about ' + o.sun.dusk : ''}.`);
     if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} at the warmest${o.sun ? ', sunset ' + o.sun.set : ''}.`);
