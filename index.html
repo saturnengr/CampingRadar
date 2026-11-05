@@ -612,7 +612,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
   brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
@@ -621,6 +621,8 @@ const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStor
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
 S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {});
 S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
+// Devices set up before the shared backend existed have an empty address saved; adopt the default unless they chose "no backend".
+if (!S.backend && !S.backendOff) S.backend = DEFAULTS.backend;
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
 const $ = s => document.querySelector(s);
@@ -2298,7 +2300,7 @@ function openSettings(tab) {
       '<div class="row" style="color:var(--muted);font-size:14px">Radar, your rings and NWS warnings are always shown. Lightning appears when a backend is set. Wind arrows come from Open-Meteo; satellite clouds and smoke from NOAA.</div>') +
     pane('data', segRows('data') +
       '<div class="row"><label>Backend address (optional — adds lightning, shared radar cache and alerts with the screen off)</label>' +
-      '<input id="beUrl" type="url" placeholder="https://radar.yourdomain.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
+      '<input id="beUrl" type="url" placeholder="https://radar.tieroneehs.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>') +
     pane('about', '<div class="diag" id="diag" style="border-top:0;margin-top:0;padding-top:4px"></div>' +
       '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite, tropical cyclones, tides and water temperature), NIFC (wildfires), USDA SNOTEL (snow depth), Open-Meteo (wind arrows, UV, modeled snow depth), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
@@ -2354,7 +2356,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.layer) { S.layers[b.dataset.layer] = !S.layers[b.dataset.layer]; save(); b.classList.toggle('on', S.layers[b.dataset.layer]); b.setAttribute('aria-checked', String(!!S.layers[b.dataset.layer])); applyLayers(); return; }
   if (b.dataset.act === 'loc') return openLocation();
   if (b.dataset.act === 'besave' || b.dataset.act === 'beclear') {
-    S.backend = b.dataset.act === 'beclear' ? '' : $('#beUrl').value.trim(); save();
+    S.backend = b.dataset.act === 'beclear' ? '' : $('#beUrl').value.trim(); S.backendOff = !S.backend; save();
     $('#beMsg').textContent = S.backend ? 'Checking…' : 'Running standalone (no lightning or push).';
     if (S.backend) fetchT(BE() + '/health', {}, 10000).then(r => r.json()).then(j => { $('#beMsg').textContent = 'Connected · radar scans: ' + j.radar.scans + ' · lightning flashes in the last hour: ' + j.lightning.flashes + (j.push.enabled ? '' : ' · push keys not set on the backend yet'); st.backendOk = true; })
       .catch(() => { $('#beMsg').textContent = 'Could not reach that address (check https and CORS).'; st.backendOk = false; });
