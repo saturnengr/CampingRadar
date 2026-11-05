@@ -33,7 +33,9 @@ public sealed class PushSender
         if (_vapid is null) return true;
         var sub = new PushSubscription(spot.Endpoint, spot.P256dh, spot.Auth);
         var json = JsonSerializer.Serialize(payload);
-        var opts = new Dictionary<string, object> { ["vapidDetails"] = _vapid, ["TTL"] = urgent ? 600 : 1800, ["urgency"] = urgent ? "high" : "normal", ["topic"] = tag };
+        // Urgency and Topic are Web Push headers (RFC 8030); the WebPush library only knows vapidDetails, TTL, headers and gcmAPIKey.
+        var headers = new Dictionary<string, object> { ["Urgency"] = urgent ? "high" : "normal", ["Topic"] = tag };
+        var opts = new Dictionary<string, object> { ["vapidDetails"] = _vapid, ["TTL"] = urgent ? 600 : 1800, ["headers"] = headers };
         try { await _client.SendNotificationAsync(sub, json, opts, ct); return true; }
         catch (WebPushException ex) when (ex.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
         { _log.LogInformation("subscription gone: {Id}", spot.Id); return false; }
