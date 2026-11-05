@@ -24,6 +24,7 @@ public sealed class RainStatus
     public Nearest? Nearest { get; set; }
     public Passing? Passing { get; set; }
     public object? Motion { get; set; }
+    public object? Trends { get; set; }
     public long LatestRadarMs { get; set; }
     public double RadarLagMin { get; set; }
     public string? Error { get; set; }
@@ -120,7 +121,20 @@ public sealed class StatusService
         if (!motion.Ok && dt2 >= 6) { var m2 = NowcastEngine.EstimateMotion(coarse[1], coarse[2], (int)Math.Round(dt2), coarseKm); if (m2.Ok) motion = m2; }
         var vel = NowcastEngine.MakeVelocityField(motion, Coarse);
         double c = frames[2].Size / 2.0 / FineCellPx;
-        var p = NowcastEngine.PredictRain(NowcastEngine.Despeckle(fine[2], opt.ThreshDbz), fineKm, c, c, vel, opt.ThreshDbz, opt.HitMi);
+        var cleaned = fine.Select(g => NowcastEngine.Despeckle(g, opt.ThreshDbz)).ToArray();
+        var labelled = cleaned.Select(g => NowcastEngine.LabelBlobs(g, opt.ThreshDbz)).ToList();
+        var trends = NowcastEngine.BlobTrends(labelled, new[] { dt1, dt2 }, vel, fineKm, opt.ThreshDbz);
+        var p = NowcastEngine.PredictRain(cleaned[2], fineKm, c, c, vel, opt.ThreshDbz, opt.HitMi, labels: labelled[2].Labels);
+        if (p.Hit is not null)
+        {
+            trends.TryGetValue(p.Hit.Blob, out var tr);
+            var big = p.Hit.BlobCells.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault();
+            if (big != 0 && big != p.Hit.Blob && trends.TryGetValue(big, out var trBig) && (tr is null || tr.Word == "new")) tr = trBig;
+            p.Hit.Trend = tr;
+            p.Hit.Fizzles = tr is { Word: "weakening", FizzleMin: not null } && tr.FizzleMin < p.Hit.EtaMin - 2;
+        }
+        if (p.NearestBlob != 0 && trends.TryGetValue(p.NearestBlob, out var nt)) p.NearestTrend = nt;
+        r.Trends = new { strengthening = trends.Values.Count(t => t.Word == "strengthening"), weakening = trends.Values.Count(t => t.Word == "weakening"), steady = trends.Values.Count(t => t.Word == "steady"), fresh = trends.Values.Count(t => t.Word == "new"), arriving = p.Hit?.Trend?.Word, fizzles = p.Hit?.Fizzles ?? false };
         r.Ring10 = p.Ring10; r.Ring30 = p.Ring30; r.Ring50 = p.Ring50; r.Nearest = p.Nearest; r.Passing = p.Passing;
         r.Motion = new { motion.Ok, motion.Reason, motion.SpeedMph, motion.HeadingDeg, motion.Conf, Regions = motion.Regions.Count(x => x.Ok) };
         Describe(r, p, motion);
@@ -133,9 +147,17 @@ public sealed class StatusService
         double lag = r.RadarLagMin;
         string moving = m.Ok && m.SpeedMph >= 3 ? $"Storms moving {Compass(m.HeadingDeg)} at {Math.Round(m.SpeedMph)} mph" : m.Ok ? "Rain nearly stationary" : "";
         var hit = p.Hit;
+        string trendWord = hit?.Trend?.Word == "strengthening" ? ", strengthening" : hit?.Trend?.Word == "weakening" ? ", weakening" : "";
+        if (hit is not null && hit.Fizzles && hit.EtaMin - lag > 10 && hit.MaxDbz < 40)
+        {
+            r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
+            r.Main = $"Rain to the {CompassLong(hit.FromBearing)} is weakening — may fizzle before it reaches you";
+            r.Sub = $"If it holds together: {Intensity(hit.MaxDbz).ToLowerInvariant()} rain in about {FmtDur(Math.Max(0, hit.EtaMin - lag))}" + (moving.Length > 0 ? " · " + moving : "");
+            return;
+        }
         if (hit is not null)
         {
-            double eta = Math.Max(0, hit.EtaMin - lag); string word = Intensity(hit.MaxDbz);
+            double eta = Math.Max(0, hit.EtaMin - lag); string word = Intensity(hit.MaxDbz) + trendWord;
             r.EtaMin = eta; r.EndMin = Math.Max(0, hit.EndMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             if (hit.EtaMin <= 0.5) { r.Color = "red"; r.Level = "atyou"; r.Main = $"{word} rain at your location"; r.Sub = hit.EndMin < 115 ? $"Likely ending in about {Math.Round(Math.Max(1, hit.EndMin - lag))} min" : "May continue for a while"; }
             else if (eta <= 10) { r.Color = "red"; r.Level = "imminent"; r.Main = $"Rain arriving in ~{Math.Max(1, Math.Round(eta))} min"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
@@ -148,7 +170,8 @@ public sealed class StatusService
             var q = p.Passing; bool mv = m.Ok && m.SpeedMph >= 3;
             r.Color = "blue"; r.Level = "passing";
             r.Main = $"Rain {Math.Round(q.DistMi)} mi {Compass(q.Bearing)} — " + (mv ? $"passing to the {CompassLong(q.PassBearing)}" : "not heading your way");
-            r.Sub = (mv ? $"Closest ≈ {Math.Max(1, Math.Round(q.ClosestMi))} mi · " : "") + (moving.Length > 0 ? moving : "Movement unclear");
+            r.Sub = (mv ? $"Closest ≈ {Math.Max(1, Math.Round(q.ClosestMi))} mi · " : "") + (moving.Length > 0 ? moving : "Movement unclear")
+                + (p.NearestTrend?.Word == "strengthening" ? " · nearest storm strengthening" : p.NearestTrend?.Word == "weakening" ? " · nearest storm weakening" : "");
         }
         else { r.Color = "green"; r.Level = "none"; r.Main = "No rain heading your way"; r.Sub = p.Nearest is null ? "Clear within 50 miles" : ""; }
     }

@@ -101,6 +101,58 @@ public class NowcastTests
         Assert.NotNull(p.Hit); Assert.Equal(0, p.Hit!.EtaMin); Assert.True(p.Ring10);
     }
 
+    record Cell(double Xkm, double Ykm, double Rkm, double Peak);
+    static DbzGrid FrameCells(IEnumerable<Cell> cells)
+    {
+        var g = new DbzGrid(FINE, FINE);
+        foreach (var c in cells)
+            for (int y = 0; y < FINE; y++) for (int x = 0; x < FINE; x++)
+            {
+                double e = (x - (CX + c.Xkm / KM)) * KM / c.Rkm, n = (y - (CY + c.Ykm / KM)) * KM / c.Rkm, rr = e * e + n * n;
+                if (rr < 1) { float v = (float)(c.Peak - (c.Peak - 15) * rr + 3 * Math.Sin(x * 0.7) * Math.Cos(y * 0.5)); if (v > g[x, y]) g[x, y] = v; }
+            }
+        return g;
+    }
+    static (BlobTrend? Trend, Hit? Hit) RunTrend(double[] peaks, double[] radii)
+    {
+        const float TH = 20;
+        int[] ts = { -30, -15, 0 };
+        var f = ts.Select((t, i) => NowcastEngine.Despeckle(FrameCells(new[] { new Cell(-80 + 45 * t / 60.0, 0, radii[i], peaks[i]) }), TH)).ToArray();
+        var co = f.Select(g => NowcastEngine.DownsampleMax(g, 2)).ToArray();
+        var m = NowcastEngine.EstimateMotion(co[0], co[2], 30, KM * 2);
+        if (!m.Ok) { var m2 = NowcastEngine.EstimateMotion(co[1], co[2], 15, KM * 2); if (m2.Ok) m = m2; }
+        var vel = NowcastEngine.MakeVelocityField(m, 2);
+        var lab = f.Select(g => NowcastEngine.LabelBlobs(g, TH)).ToList();
+        var trends = NowcastEngine.BlobTrends(lab, new double[] { 30, 15 }, vel, KM, TH);
+        var p = NowcastEngine.PredictRain(f[2], KM, CX, CY, vel, TH, 3, labels: lab[2].Labels);
+        BlobTrend? tr = null; if (p.Hit is not null) trends.TryGetValue(p.Hit.Blob, out tr);
+        return (tr, p.Hit);
+    }
+
+    [Fact]
+    public void Dying_storm_is_weakening_and_fizzles_before_arrival()
+    {
+        var (tr, hit) = RunTrend(new[] { 45.0, 38, 30 }, new[] { 25.0, 18, 12 });
+        Assert.NotNull(hit); Assert.NotNull(tr);
+        Assert.Equal("weakening", tr!.Word);
+        Assert.NotNull(tr.FizzleMin); Assert.True(tr.FizzleMin < hit!.EtaMin);
+    }
+
+    [Fact]
+    public void Growing_storm_is_strengthening()
+    {
+        var (tr, _) = RunTrend(new[] { 30.0, 38, 48 }, new[] { 12.0, 18, 25 });
+        Assert.Equal("strengthening", tr!.Word);
+    }
+
+    [Fact]
+    public void Steady_storm_is_steady_and_slow_fade_is_not_demoted()
+    {
+        Assert.Equal("steady", RunTrend(new[] { 42.0, 42, 42 }, new[] { 20.0, 20, 20 }).Trend!.Word);
+        var (tr, hit) = RunTrend(new[] { 45.0, 43, 41 }, new[] { 25.0, 24, 23 });
+        Assert.True(tr!.Word == "steady" || tr.FizzleMin is null || tr.FizzleMin > hit!.EtaMin);
+    }
+
     [Fact]
     public void Clear_sky()
     {

@@ -33,7 +33,14 @@ public sealed class Motion
 
 public sealed record Nearest(double DistMi, double Bearing, double Dbz);
 public sealed record Passing(double DistMi, double Bearing, double PassBearing, double ClosestMi);
-public sealed record Hit(double EtaMin, double EndMin, double MaxDbz, double FromBearing, int Cells);
+public sealed record Hit(double EtaMin, double EndMin, double MaxDbz, double FromBearing, int Cells, int Blob, Dictionary<int, int> BlobCells)
+{
+    public BlobTrend? Trend { get; set; }
+    public bool Fizzles { get; set; }
+}
+public sealed class Blob { public int Id; public int N; public float Peak; public double Vol; public double Cx; public double Cy; public bool Tiny; }
+public sealed class Labelled { public int[] Labels = Array.Empty<int>(); public List<Blob> Blobs = new(); }
+public sealed record BlobTrend(string Word, double VolRatio, double AreaRatio, double PeakDelta, double SpanMin, double? FizzleMin, int Points);
 
 public sealed class Prediction
 {
@@ -43,6 +50,8 @@ public sealed class Prediction
     public Nearest? Nearest { get; set; }
     public Passing? Passing { get; set; }
     public Hit? Hit { get; set; }
+    public int NearestBlob { get; set; }
+    public BlobTrend? NearestTrend { get; set; }
 }
 
 /// <summary>
@@ -255,11 +264,12 @@ public static class NowcastEngine
 
     /// <summary>Project every rain cell along its motion and see if it passes over (cx, cy) (fine-cell units).</summary>
     public static Prediction PredictRain(DbzGrid grid, double cellKm, double cx, double cy, Func<int, int, (double Vx, double Vy)> vel,
-        float thresh, double hitRadiusMi, double horizonMin = 120, double maxRingMi = 50, int minHitCells = 2)
+        float thresh, double hitRadiusMi, double horizonMin = 120, double maxRingMi = 50, int minHitCells = 2, int[]? labels = null)
     {
         double cellMi = cellKm * 0.621371, R = hitRadiusMi + 0.7 * cellMi, R2 = R * R;
         var p = new Prediction();
-        int hits = 0; double eta = double.PositiveInfinity, end = 0, maxDbz = -99, from = 0;
+        int hits = 0, hitBlob = 0; double eta = double.PositiveInfinity, end = 0, maxDbz = -99, from = 0;
+        var blobCells = new Dictionary<int, int>();
         for (int y = 0; y < grid.H; y++)
             for (int x = 0; x < grid.W; x++)
             {
@@ -272,7 +282,7 @@ public static class NowcastEngine
                     if (dist <= 10) p.Ring10 = true;
                     if (dist <= 30) p.Ring30 = true;
                     p.Ring50 = true;
-                    if (p.Nearest is null || dist < p.Nearest.DistMi) p.Nearest = new Nearest(dist, BearingDeg(e, n), d);
+                    if (p.Nearest is null || dist < p.Nearest.DistMi) { p.Nearest = new Nearest(dist, BearingDeg(e, n), d); p.NearestBlob = labels is null ? 0 : labels[y * grid.W + x]; }
                 }
                 var (vx, vy) = vel(x, y);
                 double ve = vx * 0.621371, vn = -vy * 0.621371;
@@ -296,7 +306,8 @@ public static class NowcastEngine
                 if (tIn is not null)
                 {
                     hits++;
-                    if (tIn.Value < eta) { eta = tIn.Value; from = BearingDeg(e, n); }
+                    if (tIn.Value < eta) { eta = tIn.Value; from = BearingDeg(e, n); hitBlob = labels is null ? 0 : labels[y * grid.W + x]; }
+                    if (labels is not null) { int lb = labels[y * grid.W + x]; blobCells[lb] = blobCells.GetValueOrDefault(lb) + 1; }
                     if (tOut!.Value > end) end = tOut.Value;
                     if (d > maxDbz) maxDbz = d;
                 }
@@ -308,8 +319,86 @@ public static class NowcastEngine
                         p.Passing = new Passing(dist, BearingDeg(e, n), BearingDeg(pe, pn), Math.Sqrt(pe * pe + pn * pn));
                 }
             }
-        if (hits >= minHitCells) p.Hit = new Hit(eta, end, maxDbz, from, hits);
+        if (hits >= minHitCells) p.Hit = new Hit(eta, end, maxDbz, from, hits, hitBlob, blobCells);
         return p;
+    }
+
+    /* ---- intensity trends: track each storm cell across frames ---- */
+
+    /// <summary>Connected rain blobs (8-neighbour) above thresh.</summary>
+    public static Labelled LabelBlobs(DbzGrid g, float thresh, int minCells = 3)
+    {
+        int w = g.W, h = g.H; var labels = new int[w * h]; var blobs = new List<Blob>(); var stack = new Stack<int>();
+        for (int i = 0; i < g.D.Length; i++)
+        {
+            if (g.D[i] < thresh || labels[i] != 0) continue;
+            int id = blobs.Count + 1, n = 0; float peak = -99; double vol = 0, sx = 0, sy = 0;
+            labels[i] = id; stack.Push(i);
+            while (stack.Count > 0)
+            {
+                int k = stack.Pop(), x = k % w, y = k / w; float v = g.D[k];
+                n++; vol += v - thresh + 1; sx += x; sy += y; if (v > peak) peak = v;
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    int xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                    int kk = yy * w + xx; if (g.D[kk] >= thresh && labels[kk] == 0) { labels[kk] = id; stack.Push(kk); }
+                }
+            }
+            blobs.Add(new Blob { Id = id, N = n, Peak = peak, Vol = vol, Cx = sx / n, Cy = sy / n, Tiny = n < minCells });
+        }
+        return new Labelled { Labels = labels, Blobs = blobs };
+    }
+
+    /// <summary>For each blob in the newest frame, its earlier self: back-project the centroid by the motion, pick the nearest blob of comparable size.</summary>
+    public static Dictionary<int, Blob> MatchBlobs(Labelled newB, Labelled oldB, double dtMin, Func<int, int, (double Vx, double Vy)> vel, double cellKm)
+    {
+        var o = new Dictionary<int, Blob>();
+        foreach (var b in newB.Blobs)
+        {
+            if (b.Tiny) continue;
+            var (vx, vy) = vel((int)Math.Round(b.Cx), (int)Math.Round(b.Cy));
+            double px = b.Cx - vx * dtMin / cellKm, py = b.Cy - vy * dtMin / cellKm;
+            double reach = Math.Max(6, 1.5 * Math.Sqrt(b.N / Math.PI));
+            Blob? best = null; double bd = double.PositiveInfinity;
+            foreach (var ob in oldB.Blobs)
+            {
+                if (ob.Tiny) continue;
+                double dd = Math.Sqrt(Sq(ob.Cx - px) + Sq(ob.Cy - py));
+                if (dd < reach + Math.Sqrt(ob.N / Math.PI) && dd < bd) { bd = dd; best = ob; }
+            }
+            if (best is not null) o[b.Id] = best;
+        }
+        return o;
+    }
+
+    /// <summary>Trend for every blob in the newest frame from the earlier frames (dts = minutes back for each earlier frame).</summary>
+    public static Dictionary<int, BlobTrend> BlobTrends(IReadOnlyList<Labelled> frames, IReadOnlyList<double> dts, Func<int, int, (double Vx, double Vy)> vel, double cellKm, float thresh)
+    {
+        var newest = frames[^1]; var trends = new Dictionary<int, BlobTrend>();
+        var matches = frames.Take(frames.Count - 1).Select((f, i) => MatchBlobs(newest, f, dts[i], vel, cellKm)).ToList();
+        foreach (var b in newest.Blobs)
+        {
+            if (b.Tiny) continue;
+            var pts = new List<(double T, double Vol, double Peak, int N)> { (0, b.Vol, b.Peak, b.N) };
+            for (int i = 0; i < matches.Count; i++) if (matches[i].TryGetValue(b.Id, out var ob)) pts.Add((-dts[i], ob.Vol, ob.Peak, ob.N));
+            if (pts.Count < 2) { trends[b.Id] = new BlobTrend("new", 1, 1, 0, 0, null, 1); continue; }
+            var oldest = pts[^1]; double span = -oldest.T;
+            double volRatio = b.Vol / Math.Max(1, oldest.Vol), peakDelta = b.Peak - oldest.Peak, areaRatio = b.N / Math.Max(1.0, oldest.N);
+            string word = "steady";
+            if ((volRatio >= 1.35 && areaRatio >= 1.1) || peakDelta >= 7) word = "strengthening";
+            else if ((volRatio <= 0.7 && areaRatio <= 0.9) || peakDelta <= -7) word = "weakening";
+            double? fizzle = null;
+            if (word == "weakening")
+            {
+                double peakRate = peakDelta / span, volRate = Math.Log(Math.Max(0.05, volRatio)) / span;
+                double tPeak = peakRate < -0.05 ? (thresh - b.Peak) / peakRate : double.PositiveInfinity;
+                double tVol = volRate < -0.005 ? Math.Log(0.15) / volRate : double.PositiveInfinity;
+                double f = Math.Min(tPeak, tVol); if (double.IsFinite(f)) fizzle = f;
+            }
+            trends[b.Id] = new BlobTrend(word, volRatio, areaRatio, peakDelta, span, fizzle, pts.Count);
+        }
+        return trends;
     }
 
     private static double Sq(double v) => v * v;
