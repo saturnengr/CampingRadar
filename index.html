@@ -463,11 +463,12 @@ function bearingDeg(e, n) { return (Math.atan2(e, n) * 180 / Math.PI + 360) % 36
 
 /* Project every rain cell forward along its motion and see if it passes over
    the user (cx, cy in fine-cell units). Returns arrival estimate + what's passing. */
-function predictRain(grid, cellKm, cx, cy, vel, opts) {
+function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
   const rings = { 10: false, 30: false, 50: false };
-  let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null;
+  let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null;
+  const hitBlobCells = new Map();
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
     const d = grid.d[y * grid.w + x];
     if (d < thresh) continue;
@@ -477,7 +478,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts) {
       if (dist <= 10) rings[10] = true;
       if (dist <= 30) rings[30] = true;
       rings[50] = true;
-      if (!nearest || dist < nearest.distMi) nearest = { distMi: dist, bearing: bearingDeg(e, n), dbz: d };
+      if (!nearest || dist < nearest.distMi) { nearest = { distMi: dist, bearing: bearingDeg(e, n), dbz: d }; nearestBlob = labels ? labels[y * grid.w + x] : null; }
     }
     const v = vel(x, y), ve = v.vx * 0.621371, vn = -v.vy * 0.621371;   // mi/min
     const a = ve * ve + vn * vn;
@@ -495,7 +496,8 @@ function predictRain(grid, cellKm, cx, cy, vel, opts) {
     }
     if (tIn !== null) {
       hits++;
-      if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); }
+      if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitBlob = labels ? labels[y * grid.w + x] : null; }
+      if (labels) { const lb = labels[y * grid.w + x]; hitBlobCells.set(lb, (hitBlobCells.get(lb) || 0) + 1); }
       if (tOut > end) end = tOut;
       if (d > maxDbz) maxDbz = d;
     } else if (dist <= maxRing) {
@@ -505,8 +507,79 @@ function predictRain(grid, cellKm, cx, cy, vel, opts) {
         passing = { distMi: dist, bearing: bearingDeg(e, n), passBearing: bearingDeg(pe, pn), closestMi: Math.hypot(pe, pn) };
     }
   }
-  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, cells: hits } : null;
-  return { rings, nearest, passing, hit };
+  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
+  return { rings, nearest, passing, hit, nearestBlob };
+}
+/* ---- intensity trends: track each storm cell across frames ---- */
+// Connected rain blobs (8-neighbour) above thresh; returns labels per cell and per-blob stats.
+function labelBlobs(grid, thresh, minCells) {
+  minCells = minCells || 3;
+  const { w, h, d } = grid, labels = new Int32Array(w * h), blobs = [];
+  const stack = [];
+  for (let i = 0; i < d.length; i++) {
+    if (d[i] < thresh || labels[i]) continue;
+    const id = blobs.length + 1; let n = 0, peak = -99, vol = 0, sx = 0, sy = 0;
+    labels[i] = id; stack.push(i);
+    while (stack.length) {
+      const k = stack.pop(), x = k % w, y = (k / w) | 0, v = d[k];
+      n++; vol += v - thresh + 1; sx += x; sy += y; if (v > peak) peak = v;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const kk = yy * w + xx; if (d[kk] >= thresh && !labels[kk]) { labels[kk] = id; stack.push(kk); }
+      }
+    }
+    blobs.push({ id, n, peak, vol, cx: sx / n, cy: sy / n });
+  }
+  // drop tiny blobs from the label map (they still count as rain for arrival, just not for trends)
+  for (const b of blobs) if (b.n < minCells) b.tiny = true;
+  return { labels, blobs };
+}
+// For each blob in the newest frame, find its earlier self: back-project the centroid by the motion and pick the nearest blob of comparable size.
+function matchBlobs(newB, oldB, dtMin, vel, cellKm) {
+  const out = new Map();
+  for (const b of newB.blobs) {
+    if (b.tiny) continue;
+    const v = vel(Math.round(b.cx), Math.round(b.cy));
+    const px = b.cx - v.vx * dtMin / cellKm, py = b.cy - v.vy * dtMin / cellKm;   // where it should have been
+    const reach = Math.max(6, 1.5 * Math.sqrt(b.n / Math.PI));
+    let best = null, bd = Infinity;
+    for (const o of oldB.blobs) {
+      if (o.tiny) continue;
+      const dd = Math.hypot(o.cx - px, o.cy - py);
+      if (dd < reach + Math.sqrt(o.n / Math.PI) && dd < bd) { bd = dd; best = o; }
+    }
+    if (best) out.set(b.id, best);
+  }
+  return out;
+}
+/* Trend for every blob in the newest frame from up to two earlier frames.
+   word: 'strengthening' | 'weakening' | 'steady' | 'new' ; fizzleMin = minutes until peak drops below thresh (weakening only). */
+function blobTrends(frames, dts, vel, cellKm, thresh) {
+  const newest = frames[frames.length - 1], trends = new Map();
+  const matches = frames.slice(0, -1).map((f, i) => matchBlobs(newest, f, dts[i], vel, cellKm));
+  for (const b of newest.blobs) {
+    if (b.tiny) continue;
+    const pts = [{ t: 0, vol: b.vol, peak: b.peak, n: b.n }];
+    matches.forEach((m, i) => { const o = m.get(b.id); if (o) pts.push({ t: -dts[i], vol: o.vol, peak: o.peak, n: o.n }); });
+    if (pts.length < 2) { trends.set(b.id, { word: 'new', pts: 1 }); continue; }
+    const oldest = pts[pts.length - 1], span = -oldest.t;
+    const volRatio = b.vol / Math.max(1, oldest.vol), peakDelta = b.peak - oldest.peak, areaRatio = b.n / Math.max(1, oldest.n);
+    let word = 'steady';
+    if ((volRatio >= 1.35 && areaRatio >= 1.1) || peakDelta >= 7) word = 'strengthening';
+    else if ((volRatio <= 0.7 && areaRatio <= 0.9) || peakDelta <= -7) word = 'weakening';
+    let fizzleMin = null;
+    if (word === 'weakening') {
+      const peakRate = peakDelta / span;                       // dBZ per minute (negative)
+      const volRate = Math.log(Math.max(0.05, volRatio)) / span;   // exponential decay rate
+      const tPeak = peakRate < -0.05 ? (thresh - b.peak) / peakRate : Infinity;
+      const tVol = volRate < -0.005 ? Math.log(0.15) / volRate : Infinity;   // down to 15% of current volume
+      fizzleMin = Math.min(tPeak, tVol);
+      if (!isFinite(fizzleMin)) fizzleMin = null;
+    }
+    trends.set(b.id, { word, volRatio, areaRatio, peakDelta, spanMin: span, fizzleMin, pts: pts.length });
+  }
+  return trends;
 }
 // ==NOWCAST-CORE-END==
 
@@ -1073,9 +1146,23 @@ async function runNowcast() {
     if (!motion.ok && dt2 >= 6) { const m2 = estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: NC.maxKmh }); if (m2.ok) motion = m2; }
     const vel = makeVelocityField(motion, NC.coarse);
     const c = R / NC.fineCellPx;
-    const res = predictRain(despeckle(fine[2], S.threshDbz), fineKm, c, c, vel,
-      { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 });
-    st.nc = { res, motion }; st.ncAt = Date.now(); st.ncErr = null;
+    const cleaned = fine.map(g => despeckle(g, S.threshDbz));
+    const labelled = cleaned.map(g => labelBlobs(g, S.threshDbz));
+    const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, S.threshDbz);
+    const res = predictRain(cleaned[2], fineKm, c, c, vel,
+      { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
+    if (res.hit) {
+      // the trend of the storm that arrives first; if several storms will hit, the biggest contributor wins the wording
+      let tr = trends.get(res.hit.blob) || null;
+      let bigId = null, big = 0; for (const [id, n] of res.hit.blobCells) if (n > big) { big = n; bigId = id; }
+      if (bigId && bigId !== res.hit.blob && trends.get(bigId) && (!tr || tr.word === 'new')) tr = trends.get(bigId);
+      res.hit.trend = tr;
+      // weakening fast enough to be gone before it arrives?
+      res.hit.fizzles = !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < res.hit.etaMin - 2);
+      delete res.hit.blobCells;
+    }
+    if (res.nearestBlob) res.nearestTrend = trends.get(res.nearestBlob) || null;
+    st.nc = { res, motion, trends: [...trends.values()] }; st.ncAt = Date.now(); st.ncErr = null;
   } catch (e) { st.ncErr = e.message; console.warn('nowcast', e); }
   finally { st.ncBusy = false; }
   const s = renderStatus();
@@ -1375,8 +1462,16 @@ function computeStatus() {
   const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
     : motion.ok ? 'Rain nearly stationary' : '';
   const lowConf = hit && hit.etaMin > 15 && hit.maxDbz < 30 && st.wx.pop2h != null && st.wx.pop2h < 10;
+  const tr = hit && hit.trend, trendWord = tr && tr.word === 'strengthening' ? ', strengthening' : tr && tr.word === 'weakening' ? ', weakening' : '';
+  // A weakening storm that should be gone before it arrives is a watch, not an alarm — unless it's close or heavy.
+  if (hit && hit.fizzles && !lowConf && hit.etaMin - lat > 10 && hit.maxDbz < 40) {
+    out.cls = 'yellow'; out.level = 'low';
+    out.main = 'Rain to the ' + compassLong(hit.fromBearing) + ' is weakening — may fizzle before it reaches you';
+    out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000) + (moving ? ' · ' + moving : '');
+    out.rings = res.rings; return overlayLightning(out);
+  }
   if (hit && !lowConf) {
-    const eta = Math.max(0, hit.etaMin - lat), word = intensityWord(hit.maxDbz);
+    const eta = Math.max(0, hit.etaMin - lat), word = intensityWord(hit.maxDbz) + trendWord;
     if (hit.etaMin <= 0.5) {
       out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';
       out.sub = hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + clock(Date.now() + Math.max(0, hit.endMin - lat) * 60000) : 'May continue for a while';
@@ -1396,10 +1491,10 @@ function computeStatus() {
     out.main = 'Rain ' + Math.round(res.nearest.distMi) + ' mi ' + compass(res.nearest.bearing);
     out.sub = 'Movement unclear (' + (motion.reason || 'not enough data') + ') — keep an eye on it';
   } else if (res.passing) {
-    const p = res.passing;
+    const p = res.passing, nt = res.nearestTrend;
     out.cls = 'blue'; out.level = 'passing';
     out.main = 'Rain ' + Math.round(p.distMi) + ' mi ' + compass(p.bearing) + ' — ' + (motion.ok && motion.speedMph >= 3 ? 'passing to the ' + compassLong(p.passBearing) : 'not heading your way');
-    out.sub = (motion.ok && motion.speedMph >= 3 ? 'Closest ≈ ' + Math.max(1, Math.round(p.closestMi)) + ' mi · ' : '') + (moving || 'Movement unclear');
+    out.sub = (motion.ok && motion.speedMph >= 3 ? 'Closest ≈ ' + Math.max(1, Math.round(p.closestMi)) + ' mi · ' : '') + (moving || 'Movement unclear') + (nt && nt.word === 'strengthening' ? ' · nearest storm strengthening' : nt && nt.word === 'weakening' ? ' · nearest storm weakening' : '');
   } else {
     out.cls = 'green'; out.main = 'No rain heading your way'; out.sub = res.nearest ? '' : 'Clear within 50 miles';
   }
@@ -1669,6 +1764,7 @@ function renderDiag() {
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + (st.timesFromServer ? '' : ' (estimated)') : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
+    'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
     'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
     'NWS alerts: ' + (st.alertsErr ? 'ERROR — ' + st.alertsErr : ago(st.alertsAt) + ', ' + st.alerts.length + ' active'),
