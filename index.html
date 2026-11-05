@@ -177,21 +177,27 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
 /* Pure functions (no DOM) for reading radar pixels, tracking storm motion
    and predicting whether rain will reach a point. Unit-tested separately. */
 
-const DBZ_RAMP = [ // standard NWS reflectivity colours
-  [5,4,233,231],[10,1,159,244],[15,3,0,244],[20,2,253,2],[25,1,197,1],[30,0,142,0],
-  [35,253,248,2],[40,229,188,0],[45,253,149,0],[50,253,0,0],[55,212,0,0],[60,188,0,0],
-  [65,248,0,253],[70,152,84,198],[75,253,253,253]];
+/* Reflectivity colour scale used by BOTH NOAA MRMS (mapservices.weather.noaa.gov) and the
+   IEM composite (same scale as radar.weather.gov): grey -> blue-grey -> blue -> cyan ->
+   bright green (light rain, 20 dBZ) -> dark green -> olive -> yellow -> orange -> red.
+   Stops measured from the live imagery; colours between stops are interpolated. */
+const DBZ_RAMP = [
+  [-10, 207, 209, 175], [0, 154, 160, 181], [10, 67, 94, 159], [15, 111, 214, 232],
+  [20, 14, 214, 20], [30, 9, 94, 9], [30.5, 34, 107, 8], [40, 255, 226, 0],
+  [45, 255, 177, 0], [50, 255, 0, 0], [60, 193, 0, 0], [65, 255, 0, 255], [70, 150, 80, 200], [75, 255, 255, 255]];
 
 function colorToDbz(r, g, b, a) {
   if (a !== undefined && a < 40) return -99;
-  const sat = Math.max(r, g, b) - Math.min(r, g, b);
-  if (sat < 60 && Math.min(r, g, b) < 225) return -99;   // greys = labels/borders, not echoes
   let best = -99, bd = Infinity;
-  for (const [dbz, R, G, B] of DBZ_RAMP) {
-    const d = (r - R) ** 2 + (g - G) ** 2 + (b - B) ** 2;
-    if (d < bd) { bd = d; best = dbz; }
+  for (let i = 0; i < DBZ_RAMP.length - 1; i++) {     // nearest point on the colour polyline
+    const [d0, r0, g0, b0] = DBZ_RAMP[i], [d1, r1, g1, b1] = DBZ_RAMP[i + 1];
+    const vr = r1 - r0, vg = g1 - g0, vb = b1 - b0, len = vr * vr + vg * vg + vb * vb;
+    let t = len ? ((r - r0) * vr + (g - g0) * vg + (b - b0) * vb) / len : 0;
+    t = Math.max(0, Math.min(1, t));
+    const dist = (r - r0 - t * vr) ** 2 + (g - g0 - t * vg) ** 2 + (b - b0 - t * vb) ** 2;
+    if (dist < bd) { bd = dist; best = d0 + t * (d1 - d0); }
   }
-  return bd > 110 * 110 ? -99 : best;   // colour not on the ramp (map labels etc.)
+  return bd > 45 * 45 ? -99 : Math.round(best * 2) / 2;
 }
 
 // RGBA pixels -> grid of max dBZ per cell (cell = cellPx x cellPx pixels)
@@ -504,11 +510,12 @@ function mrmsExportUrl(minx, miny, maxx, maxy, w, h, t) {
     (t ? '&time=' + t : '') + '&f=image';
 }
 const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's exportImage for one valid time
-  initialize(t, opts) { this._t = t; L.TileLayer.prototype.initialize.call(this, '', opts); },
-  setTime(t) { if (t !== this._t) { this._t = t; this.redraw(); } },
+  initialize(f, opts) { this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts); },
+  setTime(f) { if (f.t !== this._t || !!f.live !== this._live) { this._t = f.t; this._live = !!f.live; this.redraw(); } },
   getTileUrl(c) {
     const size = 2 * MERC / 2 ** c.z, minx = -MERC + c.x * size, maxy = MERC - c.y * size;
-    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t);
+    // the newest scan has no end time yet, so NOAA only returns it when no time is given
+    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._live ? null : this._t) + (this._live ? '&_=' + this._t : '');
   }
 });
 const radarOpts = () => S.source === 'mrms'
@@ -532,7 +539,7 @@ async function updateFrameTimes() {
     }
     st.radarTimes = times;
     const latest = times[times.length - 1];
-    st.frames = FRAMES.map(off => ({ t: nearestTime(times, latest - off * 60000) }));
+    st.frames = FRAMES.map(off => { const t = nearestTime(times, latest - off * 60000); return { t, live: t === latest }; });
     st.latestRadar = latest;
   } else {
     const latest = bucket() * 300000 - NC.latencyMin * 60000;
@@ -543,13 +550,13 @@ async function updateFrameTimes() {
 let radarLayers = [];
 function buildRadarLayers() {
   radarLayers.forEach(l => map.removeLayer(l));
-  radarLayers = st.frames.map(f => (S.source === 'mrms' ? new MrmsLayer(f.t, radarOpts()) : L.tileLayer(iemUrl(f.off), radarOpts())).addTo(map));
+  radarLayers = st.frames.map(f => (S.source === 'mrms' ? new MrmsLayer(f, radarOpts()) : L.tileLayer(iemUrl(f.off), radarOpts())).addTo(map));
   showFrame(Math.min(frameIdx, radarLayers.length - 1));
 }
 async function refreshRadarTiles(rebuild) {
   await updateFrameTimes();
   if (rebuild || radarLayers.length !== st.frames.length) return buildRadarLayers();
-  radarLayers.forEach((l, i) => S.source === 'mrms' ? l.setTime(st.frames[i].t) : l.setUrl(iemUrl(st.frames[i].off)));
+  radarLayers.forEach((l, i) => S.source === 'mrms' ? l.setTime(st.frames[i]) : l.setUrl(iemUrl(st.frames[i].off)));
   showFrame(frameIdx);
 }
 const radarLag = () => st.latestRadar ? Math.max(0, (Date.now() - st.latestRadar) / 60000) : NC.latencyMin;
@@ -880,7 +887,7 @@ async function radarComposite(f, center, R, z) {
   if (S.source === 'mrms') {
     const res = 2 * MERC / (256 * 2 ** z);
     let img;
-    try { img = await loadImg(mrmsExportUrl(ox * res - MERC, MERC - (oy + size) * res, (ox + size) * res - MERC, MERC - oy * res, size, size, f.t)); }
+    try { img = await loadImg(mrmsExportUrl(ox * res - MERC, MERC - (oy + size) * res, (ox + size) * res - MERC, MERC - oy * res, size, size, f.live ? null : f.t) + (f.live ? '&_=' + f.t : '')); }
     catch (e) { throw new Error("couldn't load NOAA radar for tracking (offline, or the server blocked pixel access)"); }
     const cv = document.createElement('canvas'); cv.width = cv.height = size;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -916,7 +923,7 @@ async function runNowcast() {
     let fr;
     if (S.source === 'mrms') {
       const T = st.radarTimes, latest = T[T.length - 1];
-      fr = [nearestTime(T, latest - 30 * 60000), nearestTime(T, latest - 15 * 60000), latest].map(t => ({ t }));
+      fr = [nearestTime(T, latest - 30 * 60000), nearestTime(T, latest - 15 * 60000), latest].map(t => ({ t, live: t === latest }));
     } else fr = [30, 15, 0].map(off => ({ off, t: st.latestRadar - off * 60000 }));
     const dt1 = (fr[2].t - fr[0].t) / 60000, dt2 = (fr[2].t - fr[1].t) / 60000;
     const raw = await Promise.all(fr.map(f => radarComposite(f, center, R, z)));
