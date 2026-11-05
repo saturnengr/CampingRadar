@@ -513,13 +513,14 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
   initialize(f, opts) { this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts); },
   setTime(f) { if (f.t !== this._t || !!f.live !== this._live) { this._t = f.t; this._live = !!f.live; this.redraw(); } },
   getTileUrl(c) {
-    const size = 2 * MERC / 2 ** c.z, minx = -MERC + c.x * size, maxy = MERC - c.y * size;
+    // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
+    const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
     // the newest scan has no end time yet, so NOAA only returns it when no time is given
     return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._live ? null : this._t) + (this._live ? '&_=' + this._t : '');
   }
 });
 const radarOpts = () => S.source === 'mrms'
-  ? { pane: 'radar', opacity: 0, tileSize: 512, zoomOffset: -1, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 0 }
+  ? { pane: 'radar', opacity: 0, tileSize: 512, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 0 }
   : { pane: 'radar', opacity: 0, maxNativeZoom: 10, maxZoom: 19, keepBuffer: 1 };
 function nearestTime(times, target) { let b = times[0]; for (const t of times) if (Math.abs(t - target) < Math.abs(b - target)) b = t; return b; }
 // Work out the valid time of each loop frame (and the latest radar time)
