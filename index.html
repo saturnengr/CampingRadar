@@ -465,7 +465,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms' };
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -478,7 +478,10 @@ const st = {
   alerts: [], alertsAt: 0, alertsErr: null,
   evt: { active: false, imminentDone: false, clear: 0 },
   lastTouch: 0,
+  lightning: null, lightningAt: 0, lightningErr: null, ltEvt: { active: false, sentMs: 0 },
+  backendOk: null,
 };
+const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
 
 /* ----------------------------- helpers ----------------------------- */
 const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
@@ -566,6 +569,7 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
   getTileUrl(c) {
     // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
     const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
+    if (BE() && st.timesFromBackend) return BE() + '/radar/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png';
     // the newest scan has no end time yet, so NOAA only returns it when no time is given
     return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._live ? null : this._t) + (this._live ? '&_=' + this._t : '');
   }
@@ -578,7 +582,15 @@ function nearestTime(times, target) { let b = times[0]; for (const t of times) i
 async function updateFrameTimes() {
   if (S.source === 'mrms') {
     let times = null;
-    try {
+    st.timesFromBackend = false;
+    if (BE()) {   // the backend caches tiles for everyone; prefer it, fall back to NOAA directly
+      try {
+        const r = await fetchT(BE() + '/radar/times', {}, 10000);
+        const j = await r.json();
+        if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; }
+      } catch (e) { st.backendOk = false; }
+    }
+    if (!times) try {
       const r = await fetchT(MRMS + '/query?where=1%3D1&outFields=idp_validtime&returnGeometry=false&f=json', {}, 15000);
       const j = await r.json();
       times = [...new Set((j.features || []).map(f => f.attributes && f.attributes.idp_validtime).filter(Boolean))].sort((a, b) => a - b);
@@ -691,7 +703,7 @@ function setLocation(lat, lon, src) {
   st.loc = { lat, lon, src };
   S.lastLoc = { lat, lon, src }; save();
   drawRings();
-  if (moved) { fitRange(); refreshWeather(true); refreshAlerts(); runNowcast(); }
+  if (moved) { fitRange(); refreshWeather(true); refreshAlerts(); runNowcast(); refreshLightning(); pushUpdateLocation(); }
   updatePickHint();
 }
 function updatePickHint() {
@@ -1002,13 +1014,61 @@ async function runNowcast() {
   handleRainEvent(s.level);
 }
 
+/* ------------------------------ lightning -------------------------- */
+const ltLayer = L.layerGroup().addTo(map);
+async function refreshLightning() {
+  if (!BE() || !st.loc) { st.lightning = null; ltLayer.clearLayers(); return; }
+  try {
+    const r = await fetchT(BE() + '/lightning?lat=' + st.loc.lat.toFixed(4) + '&lon=' + st.loc.lon.toFixed(4), {}, 10000);
+    if (!r.ok) throw new Error('backend ' + r.status);
+    st.lightning = await r.json(); st.lightningAt = Date.now(); st.lightningErr = null; st.backendOk = true;
+    const b = map.getBounds();
+    const q = '?minLat=' + b.getSouth().toFixed(3) + '&minLon=' + b.getWest().toFixed(3) + '&maxLat=' + b.getNorth().toFixed(3) + '&maxLon=' + b.getEast().toFixed(3) + '&minutes=30';
+    const r2 = await fetchT(BE() + '/lightning/recent' + q, {}, 10000);
+    const strikes = r2.ok ? await r2.json() : [];
+    ltLayer.clearLayers();
+    const now = Date.now();
+    for (const f of strikes.slice(0, 1500)) {
+      const ageMin = (now - f.t) / 60000, op = ageMin < 10 ? 1 : ageMin < 20 ? 0.6 : 0.35;
+      L.marker([f.lat, f.lon], { interactive: false, icon: L.divIcon({ className: '', iconSize: [14, 18], iconAnchor: [7, 9],
+        html: '<svg viewBox="0 0 14 18" width="14" height="18" style="opacity:' + op + '"><path d="M8 0 1 10h5l-1 8 8-11H8z" fill="#ffd23c" stroke="#5a3d00" stroke-width="1"/></svg>' }) }).addTo(ltLayer);
+    }
+  } catch (e) { st.lightningErr = e.message; if (Date.now() - st.lightningAt > 10 * 60000) st.lightning = null; }
+  const s = renderStatus(); handleLightningEvent(s.ltLevel);
+}
+function lightningLevel(L) {
+  if (!L || !L.dataFresh) return 'none';
+  return L.within10 > 0 && (L.lastStrikeAgeMin == null || L.lastStrikeAgeMin <= 15) ? 'alarm' : L.within20 > 0 ? 'near20' : L.within30 > 0 ? 'near30' : 'none';
+}
+function overlayLightning(out) {
+  const L = st.lightning, lvl = lightningLevel(L);
+  out.ltLevel = lvl;
+  if (!L || lvl === 'none') return out;
+  const line = 'Lightning ' + Math.max(1, Math.round(L.nearestMi)) + ' mi ' + compass(L.nearestBearing || 0) +
+    (L.trend === 'approaching' ? ', approaching' : L.trend === 'receding' ? ', moving away' : '');
+  if (lvl === 'alarm') {
+    out.sub = (out.main ? out.main : '') + (out.sub ? ' · ' + out.sub : '');
+    out.main = '⚡ ' + line + ' — ' + L.within10 + ' strike' + (L.within10 === 1 ? '' : 's') + ' within 10 mi';
+    out.cls = 'red'; out.level = out.level === 'imminent' || out.level === 'atyou' ? out.level : 'lightning';
+  } else if (out.level === 'none' || out.level === 'passing') {
+    out.sub = out.main; out.main = '⚡ ' + line; out.cls = lvl === 'near20' ? 'orange' : 'yellow';
+  } else out.sub = '⚡ ' + line + (out.sub ? ' · ' + out.sub : '');
+  return out;
+}
+// Lightning within 10 mi chimes even during a rain snooze (once per episode, re-armed after 30 quiet minutes).
+function handleLightningEvent(lvl) {
+  const e = st.ltEvt;
+  if (lvl === 'alarm') { if (!e.active && Date.now() - e.sentMs > 30 * 60000) { e.active = true; e.sentMs = Date.now(); playChime('imminent'); } }
+  else e.active = false;
+}
+
 /* --------------------------- status + chime ------------------------ */
 function computeStatus() {
   const out = { cls: 'grey', main: '', sub: '', level: 'none', rings: { 10: false, 30: false, 50: false } };
   if (!st.loc) { out.main = 'Waiting for location…'; return out; }
   const stale = !st.ncAt || Date.now() - st.ncAt > 15 * 60000;
   if (!st.nc && !st.ncErr) { out.main = 'Checking radar…'; return out; }
-  if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return out; }
+  if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return overlayLightning(out); }
   const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
   out.rings = res.rings;
   const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
@@ -1042,7 +1102,7 @@ function computeStatus() {
   } else {
     out.cls = 'green'; out.main = 'No rain heading your way'; out.sub = res.nearest ? '' : 'Clear within 50 miles';
   }
-  return out;
+  return overlayLightning(out);
 }
 function renderStatus() {
   const s = computeStatus();
@@ -1068,6 +1128,48 @@ function handleRainEvent(level) {
   } else if (e.active && ++e.clear >= 2) { e.active = false; e.imminentDone = false; }
 }
 
+/* ------------------------- alerts on this device (push) ------------ */
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function b64ToU8(b64) { const pad = '='.repeat((4 - b64.length % 4) % 4); const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); }
+async function swReg() { return navigator.serviceWorker.register('sw.js'); }
+async function pushEnable() {
+  if (!BE()) throw new Error('Set the backend address first');
+  if (!pushSupported()) throw new Error('This browser cannot receive push alerts');
+  if (!st.loc) throw new Error('Set your location first');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications were not allowed');
+  const reg = await swReg(); await navigator.serviceWorker.ready;
+  const keyRes = await fetchT(BE() + '/push/vapid-public-key', {}, 10000);
+  if (!keyRes.ok) throw new Error('Backend has no push keys yet');
+  const key = (await keyRes.text()).trim();
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+  const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
+  if (!r.ok) throw new Error('Backend refused: ' + r.status);
+  S.pushId = (await r.json()).id; save();
+}
+async function pushDisable() {
+  try { if (S.pushId && BE()) await fetchT(BE() + '/push/' + S.pushId, { method: 'DELETE' }, 10000); } catch (e) {}
+  try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) {}
+  S.pushId = null; save();
+}
+async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); const r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); if (!r.ok) throw new Error('Test failed: ' + r.status); }
+function pushUpdateLocation() { if (S.pushId && BE() && st.loc) fetchT(BE() + '/push/' + S.pushId + '/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon }) }, 10000).catch(() => {}); }
+function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
+async function pushAction(act, btn) {
+  const msg = $('#pushMsg'); if (msg) msg.textContent = 'Working…';
+  try { if (act === 'on') await pushEnable(); else if (act === 'off') await pushDisable(); else await pushTest(); if (msg) msg.textContent = act === 'test' ? 'Test sent — it should pop up in a few seconds.' : act === 'on' ? 'Alerts are on for this device.' : 'Alerts are off for this device.'; }
+  catch (e) { if (msg) msg.textContent = e.message; }
+  renderPushRow();
+}
+function renderPushRow() {
+  const row = $('#pushRow'); if (!row) return;
+  const on = !!S.pushId;
+  row.innerHTML = (on ? '<button data-push="test">Send a test alert</button><button data-push="off">Turn off</button>' : '<button data-push="on">Turn on alerts for this device</button>') +
+    '<div id="pushMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (on ? 'Rain arrival, lightning and NWS warnings arrive even with the screen off.' : (BE() ? '' : 'Needs a backend address (above).')) + '</div>';
+}
+
 /* ------------------------------- snooze ---------------------------- */
 function renderSnooze() {
   const left = S.snoozeUntil - Date.now(), btn = $('#snoozeBtn');
@@ -1081,9 +1183,9 @@ $('#snoozeBtn').addEventListener('click', ev => {
   m.hidden = !m.hidden; renderSnooze();
 });
 document.querySelectorAll('[data-snooze]').forEach(b => b.addEventListener('click', () => {
-  S.snoozeUntil = Date.now() + (+b.dataset.snooze) * 3600e3; save(); $('#snoozeMenu').hidden = true; renderStatus();
+  S.snoozeUntil = Date.now() + (+b.dataset.snooze) * 3600e3; save(); $('#snoozeMenu').hidden = true; renderStatus(); pushUpdateSnooze();
 }));
-$('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); $('#snoozeMenu').hidden = true; renderStatus(); });
+$('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); $('#snoozeMenu').hidden = true; renderStatus(); pushUpdateSnooze(); });
 document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') && e.target.id !== 'snoozeBtn') $('#snoozeMenu').hidden = true; });
 
 /* ------------------------------ settings --------------------------- */
@@ -1104,7 +1206,13 @@ function openSettings() {
     '<div class="row"><label>Radar opacity</label><input type="range" min="0.3" max="1" step="0.05" data-slider="opacity" value="' + S.opacity + '"></div>' +
     '<div class="row"><label>Chime volume</label><input type="range" min="0" max="1" step="0.05" data-slider="volume" value="' + S.volume + '">' +
     '<div class="btns"><button data-act="rain">Test rain chime</button><button data-act="warn">Test warning alarm</button></div></div>' +
+    '<div class="row"><label>Backend address (optional — adds lightning, shared radar cache and alerts with the screen off)</label>' +
+    '<input id="beUrl" type="url" placeholder="https://radar.yourdomain.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' +
+    'style="width:100%;box-sizing:border-box;min-height:46px;font:inherit;font-size:16px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#0b1117;color:var(--text)">' +
+    '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
+    '<div class="row"><label>Alerts on this device</label><div id="pushRow"></div></div>' +
     '<div class="diag" id="diag"></div><button class="done" data-act="close">Done</button>';
+  renderPushRow();
   renderDiag();
   $('#modal').hidden = false;
 }
@@ -1118,6 +1226,9 @@ function renderDiag() {
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
     'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
     'NWS alerts: ' + (st.alertsErr ? 'ERROR — ' + st.alertsErr : ago(st.alertsAt) + ', ' + st.alerts.length + ' active'),
+    'Backend: ' + (BE() ? BE() + (st.backendOk === false ? ' — unreachable' : st.backendOk ? ' — OK' : '') : 'none (standalone)'),
+    'Lightning: ' + (!BE() ? 'needs backend' : st.lightningErr ? 'ERROR — ' + st.lightningErr : st.lightning ? (st.lightning.within30 + ' strikes within 30 mi · ' + ago(st.lightningAt) + (st.lightning.dataFresh ? '' : ' · feed stale')) : '—'),
+    'Alerts on this device: ' + (S.pushId ? 'on' : 'off'),
     'Sound: ' + (audio() ? audio().state : 'unavailable'),
   ].join('\n');
 }
@@ -1130,6 +1241,15 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'rain') return playChime('rain');
   if (b.dataset.act === 'warn') return playWarning();
   if (b.dataset.act === 'loc') return openLocation();
+  if (b.dataset.act === 'besave' || b.dataset.act === 'beclear') {
+    S.backend = b.dataset.act === 'beclear' ? '' : $('#beUrl').value.trim(); save();
+    $('#beMsg').textContent = S.backend ? 'Checking…' : 'Running standalone (no lightning or push).';
+    if (S.backend) fetchT(BE() + '/health', {}, 10000).then(r => r.json()).then(j => { $('#beMsg').textContent = 'Connected · radar scans: ' + j.radar.scans + ' · lightning flashes in the last hour: ' + j.lightning.flashes + (j.push.enabled ? '' : ' · push keys not set on the backend yet'); st.backendOk = true; })
+      .catch(() => { $('#beMsg').textContent = 'Could not reach that address (check https and CORS).'; st.backendOk = false; });
+    refreshRadarTiles(true).then(runNowcast); refreshLightning(); renderPushRow();
+    return;
+  }
+  if (b.dataset.push) return pushAction(b.dataset.push, b);
   if (b.dataset.loc === 'gps') { useGps(); closeModal(); return; }
   if (b.dataset.loc === 'tap') { closeModal(); setPicking(true); return; }
   const k = b.dataset.k; if (!k) return;
@@ -1168,6 +1288,10 @@ setTimeout(updateSoundChip, 800);
 
 setInterval(() => { refreshRadarTiles().then(runNowcast); }, 5 * 60000);
 setInterval(refreshAlerts, 2 * 60000);
+setInterval(refreshLightning, 60000);
+map.on('moveend', () => { if (BE()) refreshLightning(); });
+setTimeout(refreshLightning, 4000);
+if (S.pushId && pushSupported()) swReg().catch(() => {});
 setInterval(() => { if (st.wx.points) refreshObs().catch(() => {}); }, 15 * 60000);
 setInterval(() => { if (st.wx.points) refreshForecast().then(applyNight).catch(() => {}); }, 30 * 60000);
 setInterval(() => {
