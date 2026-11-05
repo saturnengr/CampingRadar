@@ -1,0 +1,62 @@
+name: backend
+
+on:
+  push:
+    paths: ["backend/**", ".github/workflows/backend.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore, build, test
+        id: build
+        working-directory: backend
+        run: |
+          set -o pipefail
+          {
+            dotnet restore CampRadar.sln &&
+            dotnet build CampRadar.sln -c Release --no-restore -warnaserror:CS8600,CS8602,CS8604 &&
+            dotnet test CampRadar.sln -c Release --no-build --logger "console;verbosity=normal"
+          } 2>&1 | tee build.log
+        continue-on-error: true
+
+      - name: Publish (win-x64, framework-dependent, for IIS)
+        if: steps.build.outcome == 'success'
+        working-directory: backend
+        run: |
+          dotnet publish src/CampRadar.Api/CampRadar.Api.csproj -c Release -r win-x64 --self-contained false -o publish
+          cd publish && zip -qr ../campradar-api.zip .
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
+        with:
+          name: campradar-api
+          path: backend/campradar-api.zip
+          retention-days: 30
+
+      # A check run carries the log tail so the result can be read without Actions UI access.
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = ''; try { log = fs.readFileSync('backend/build.log', 'utf8'); } catch {}
+            const tail = log.length > 60000 ? log.slice(-60000) : log;
+            const ok = '${{ steps.build.outcome }}' === 'success';
+            await github.rest.checks.create({
+              owner: context.repo.owner, repo: context.repo.repo, name: 'backend-build',
+              head_sha: context.sha, status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: { title: ok ? 'build + tests passed' : 'build or tests failed', summary: ok ? 'See artifact campradar-api' : 'See log', text: '```\n' + tail + '\n```' }
+            });
+            if (!ok) core.setFailed('build or tests failed');
