@@ -651,7 +651,9 @@ function distMi(a, b) {
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
-function fmtDur(min) { min = Math.round(min); if (min < 60) return min + ' min'; const h = Math.floor(min / 60), m = min % 60; return h + ' h' + (m ? ' ' + m + ' min' : ''); }
+function fmtDurExact(min) { min = Math.round(min); if (min < 60) return min + ' min'; const h = Math.floor(min / 60), m = min % 60; return h + ' h' + (m ? ' ' + m + ' min' : ''); }
+// Rounded the way people say it, in 10-minute steps: 1–4 past a mark is "just over" it, 5–9 past is "just under" the next (62 → just over 1 h; 67 → just under 1 h 10 min). Under 10 minutes stays exact.
+function fmtDur(min, exact) { min = Math.round(min); if (exact || min < 10) return fmtDurExact(min); const d = min % 10; return d === 0 ? fmtDurExact(min) : d < 5 ? 'just over ' + fmtDurExact(min - d) : 'just under ' + fmtDurExact(min - d + 10); }
 function intensityWord(dbz) { return dbz < 30 ? 'Light' : dbz < 40 ? 'Moderate' : dbz < 50 ? 'Heavy' : 'Very heavy'; }
 function ago(ms) { if (!ms) return 'never'; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m + ' min ago'; }
 async function fetchT(url, opts, ms) {
@@ -1729,7 +1731,7 @@ async function openDay(dateStr) {
   const thunderTile = tile('Thunder', maxThunder != null ? maxThunder + '<small>%</small>' : '—', thunderHours.length ? 'Around ' + hourLabel(thunderHours[0].t) + (thunderHours.length > 1 ? '–' + hourLabel(thunderHours[thunderHours.length - 1].t + 3600e3) : '') : 'Low', maxThunder >= 40 ? 'bad' : maxThunder >= 20 ? 'warn' : 'good');
   const windTile = tile('Wind', Math.round(maxWind) + '<small> mph' + (maxGust > maxWind + 3 ? ', gusts ' + Math.round(maxGust) : '') + '</small>', windiest ? 'Strongest ' + hourLabel(windiest.t) + ' from the ' + (windiest.dir || '?') : '', Math.max(maxWind, maxGust) >= 30 ? 'bad' : Math.max(maxWind, maxGust) >= 20 ? 'warn' : 'good');
   const tempTile = tile('Temps', (hi != null ? hi + '°' : '—') + ' <small>/ ' + (lo != null ? lo + '°' : '—') + '</small>', hours.length ? 'Feels ' + Math.min(...hours.map(h => h.feels)) + '° to ' + Math.max(...hours.map(h => h.feels)) + '°' : '', '');
-  const sunTile = sun && sun.rise ? tile('Sun', '<small>↑</small>' + clock(sun.rise) + ' <small>↓</small>' + clock(sun.set), 'Daylight ' + fmtDur((sun.set - sun.rise) / 60000), '') : '';
+  const sunTile = sun && sun.rise ? tile('Sun', '<small>↑</small>' + clock(sun.rise) + ' <small>↓</small>' + clock(sun.set), 'Daylight ' + fmtDur((sun.set - sun.rise) / 60000, true), '') : '';
   const legalTile = sun && sun.rise ? tile('Shooting light', clock(sun.rise - 30 * 60000) + '<small> – </small>' + clock(sun.set + 30 * 60000), '½ h before sunrise to ½ h after sunset (check your state)', '') : '';
   const moonTile = tile('Moon', moon.ill + '<small>%</small>', moon.name, '');
   const pressTile = pressure ? tile('Pressure', pressure.inHg.toFixed(2) + '<small> inHg</small>', (pressure.change3h >= 0 ? '+' : '') + pressure.change3h.toFixed(2) + ' in 3 h · ' + pressure.word + (pressure.fast ? ' fast' : ''), pressure.fast && pressure.change3h < 0 ? 'warn' : '') : tile('Pressure', '—', 'Needs a recent station report', '');
@@ -1890,7 +1892,7 @@ function spokenForm(text) {
     .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_WORDS[d] || m)
     .replace(/\b(nne|ene|ese|sse|ssw|wsw|wnw|nnw)\b/g, m => DIR_WORDS[m.toUpperCase()])
     .replace(/(\d)\s*mi\b/g, '$1 miles').replace(/\bmph\b/g, 'miles per hour').replace(/°/g, ' degrees').replace(/≈/g, 'about').replace(/\bg(\d+)/g, 'gusting $1')
-    .replace(/\b(\d+)\s*h\b/g, '$1 hours').replace(/\bmin\b/g, 'minutes').replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
+    .replace(/\b(\d+)\s*h\b/g, '$1 hours').replace(/\b1 hours\b/g, '1 hour').replace(/\b1 min\b/g, '1 minute').replace(/\bmin\b/g, 'minutes').replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
 }
 function speak(text, opts) {
   opts = opts || {};
@@ -1972,8 +1974,8 @@ function leadSentences(f) {
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
   if (f.rain) {
     if (f.rain.fizzles) out.push(`There's rain to the ${f.rain.from}, but it's weakening and will probably fizzle before it gets here.`);
-    else if (f.rain.etaMin <= 1) out.push(`${f.rain.intensity} rain is on top of you now${f.rain.endMin < 115 ? ', likely easing in about ' + fmtDur(f.rain.endMin) : ''}.`);
-    else out.push(`${f.rain.intensity} rain${f.rain.trend === 'strengthening' ? ', and it\'s strengthening,' : f.rain.trend === 'weakening' ? ', though weakening,' : ''} is coming from the ${f.rain.from} and should reach you in about ${fmtDur(f.rain.etaMin)}.`);
+    else if (f.rain.etaMin <= 1) out.push(`${f.rain.intensity} rain is on top of you now${f.rain.endMin < 115 ? ', likely easing in ' + fmtDur(f.rain.endMin) : ''}.`);
+    else out.push(`${f.rain.intensity} rain${f.rain.trend === 'strengthening' ? ', and it\'s strengthening,' : f.rain.trend === 'weakening' ? ', though weakening,' : ''} is coming from the ${f.rain.from} and should reach you in ${fmtDur(f.rain.etaMin)}.`);
   } else if (f.passing) out.push(`Rain ${f.passing.distMi} miles to the ${f.passing.dir} is passing to the ${f.passing.passDir}; it should miss you.`);
   else out.push('No rain is heading your way right now.');
   if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Lightning is within ten miles, nearest about ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and getting closer' : ''}. Get to shelter.` : `Lightning is ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and approaching' : f.lightning.trend === 'receding' ? ' and moving away' : ''}.`);

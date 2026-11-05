@@ -152,7 +152,7 @@ public sealed class StatusService
         {
             r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             r.Main = $"Rain to the {CompassLong(hit.FromBearing)} is weakening — may fizzle before it reaches you";
-            r.Sub = $"If it holds together: {Intensity(hit.MaxDbz).ToLowerInvariant()} rain in about {FmtDur(Math.Max(0, hit.EtaMin - lag))}" + (moving.Length > 0 ? " · " + moving : "");
+            r.Sub = $"If it holds together: {Intensity(hit.MaxDbz).ToLowerInvariant()} rain in {FmtDur(Math.Max(0, hit.EtaMin - lag))}" + (moving.Length > 0 ? " · " + moving : "");
             return;
         }
         if (hit is not null)
@@ -161,7 +161,7 @@ public sealed class StatusService
             r.EtaMin = eta; r.EndMin = Math.Max(0, hit.EndMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             if (hit.EtaMin <= 0.5) { r.Color = "red"; r.Level = "atyou"; r.Main = $"{word} rain at your location"; r.Sub = hit.EndMin < 115 ? $"Likely ending in about {Math.Round(Math.Max(1, hit.EndMin - lag))} min" : "May continue for a while"; }
             else if (eta <= 10) { r.Color = "red"; r.Level = "imminent"; r.Main = $"Rain arriving in ~{Math.Max(1, Math.Round(eta))} min"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
-            else { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain arriving in about {FmtDur(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
+            else { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain arriving in {FmtDur(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
         }
         else if (!m.Ok && p.Nearest is not null && p.Nearest.DistMi <= 10)
         { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain {Math.Round(p.Nearest.DistMi)} mi {Compass(p.Nearest.Bearing)}"; r.Sub = $"Movement unclear ({m.Reason ?? "not enough data"}) — keep an eye on it"; }
@@ -181,6 +181,8 @@ public sealed class StatusService
     public static string Compass(double d) => Dirs[(int)Math.Round(((d % 360) + 360) % 360 / 22.5) % 16];
     public static string CompassLong(double d) => DirsLong[(int)Math.Floor(((d % 360) + 360) % 360 / 22.5) % 16];
     private static string Intensity(double dbz) => dbz < 30 ? "Light" : dbz < 40 ? "Moderate" : dbz < 50 ? "Heavy" : "Very heavy";
-    private static string FmtDur(double min) { min = Math.Round(min); if (min < 60) return min + " min"; int h = (int)(min / 60), mm = (int)(min % 60); return h + " h" + (mm > 0 ? " " + mm + " min" : ""); }
+    private static string FmtDurExact(double min) { min = Math.Round(min); if (min < 60) return min + " min"; int h = (int)(min / 60), mm = (int)(min % 60); return h + " h" + (mm > 0 ? " " + mm + " min" : ""); }
+    // 10-minute steps with "just over" (1–4 past) / "just under" (5–9 past), matching the page; under 10 minutes stays exact.
+    private static string FmtDur(double min) { min = Math.Round(min); if (min < 10) return FmtDurExact(min); double d = min % 10; return d == 0 ? FmtDurExact(min) : d < 5 ? "just over " + FmtDurExact(min - d) : "just under " + FmtDurExact(min - d + 10); }
     private static string Fmt(double? mi) => mi is null ? "?" : Math.Max(1, Math.Round(mi.Value)).ToString();
 }
