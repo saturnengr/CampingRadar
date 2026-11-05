@@ -615,7 +615,7 @@ const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false },
   brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
-  voice: { enabled: false, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
+  voice: { enabled: true, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
@@ -875,7 +875,7 @@ function updatePickHint() {
   $('#pickHint').hidden = !show;
   $('#pickCancel').hidden = !st.picking || !st.loc;
   $('#pickText').textContent = st.picking || st.loc ? 'Tap the map to set your camp location'
-    : (st.gpsErr ? 'No GPS fix — tap the map to set your location' : 'Waiting for GPS… or tap the map to set your location');
+    : (st.gpsErr === 'blocked' ? 'Location is blocked for this site — allow it in the browser\'s site settings, or tap the map to set your location' : st.gpsErr ? 'No GPS fix — tap the map to set your location' : 'Waiting for GPS… or tap the map to set your location');
 
 }
 function setPicking(on) { st.picking = on; updatePickHint(); }
@@ -931,15 +931,32 @@ function openLocation() {
   openModal();
   setTimeout(() => { const i = $('#locQ'); if (i && !st.loc) i.focus(); }, 50);
 }
-let lastGps = null;
+let lastGps = null, gpsAnswered = false;
+// Permissions are requested in order on first load: location first, then the microphone once the browser has answered
+// about location (granted or refused), so the two prompts never fight for the screen.
+function afterGpsAnswer() { if (gpsAnswered) return; gpsAnswered = true; setTimeout(requestMicrophone, 800); }
 function startGps() {
-  if (!navigator.geolocation) { st.gpsErr = 'not supported'; updatePickHint(); return; }
+  if (!navigator.geolocation) { st.gpsErr = 'not supported'; updatePickHint(); afterGpsAnswer(); return; }
   navigator.geolocation.watchPosition(p => {
     st.gpsErr = null; st.gpsAcc = p.coords.accuracy;
     lastGps = { lat: p.coords.latitude, lon: p.coords.longitude };
     if (S.locMode === 'gps') setLocation(lastGps.lat, lastGps.lon, 'gps');
-  }, err => { st.gpsErr = err.message || 'GPS error'; updatePickHint(); },
+    afterGpsAnswer();
+  }, err => { st.gpsErr = err.code === 1 ? 'blocked' : (err.message || 'GPS error'); updatePickHint(); afterGpsAnswer(); },
   { enableHighAccuracy: true, maximumAge: 60000, timeout: 60000 });
+  // If the user never answers the prompt, still move on to the microphone after a while.
+  setTimeout(afterGpsAnswer, 45000);
+}
+async function requestMicrophone() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setVoiceStatus('no microphone access in this browser'); return; }
+  try {
+    const q = navigator.permissions && await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+    if (q && q.state === 'denied') { st.micErr = 'blocked'; setVoiceStatus('not running', 'microphone is blocked for this site — allow it in the browser\'s site settings'); return; }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+    st.micErr = null;
+  } catch (e) { st.micErr = /NotAllowed|denied|Permission/i.test(e && e.message || e.name) ? 'blocked' : (e && e.message) || String(e); setVoiceStatus('not running', st.micErr === 'blocked' ? 'microphone permission was refused' : st.micErr); return; }
+  if (S.voice.enabled && S.voice.key) startWakeWord(); else if (S.voice.enabled) setVoiceStatus('needs an access key'); else setVoiceStatus('off');
 }
 function useGps() {
   S.locMode = 'gps'; save();
@@ -2213,7 +2230,6 @@ function handleCommand(alts) {
   say("Sorry, I didn't understand that. Say help for the list of commands.");
 }
 $('#micBtn').addEventListener('click', () => { const a = audio(); if (a && a.state !== 'running') a.resume().catch(() => {}); if (voice.listening) { try { voice.rec && voice.rec.stop(); } catch (e) {} } else listenForCommand(); });
-if (S.voice.enabled && S.voice.key) setTimeout(startWakeWord, 2500);
 setTimeout(() => setVoiceStatus(voice.status), 100);
 
 /* ------------------------------ settings --------------------------- */
