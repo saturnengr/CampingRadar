@@ -120,7 +120,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #warnbar{flex-wrap:wrap;font-size:16px;padding:6px 10px;gap:8px}
   #warnbar button{min-height:38px;font-size:14px}
   /* map controls become a toolbar along the bottom */
-  #controls{top:auto;bottom:calc(20px + env(safe-area-inset-bottom));left:8px;right:8px;flex-direction:row;gap:5px}
+  .leaflet-control-attribution{white-space:nowrap}
+  #controls{top:auto;bottom:calc(22px + env(safe-area-inset-bottom));left:8px;right:8px;flex-direction:row;gap:5px}
   #controls .gap{display:none}
   #controls button{flex:1;width:auto;min-width:0;height:50px;font-size:16px}
   #controls button small{font-size:10px}
@@ -542,7 +543,7 @@ const map = L.map('map', { zoomControl: false, zoomSnap: 0.25, attributionContro
 map.attributionControl.setPrefix(false);
 // OpenStreetMap standard tiles: no key needed (night mode darkens them with a CSS filter)
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: NOAA MRMS / Iowa Environmental Mesonet · Weather: NWS'
+  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: NOAA MRMS, IEM · Weather: NWS'
 }).addTo(map);
 map.createPane('radar'); map.getPane('radar').style.zIndex = 350;
 map.createPane('alerts'); map.getPane('alerts').style.zIndex = 360;
