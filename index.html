@@ -67,6 +67,8 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 #controls button.on{background:var(--accent);border-color:var(--accent2)}
 #controls svg{width:26px;height:26px;vertical-align:middle}
 #controls .gap{height:4px}
+#zoomCtl{position:absolute;right:82px;top:12px;z-index:800;display:flex;flex-direction:column;gap:8px}
+#zoomCtl button{width:62px;height:56px;padding:0;font-weight:700;font-size:30px;line-height:1;background:rgba(13,20,27,.88);color:#fff;border-color:rgba(255,255,255,.18)}
 #frameInfo{position:absolute;left:12px;bottom:26px;z-index:800;background:rgba(13,20,27,.86);padding:7px 11px;border-radius:10px;font-size:15px;font-variant-numeric:tabular-nums}
 .dots{display:inline-flex;gap:4px;margin-left:8px;vertical-align:middle}
 .dots i{width:8px;height:8px;border-radius:50%;background:#56636f}.dots i.on{background:var(--accent2)}
@@ -146,6 +148,10 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <button id="btnPick" title="Set location by tapping map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 22s7-6.6 7-12a7 7 0 0 0-14 0c0 5.4 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg></button>
     <button id="btnNight" title="Day / night"></button>
     <button id="btnSettings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </div>
+  <div id="zoomCtl">
+    <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+    <button id="zoomOut" title="Zoom out" aria-label="Zoom out">&minus;</button>
   </div>
   <div id="updated"></div>
   <div id="frameInfo"></div>
@@ -583,6 +589,13 @@ function fitRange() {
 }
 document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { S.range = +b.dataset.range; save(); drawRings(); fitRange(); }));
 $('#btnCenter').addEventListener('click', fitRange);
+function manualZoom(dir) {
+  dir > 0 ? map.zoomIn(1) : map.zoomOut(1);
+  st.lastTouch = Date.now();   // drifts back to the chosen range after 2 min, like a pinch
+  document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('on'));
+}
+$('#zoomIn').addEventListener('click', () => manualZoom(1));
+$('#zoomOut').addEventListener('click', () => manualZoom(-1));
 map.getContainer().addEventListener('pointerdown', () => { st.lastTouch = Date.now(); });
 
 /* --------------------------- radar loop ---------------------------- */
