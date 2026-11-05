@@ -95,6 +95,11 @@ body.night .leaflet-control-attribution a{color:#8ab}
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2000;display:flex;align-items:center;justify-content:center}
 .sheet{background:var(--chrome2);border:1px solid var(--line);border-radius:16px;width:min(700px,94vw);max-height:88vh;overflow:auto;padding:14px 18px 18px;user-select:text}
 .sheet h2{margin:4px 0 6px;font-size:22px}
+.sheet{position:relative}
+.sheetwrap{position:relative;width:min(700px,94vw)}
+.sheetwrap .sheet{width:100%;box-sizing:border-box}
+#sheetClose{position:absolute;top:8px;right:8px;width:44px;height:44px;min-height:0;padding:0;border-radius:50%;font-size:22px;line-height:1;z-index:2;background:var(--chrome2)}
+.sheet h2,.dayhead{padding-right:48px}
 .row{margin:14px 0}
 .row>label{display:block;color:var(--muted);font-size:14px;margin-bottom:6px}
 .seg{display:flex;gap:6px;flex-wrap:wrap}
@@ -159,6 +164,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #frameInfo{left:8px;bottom:calc(80px + env(safe-area-inset-bottom));font-size:13px;padding:5px 9px}
   #soundChip{left:8px;bottom:calc(120px + env(safe-area-inset-bottom));min-height:40px;font-size:14px}
   #pickHint{top:auto;bottom:calc(122px + env(safe-area-inset-bottom));white-space:normal;max-width:calc(100% - 24px);font-size:15px;padding:6px 6px 6px 12px}
+  .sheetwrap{width:100%}
   .sheet{width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:12px 14px 18px}
   #modal{align-items:flex-end}
   #snoozeMenu .opts button{min-width:56px}
@@ -239,7 +245,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <button id="snoozeCancel" hidden>Cancel snooze</button>
 </div>
 
-<div id="modal" hidden><div class="sheet" id="sheet"></div></div>
+<div id="modal" hidden><div class="sheetwrap"><button id="sheetClose" aria-label="Close" title="Close">✕</button><div class="sheet" id="sheet"></div></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -800,7 +806,7 @@ function openLocation() {
       addBtns(res, j.map(x => ({ lat: +x.lat, lon: +x.lon, label: x.display_name.replace(/, United States$/, '') })));
     } catch (e) { msg.textContent = 'Search failed — check the internet connection, or type coordinates instead.'; }
   };
-  $('#modal').hidden = false;
+  openModal();
   setTimeout(() => { const i = $('#locQ'); if (i && !st.loc) i.focus(); }, 50);
 }
 let lastGps = null;
@@ -971,7 +977,7 @@ function renderAlerts() {
 $('#warnAck').addEventListener('click', () => { for (const a of critAlerts()) S.ack[a.id] = Date.now(); save(); renderAlerts(); });
 $('#warnDetails').addEventListener('click', () => {
   const list = critAlerts().length ? critAlerts().concat(st.alerts.filter(a => !CRITICAL.includes(a.event))) : st.alerts;
-  const sheet = $('#sheet'); sheet.innerHTML = '<h2>Active alerts</h2>';
+  const sheet = $('#sheet'); sheet.innerHTML = '<h2>Active alerts</h2>'; openModal();
   for (const a of list) {
     const d = document.createElement('div'); d.className = 'alert';
     const h = document.createElement('h3'); h.textContent = a.event; d.appendChild(h);
@@ -979,7 +985,6 @@ $('#warnDetails').addEventListener('click', () => {
     sheet.appendChild(d);
   }
   const b = document.createElement('button'); b.className = 'done'; b.textContent = 'Close'; b.onclick = closeModal; sheet.appendChild(b);
-  $('#modal').hidden = false;
 });
 
 /* ------------------------- rain tracking (nowcast) ----------------- */
@@ -1284,7 +1289,7 @@ function windChillF(t, v) { if (t > 50 || v < 3) return t; return Math.round(35.
 const hourLabel = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric' }).replace(' ', '').toLowerCase();
 
 async function openDay(dateStr) {
-  const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; $('#modal').hidden = false;
+  const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; openModal();
   const hours = st.wx.hourly.filter(p => p.startTime.slice(0, 10) === dateStr).map(p => {
     const t = Date.parse(p.startTime), g = st.wx.grid || {};
     const temp = p.temperature, rh = rhOf(p), wind = windMph(p), gust = g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null;
@@ -1377,7 +1382,7 @@ function openSettings() {
     '<div class="diag" id="diag"></div><button class="done" data-act="close">Done</button>';
   renderPushRow();
   renderDiag();
-  $('#modal').hidden = false;
+  openModal();
 }
 function renderDiag() {
   const d = $('#diag'); if (!d) return;
@@ -1395,7 +1400,11 @@ function renderDiag() {
     'Sound: ' + (!S.sound ? 'off (Settings)' : audio() ? audio().state : 'unavailable'),
   ].join('\n');
 }
-function closeModal() { $('#modal').hidden = true; }
+function closeModal() { $('#modal').hidden = true; if (history.state && history.state.sheet) history.back(); }
+$('#sheetClose').addEventListener('click', closeModal);
+// Back button / swipe-back closes the panel instead of leaving the app
+window.addEventListener('popstate', () => { if (!$('#modal').hidden) $('#modal').hidden = true; });
+function openModal() { if (!(history.state && history.state.sheet)) history.pushState({ sheet: true }, ''); $('#modal').hidden = false; }
 $('#btnSettings').addEventListener('click', openSettings);
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 $('#sheet').addEventListener('click', e => {
