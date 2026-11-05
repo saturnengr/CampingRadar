@@ -257,8 +257,6 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <div class="gap"></div>
     <button id="btnCenter" title="Re-center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
     <button id="btnPlay" title="Play/pause radar loop"></button>
-    <button id="btnPick" title="Set location by tapping map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 22s7-6.6 7-12a7 7 0 0 0-14 0c0 5.4 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg></button>
-    <button id="btnNight" title="Day / night"></button>
     <button id="btnBrief" title="Spoken briefing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
     <button id="btnLayers" title="Map layers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8.5 12 14l10-5.5z"/><path d="m2 13 10 5.5L22 13"/><path d="m2 17.5 10 5.5 10-5.5"/></svg></button>
     <button id="btnSettings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
@@ -851,11 +849,10 @@ function isNightNow() {
 function applyNight() {
   const night = isNightNow(), was = document.body.classList.contains('night');
   document.body.classList.toggle('night', night);
-  const label = S.night === 'auto' ? 'auto' : S.night;
-  $('#btnNight').innerHTML = (night ? ICON_MOON : ICON_SUN) + '<small>' + label + '</small>';
+
   if (was !== night) drawRings();
 }
-$('#btnNight').addEventListener('click', () => { S.night = { auto: 'day', day: 'night', night: 'auto' }[S.night]; save(); applyNight(); });
+
 
 /* ----------------------------- location ---------------------------- */
 function setLocation(lat, lon, src) {
@@ -872,10 +869,10 @@ function updatePickHint() {
   $('#pickCancel').hidden = !st.picking || !st.loc;
   $('#pickText').textContent = st.picking || st.loc ? 'Tap the map to set your camp location'
     : (st.gpsErr ? 'No GPS fix — tap the map to set your location' : 'Waiting for GPS… or tap the map to set your location');
-  $('#btnPick').classList.toggle('on', st.picking || S.locMode === 'manual');
+
 }
 function setPicking(on) { st.picking = on; updatePickHint(); }
-$('#btnPick').addEventListener('click', () => { if (st.picking) setPicking(false); else openLocation(); });
+
 $('#pickCancel').addEventListener('click', () => setPicking(false));
 map.on('click', e => {
   if (!st.picking && st.loc) return;
