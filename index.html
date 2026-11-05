@@ -258,7 +258,6 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <button id="btnCenter" title="Re-center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
     <button id="btnPlay" title="Play/pause radar loop"></button>
     <button id="btnBrief" title="Spoken briefing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
-    <button id="btnLayers" title="Map layers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8.5 12 14l10-5.5z"/><path d="m2 13 10 5.5L22 13"/><path d="m2 17.5 10 5.5 10-5.5"/></svg></button>
     <button id="btnSettings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </div>
   <div id="zoomCtl">
@@ -1306,7 +1305,7 @@ function applyLayers() {
   set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
-  $('#btnLayers').classList.toggle('on', Object.entries(L_).some(([k, v]) => v && !DEFAULTS.layers[k]) );
+
   renderLegend();
   refreshHazards(); refreshWind();
 }
@@ -2091,7 +2090,7 @@ function openSettings(tab) {
   renderDiag();
   openModal();
 }
-$('#btnLayers').addEventListener('click', () => openSettings('layers'));
+
 function renderDiag() {
   const d = $('#diag'); if (!d) return;
   const m = st.nc && st.nc.motion;
@@ -2116,7 +2115,7 @@ $('#sheetClose').addEventListener('click', closeModal);
 // Back button / swipe-back closes the panel instead of leaving the app
 window.addEventListener('popstate', () => { if (!$('#modal').hidden) $('#modal').hidden = true; });
 function openModal() { if (!(history.state && history.state.sheet)) history.pushState({ sheet: true }, ''); $('#modal').hidden = false; }
-$('#btnSettings').addEventListener('click', openSettings);
+$('#btnSettings').addEventListener('click', () => openSettings('general'));
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 $('#sheet').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
