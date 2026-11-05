@@ -1723,9 +1723,19 @@ function pickVoice() {
   const want = S.brief.voice && speech.voices.find(v => v.name === S.brief.voice);
   return want || speech.voices.find(v => /en-US/i.test(v.lang) && /Google|Natural|Samantha|Premium/i.test(v.name)) || speech.voices.find(v => /en-US/i.test(v.lang)) || speech.voices[0] || null;
 }
+const DIR_WORDS = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast', SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest', W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
+// Make status text and briefings read well aloud
+function spokenForm(text) {
+  return String(text)
+    .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_WORDS[d] || m)
+    .replace(/\b(nne|ene|ese|sse|ssw|wsw|wnw|nnw)\b/g, m => DIR_WORDS[m.toUpperCase()])
+    .replace(/(\d)\s*mi\b/g, '$1 miles').replace(/\bmph\b/g, 'miles per hour').replace(/°/g, ' degrees').replace(/≈/g, 'about').replace(/\bg(\d+)/g, 'gusting $1')
+    .replace(/\b(\d+)\s*h\b/g, '$1 hours').replace(/\bmin\b/g, 'minutes').replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
+}
 function speak(text, opts) {
   opts = opts || {};
   if (!speech.ok || !S.sound) return false;
+  text = spokenForm(text);
   if (!opts.queue) speechSynthesis.cancel();
   const parts = String(text).replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
   const v = pickVoice();
