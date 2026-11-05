@@ -5,7 +5,7 @@ ASP.NET Core 8 Web API that does the shared work for every Camp Radar device:
 - **Radar cache** — fetches NOAA MRMS quality-controlled reflectivity once per scan and serves Web-Mercator tiles (`/radar/tile/{time}/{z}/{x}/{y}.png`). NOAA data, public domain.
 - **Lightning** — ingests GOES-19 GLM flash files from AWS Open Data every minute (no credentials), keeps the last hour in memory, answers "strikes within 10/20/30 miles of here".
 - **Rain arrival** — the same storm-tracking engine as the page, run on the server (`/status`).
-- **Push alerts** — Web Push (VAPID) to phones and tablets that opted in, even with the screen off: rain arriving, lightning within 10 mi, and tornado / severe thunderstorm / flash flood / flood warnings (which are never snoozed).
+- **Push alerts** — Web Push (VAPID) to phones and tablets that opted in, even with the screen off: rain arriving, lightning within 10 mi, and life-safety NWS warnings — tornado, severe thunderstorm, flash flood / flood, hurricane / tropical storm / storm surge, extreme wind, tsunami, blizzard / ice storm / winter storm, extreme cold, avalanche — which are never snoozed.
 
 GitHub Actions builds and tests it on every push and attaches `campradar-api.zip`, a ready-to-upload IIS publish.
 

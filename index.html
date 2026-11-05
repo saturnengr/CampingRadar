@@ -600,14 +600,20 @@ function blobTrends(frames, dts, vel, cellKm, thresh) {
 const MI = 1609.344;
 const IEM_TILES = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/';
 const NWS = 'https://api.weather.gov';
-const CRITICAL = ['Tornado Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning', 'Flood Warning'];
-const CRIT_COLOR = { 'Tornado Warning': '#ff1744', 'Severe Thunderstorm Warning': '#ffa000', 'Flash Flood Warning': '#00c853', 'Flood Warning': '#2e7d32' };
+const CRITICAL = ['Tornado Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning', 'Flood Warning',
+  'Hurricane Warning', 'Tropical Storm Warning', 'Storm Surge Warning', 'Extreme Wind Warning', 'Tsunami Warning',
+  'Blizzard Warning', 'Ice Storm Warning', 'Winter Storm Warning', 'Extreme Cold Warning', 'Avalanche Warning'];
+const CRIT_COLOR = { 'Tornado Warning': '#ff1744', 'Severe Thunderstorm Warning': '#ffa000', 'Flash Flood Warning': '#00c853', 'Flood Warning': '#2e7d32',
+  'Hurricane Warning': '#d500f9', 'Tropical Storm Warning': '#b71c1c', 'Storm Surge Warning': '#b388ff', 'Extreme Wind Warning': '#ff6d00', 'Tsunami Warning': '#fd3c5a',
+  'Blizzard Warning': '#ff5722', 'Ice Storm Warning': '#8b008b', 'Winter Storm Warning': '#ff69b4', 'Extreme Cold Warning': '#1e88e5', 'Avalanche Warning': '#1565c0' };
+const TROPICAL_EVENTS = /Hurricane|Tropical Storm|Storm Surge/;
+const BEACH_EVENTS = /Rip Current|High Surf|Beach Hazards|Coastal Flood|Small Craft|Gale|Marine/;
 const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar loop
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false },
+  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false },
   brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -1037,6 +1043,7 @@ async function refreshObs() {
         gMph = kmhToMph(o.windGust && o.windGust.value);
         wDir = o.windDirection && o.windDirection.value != null ? compass(o.windDirection.value) : null;
         text = o.textDescription || null;
+        st.wx.visMi = o.visibility && o.visibility.value != null ? o.visibility.value / 1609.344 : null;
       }
     }
   } catch (e) { /* fall back to hourly forecast below */ }
@@ -1050,6 +1057,24 @@ async function refreshObs() {
     'Wind ' + (wDir ? wDir + ' ' : '') + Math.round(wMph) + ' mph' + (gMph && gMph > wMph + 3 ? ', gusts ' + Math.round(gMph) : ''));
   st.wx.obsAt = Date.now();
 }
+// What is falling (or about to): the hourly forecast says, and temperature backs it up
+function precipType() {
+  const h = st.wx.hourly0, t = ((h && h.shortForecast) || '') + ' ' + ($('#nowCond').textContent || '');
+  const temp = h ? h.temperature : null;
+  if (/freezing rain|freezing drizzle|ice storm/i.test(t)) return 'freezing rain';
+  if (/sleet|ice pellets/i.test(t)) return 'sleet';
+  if (/wintry mix|rain and snow|snow and rain/i.test(t)) return 'wintry mix';
+  if (/snow|flurr|blizzard/i.test(t)) return 'snow';
+  if (temp != null && temp <= 33) return 'snow';
+  if (temp != null && temp <= 36) return 'wintry mix';
+  return 'rain';
+}
+// Rewrite "rain" wording for the precipitation that is actually falling
+function precipify(text) {
+  const pt = precipType(); if (pt === 'rain' || !text) return text;
+  const cap = pt[0].toUpperCase() + pt.slice(1);
+  return String(text).replace(/\bRain\b/g, cap).replace(/\brain\b/g, pt).replace(/Light snow/g, 'Light snow').replace(/Very heavy snow/g, 'Heavy snow');
+}
 
 /* ------------------------------ warnings --------------------------- */
 async function refreshAlerts() {
@@ -1061,6 +1086,7 @@ async function refreshAlerts() {
     st.alertsAt = Date.now(); st.alertsErr = null;
   } catch (e) { st.alertsErr = e.message; }
   renderAlerts();
+  try { if (st.alerts.some(a => TROPICAL_EVENTS.test(a.event)) !== map.hasLayer(tropicalLayer)) applyLayers(); } catch (e) {}
 }
 let alarmTimer = null;
 function critAlerts() { return st.alerts.filter(a => CRITICAL.includes(a.event)).sort((a, b) => CRITICAL.indexOf(a.event) - CRITICAL.indexOf(b.event)); }
@@ -1246,6 +1272,7 @@ const LAYER_INFO = {
   smoke: ['Smoke', "NOAA's surface smoke forecast for the current hour"],
   wind: ['Wind', 'Current wind arrows across the map: speed, gusts and direction'],
   clouds: ['Clouds (satellite)', 'Live GOES imagery: visible by day, infrared at night'],
+  tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
 };
 const floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
 const WFIGS = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/';
@@ -1265,6 +1292,7 @@ const SmokeLayer = L.TileLayer.extend({
   }
 });
 const smokeLayer = new SmokeLayer({ pane: 'imagery', tileSize: 512, opacity: 0.55, maxNativeZoom: 9, maxZoom: 19 });
+const tropicalLayer = L.tileLayer.wms(NOWCOAST, { layers: 'tropical_cyclones:tropical_cyclone_watches_warnings,tropical_cyclones:tropical_cyclone_cone_of_uncertainty_forecast,tropical_cyclones:tropical_cyclone_track_forecast,tropical_cyclones:tropical_cyclone_intensity_forecast,tropical_cyclones:tropical_cyclone_current_wind_extent', format: 'image/png', transparent: true, version: '1.3.0', pane: 'hazards', opacity: 0.85, uppercase: true });
 // Clouds: GOES imagery via nowCOAST WMS; visible by day, longwave infrared at night
 // Each satellite tile is processed on the device: dark (clear ground) pixels become transparent,
 // bright cloud tops stay, so the map underneath is untouched where the sky is clear.
@@ -1303,6 +1331,7 @@ function applyLayers() {
   const L_ = S.layers;
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
   set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
+  set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
 
@@ -1319,6 +1348,7 @@ function renderLegend() {
   if (L_.smoke) items.push('<span><i style="background:#9e9e9e"></i>Smoke forecast</span>');
   if (L_.wind) items.push('<span><i style="background:#e8eef3;border-radius:50%"></i>Wind (mph, g = gust)</span>');
   if (L_.clouds) items.push('<span><i style="background:#fff"></i>Satellite clouds (white = cloud)</span>');
+  if (L_.tropical || map.hasLayer(tropicalLayer)) items.push('<span><i style="background:#d500f9"></i>Tropical cyclone track & cone</span>');
   const el = $('#legend'); el.innerHTML = items.join(''); el.hidden = !items.length;
 }
 
@@ -1520,8 +1550,10 @@ function renderStatus() {
   const s = computeStatus();
   const bar = $('#statusbar');
   bar.className = s.cls;
+  s.main = precipify(s.main); s.sub = precipify(s.sub);
   $('#statusMain').textContent = s.main;
   let sub = s.sub;
+  if (st.wx.visMi != null && st.wx.visMi < 1) sub = 'Visibility ' + (st.wx.visMi < 0.3 ? '¼ mi or less' : st.wx.visMi.toFixed(1) + ' mi') + (sub ? ' · ' + sub : '');
   const hz = hazardLines(); if (hz.length) sub = hz.join(' · ') + (sub ? ' · ' + sub : '');
   if (Date.now() < S.snoozeUntil) sub = (sub ? sub + ' · ' : '') + 'Rain chime snoozed';
   $('#statusSub').textContent = sub;
@@ -1531,7 +1563,13 @@ function renderStatus() {
   return s;
 }
 function chimeIfAllowed(kind) { if (Date.now() >= S.snoozeUntil) playChime(kind); }
+function handleWhiteout() {
+  const white = st.wx.visMi != null && st.wx.visMi <= 0.3 && precipType() !== 'rain', e = st.evt;
+  if (white && !e.whiteout) { e.whiteout = true; playChime('imminent'); speakAlert('Whiteout conditions: visibility under a quarter mile in ' + precipType() + '.'); }
+  if (!white) e.whiteout = false;
+}
 function handleRainEvent(level) {
+  handleWhiteout();
   const e = st.evt, threat = level === 'incoming' || level === 'imminent' || level === 'atyou';
   const close = level === 'imminent' || level === 'atyou';
   if (threat) {
@@ -1602,7 +1640,7 @@ $('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); 
 document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') && e.target.id !== 'snoozeBtn') $('#snoozeMenu').hidden = true; });
 
 /* ------------------------------ day view --------------------------- */
-const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling' };
+const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing' };
 $('#days').addEventListener('click', e => { const d = e.target.closest('.day'); if (d && d.dataset.date) openDay(d.dataset.date); });
 
 // NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
@@ -1613,7 +1651,9 @@ async function fetchGrid(P) {
     const [startS, dur] = v.validTime.split('/'); const start = Date.parse(startS); const hrs = durHours(dur);
     for (let h = 0; h < hrs; h++) m[start + h * 3600e3] = conv ? conv(v.value) : v.value; } return m; };
   st.wx.grid = { at: Date.now(), gust: expand(g.windGust, kmhToMph), thunder: expand(g.probabilityOfThunder), feels: expand(g.apparentTemperature, cToF),
-    hail: expand(g.hazards && null), qpf: expand(g.quantitativePrecipitation), sky: expand(g.skyCover) };
+    qpf: expand(g.quantitativePrecipitation), sky: expand(g.skyCover), snow: expand(g.snowfallAmount, mm => mm / 25.4), snowLevel: expand(g.snowLevel, m => m * 3.28084), vis: expand(g.visibility, m => m / 1609.344), windChill: expand(g.windChill, cToF), wave: expand(g.waveHeight, m => m * 3.28084) };
+  // snowfallAmount is a per-period total spread over its hours; keep per-hour share so sums over hours are right
+  for (const v of (g.snowfallAmount && g.snowfallAmount.values) || []) { const [startS, dur] = v.validTime.split('/'); const start = Date.parse(startS), hrs = durHours(dur); for (let h = 0; h < hrs; h++) st.wx.grid.snow[start + h * 3600e3] = (v.value || 0) / 25.4 / hrs; }
 }
 function durHours(iso) { // PT3H, P1DT6H, PT30M
   const m = /P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/.exec(iso || ''); if (!m) return 1;
@@ -1663,12 +1703,15 @@ function dayHours(dateStr) {
     const t = Date.parse(p.startTime), g = st.wx.grid || {};
     const temp = p.temperature, rh = rhOf(p), wind = windMph(p), gust = g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null;
     const feels = g.feels && g.feels[t] != null ? Math.round(g.feels[t]) : (temp >= 80 ? heatIndexF(temp, rh) : windChillF(temp, wind));
-    return { t, temp, feels, rh, wind, gust, dir: p.windDirection, pop: popOf(p), thunder: g.thunder ? Math.round(g.thunder[t] || 0) : null, text: p.shortForecast, day: p.isDaytime };
+    return { t, temp, feels, rh, wind, gust, dir: p.windDirection, pop: popOf(p), thunder: g.thunder ? Math.round(g.thunder[t] || 0) : null, text: p.shortForecast, day: p.isDaytime,
+      snow: g.snow ? (g.snow[t] || 0) : 0, snowLevel: g.snowLevel ? g.snowLevel[t] : null, vis: g.vis ? g.vis[t] : null, wave: g.wave ? g.wave[t] : null };
   });
 }
 async function openDay(dateStr) {
   const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; openModal();
   const hours = dayHours(dateStr);
+  if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
+  if (snowy()) { try { await refreshSnow(); } catch (e) {} }
   const dayP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && p.isDaytime), nightP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && !p.isDaytime);
   const main = dayP || nightP;
   if (!main && !hours.length) { sh.innerHTML = '<h2>No forecast for that day yet</h2><button class="done" data-act="close">Close</button>'; return; }
@@ -1696,14 +1739,39 @@ async function openDay(dateStr) {
   const awning = tile('Awning / driving', Math.max(maxWind, maxGust) >= 30 ? 'Retract' : Math.max(maxWind, maxGust) >= 20 ? 'Watch it' : 'Fine', Math.max(maxWind, maxGust) >= 20 ? 'Gusts over 20 mph can damage an awning; 30+ is rough for high-profile driving' : 'Gusts under 20 mph', Math.max(maxWind, maxGust) >= 30 ? 'bad' : Math.max(maxWind, maxGust) >= 20 ? 'warn' : 'good');
   const hailNote = tile('Hail risk', maxThunder >= 40 ? 'Possible' : maxThunder >= 20 ? 'Low' : 'Unlikely', 'From thunderstorm chance; the live radar is the real check', maxThunder >= 40 ? 'warn' : '');
   const overnight = nightP ? tile('Overnight', nightP.temperature + '°', nightP.shortForecast, '') : '';
+  const snowTotal = hours.reduce((a, h) => a + (h.snow || 0), 0), snowHours = hours.filter(h => h.snow >= 0.05);
+  const snowTile = tile('Snow', snowTotal >= 0.1 ? snowTotal.toFixed(snowTotal < 1 ? 1 : 0) + '<small> in</small>' : '0<small> in</small>', snowHours.length ? 'Falling ' + hourLabel(snowHours[0].t) + '–' + hourLabel(snowHours[snowHours.length - 1].t + 3600e3) : 'No new snow expected', snowTotal >= 6 ? 'bad' : snowTotal >= 2 ? 'warn' : '');
+  const chillLo = Math.min(...hours.map(h => h.feels), 999);
+  const chillTile = tile('Wind chill', chillLo < 999 ? chillLo + '°' : '—', chillLo <= -20 ? 'Frostbite in minutes on exposed skin' : chillLo <= 0 ? 'Frostbite possible in about 30 min' : chillLo <= 20 ? 'Cold; cover exposed skin' : 'Manageable', chillLo <= -20 ? 'bad' : chillLo <= 0 ? 'warn' : '');
+  const visVals = hours.map(h => h.vis).filter(v => v != null), visMin = visVals.length ? Math.min(...visVals) : null;
+  const visTile = tile('Visibility', visMin == null ? (st.wx.visMi != null ? st.wx.visMi.toFixed(1) + '<small> mi now</small>' : '—') : (visMin < 0.3 ? '¼<small> mi</small>' : visMin.toFixed(1) + '<small> mi</small>'), visMin != null && visMin < 0.5 ? 'Whiteout-level at times' : visMin != null && visMin < 2 ? 'Reduced at times' : 'Good', visMin != null && visMin < 0.5 ? 'bad' : visMin != null && visMin < 2 ? 'warn' : 'good');
+  const liftTile = tile('Lifts / ridge wind', Math.max(maxWind, maxGust) + '<small> mph</small>', Math.max(maxWind, maxGust) >= 40 ? 'Wind holds likely on exposed lifts' : Math.max(maxWind, maxGust) >= 25 ? 'Upper lifts may slow or hold' : 'Lifts should run normally', Math.max(maxWind, maxGust) >= 40 ? 'bad' : Math.max(maxWind, maxGust) >= 25 ? 'warn' : 'good');
+  const sn = st.snow || {}, site = sn.site, mdl = sn.model;
+  const groundVal = site && site.depthIn != null ? site.depthIn : mdl && mdl.depthIn != null ? mdl.depthIn : null;
+  const groundTile = tile('Snow on the ground', groundVal == null ? '—' : (groundVal < 1 ? (groundVal < 0.3 ? 'Trace' : '<1') : Math.round(groundVal)) + '<small> in</small>',
+    site && site.depthIn != null ? site.name + ' SNOTEL, ' + Math.round(site.distMi) + ' mi, ' + site.elevFt.toLocaleString() + ' ft' + (site.change24In != null ? ' · ' + (site.change24In >= 0 ? '+' : '') + Math.round(site.change24In) + ' in / 24 h' : '') + (site.change72In != null ? ', ' + (site.change72In >= 0 ? '+' : '') + Math.round(site.change72In) + ' in / 3 days' : '')
+      : mdl && mdl.depthIn != null ? 'Modeled at your spot' + (mdl.change24In != null ? ' · ' + (mdl.change24In >= 0 ? '+' : '') + mdl.change24In.toFixed(1) + ' in / 24 h' : '') : 'No snow data', '');
+  const snowLvls = hours.map(h => h.snowLevel).filter(v => v != null);
+  const snowLevelTile = snowLvls.length ? tile('Snow level', Math.round(Math.min(...snowLvls) / 100) * 100 + '<small> ft</small>', 'Rain below, snow above' , '') : '';
+  // beach
+  const bt = tidesForDay(dateStr), tideTile = tile('Tides', bt.length ? bt.map(x => (x.type === 'H' ? '↑' : '↓') + ' ' + clock(x.t)).join(' <small>·</small> ') : '—', st.beach && st.beach.station ? st.beach.station.name + ' (' + Math.round(st.beach.station.distMi) + ' mi)' : 'No tide station within 60 mi', '');
+  const rip = ripRisk(), ripTile = tile('Rip currents / surf', rip === 'high' ? 'High risk' : rip === 'elevated' ? 'Elevated' : 'No advisory', beachAlerts().map(a => a.event).join(', ') || 'No coastal alerts from NWS', rip === 'high' ? 'bad' : rip === 'elevated' ? 'warn' : 'good');
+  const uvDay = st.beach && st.beach.uv ? st.beach.uv.hourly.filter(x => localDate(x.t) === dateStr) : [];
+  const uvPeak = uvDay.length ? uvDay.reduce((b, x) => x.v > b.v ? x : b) : null;
+  const uvTile = tile('UV index', uvPeak ? Math.round(uvPeak.v) + '<small> ' + uvWord(uvPeak.v) + '</small>' : '—', uvPeak ? 'Peak around ' + hourLabel(uvPeak.t) + (uvPeak.v >= 6 ? '; reapply sunscreen, seek shade midday' : '') : '', uvPeak && uvPeak.v >= 8 ? 'bad' : uvPeak && uvPeak.v >= 6 ? 'warn' : '');
+  const wtTile = tile('Water', st.beach && st.beach.wtemp ? Math.round(st.beach.wtemp.f) + '°' : '—', st.beach && st.beach.wtemp ? 'Water temperature at ' + st.beach.station.name : 'No water temperature nearby', '');
+  const waveVals = hours.map(h => h.wave).filter(v => v != null), waveTile = waveVals.length ? tile('Waves', Math.round(Math.max(...waveVals)) + '<small> ft</small>', 'NWS marine forecast', Math.max(...waveVals) >= 6 ? 'warn' : '') : '';
+  const act = S.activity in ACTIVITIES ? S.activity : 'camping';
   const tilesByActivity = {
     camping: [rainTile, thunderTile, windTile, overnight, sunTile, tempTile],
     rv: [windTile, awning, hailNote, rainTile, thunderTile, tempTile],
     hunting: [windTile, pressTile, legalTile, moonTile, tempTile, rainTile],
     trail: [rainTile, thunderTile, exertTile, lastLight, windTile, tempTile],
+    beach: [tideTile, ripTile, uvTile, wtTile, waveTile, windTile, thunderTile, sunTile],
+    skiing: [groundTile, snowTile, chillTile, visTile, liftTile, snowLevelTile, tempTile, sunTile],
   };
-  const act = S.activity in ACTIVITIES ? S.activity : 'camping';
-
+  // winter extras for everyone when snow or dangerous cold is in the forecast
+  if (act !== 'skiing') { if (snowTotal >= 0.5) tilesByActivity[act].unshift(snowTile); if (groundVal >= 1) tilesByActivity[act].unshift(groundTile); if (chillLo <= 0) tilesByActivity[act].push(chillTile); }
   const now = Date.now();
   const rows = hours.map(h => {
     const gustTxt = h.gust && h.gust > h.wind + 3 ? ' <span class="' + (h.gust >= 30 ? 'b' : h.gust >= 20 ? 'w' : '') + '">g' + h.gust + '</span>' : '';
@@ -1726,6 +1794,85 @@ async function openDay(dateStr) {
   sh.scrollTop = 0;
   sh.querySelectorAll('[data-actv]').forEach(b => b.addEventListener('click', () => { S.activity = b.dataset.actv; save(); openDay(dateStr); }));
 }
+
+/* ------------------------------ beach: tides, water temperature, UV ------------------- */
+const COOPS = 'https://api.tidesandcurrents.noaa.gov';
+async function tideStations() {
+  try { const c = JSON.parse(localStorage.getItem('campRadar.tideStations') || 'null'); if (c && Date.now() - c.at < 90 * 864e5 && c.list.length) return c.list; } catch (e) {}
+  const j = await (await fetchT(COOPS + '/mdapi/prod/webapi/stations.json?type=tidepredictions', {}, 30000)).json();
+  const list = (j.stations || []).map(x => [x.id, x.name, +x.lat, +x.lng]).filter(x => x[2] && x[3]);
+  try { localStorage.setItem('campRadar.tideStations', JSON.stringify({ at: Date.now(), list })); } catch (e) {}
+  return list;
+}
+const coopsDate = ms => { const d = new Date(ms); return d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); };
+async function refreshBeach(force) {
+  if (!st.loc) return null;
+  if (!force && st.beach && Date.now() - st.beach.at < 60 * 60000 && distMi(st.beach.loc, st.loc) < 2) return st.beach;
+  const b = { at: Date.now(), loc: { ...st.loc }, station: null, tides: [], wtemp: null, uv: null, err: null };
+  try {
+    const list = await tideStations();
+    let best = null, bd = 60;
+    for (const [id, name, lat, lon] of list) { const d = distMi(st.loc, { lat, lon }); if (d < bd) { bd = d; best = { id, name, lat, lon, distMi: d }; } }
+    b.station = best;
+    if (best) {
+      const [pj, wj] = await Promise.all([
+        fetchT(COOPS + '/api/prod/datagetter?product=predictions&datum=MLLW&station=' + best.id + '&time_zone=lst_ldt&units=english&interval=hilo&format=json&begin_date=' + coopsDate(Date.now()) + '&range=48', {}, 15000).then(r => r.json()).catch(() => ({})),
+        fetchT(COOPS + '/api/prod/datagetter?product=water_temperature&station=' + best.id + '&date=latest&units=english&time_zone=lst_ldt&format=json', {}, 15000).then(r => r.json()).catch(() => ({})),
+      ]);
+      b.tides = (pj.predictions || []).map(p => ({ t: Date.parse(p.t.replace(' ', 'T')), type: p.type, ft: +p.v }));
+      if (wj.data && wj.data[0] && wj.data[0].v) b.wtemp = { f: +wj.data[0].v, at: wj.data[0].t };
+    }
+  } catch (e) { b.err = e.message; }
+  try {
+    const r = await fetchT('https://api.open-meteo.com/v1/forecast?latitude=' + st.loc.lat.toFixed(3) + '&longitude=' + st.loc.lon.toFixed(3) + '&hourly=uv_index&daily=uv_index_max&forecast_days=2&timezone=auto', {}, 15000);
+    const j = await r.json(); b.uv = { hourly: j.hourly.time.map((t, i) => ({ t: Date.parse(t), v: j.hourly.uv_index[i] })), max: j.daily.uv_index_max, days: j.daily.time };
+  } catch (e) {}
+  st.beach = b; return b;
+}
+const uvWord = v => v == null ? '' : v < 3 ? 'low' : v < 6 ? 'moderate' : v < 8 ? 'high' : v < 11 ? 'very high' : 'extreme';
+function tidesForDay(dateStr) { return ((st.beach && st.beach.tides) || []).filter(x => localDate(x.t) === dateStr); }
+function nextTides(now) { return ((st.beach && st.beach.tides) || []).filter(x => x.t > now).slice(0, 4); }
+function beachAlerts() { return st.alerts.filter(a => BEACH_EVENTS.test(a.event)); }
+function ripRisk() { const a = st.alerts.map(x => x.event); if (a.some(e => /Rip Current Statement/.test(e))) return 'high'; if (a.some(e => /High Surf|Beach Hazards/.test(e))) return 'elevated'; return null; }
+
+/* ------------------------------ snow on the ground: SNOTEL + model ------------------- */
+const AWDB = 'https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1';
+async function snotelStations() {
+  try { const c = JSON.parse(localStorage.getItem('campRadar.snotel') || 'null'); if (c && Date.now() - c.at < 90 * 864e5 && c.list.length) return c.list; } catch (e) {}
+  const j = await (await fetchT(AWDB + '/stations?networkCds=SNTL&activeOnly=true', {}, 30000)).json();
+  const list = (j || []).filter(x => /:SNTL$/.test(x.stationTriplet)).map(x => [x.stationTriplet, x.name, +x.latitude, +x.longitude, Math.round(+x.elevation || 0)]);
+  try { localStorage.setItem('campRadar.snotel', JSON.stringify({ at: Date.now(), list })); } catch (e) {}
+  return list;
+}
+async function refreshSnow(force) {
+  if (!st.loc) return null;
+  if (!force && st.snow && Date.now() - st.snow.at < 60 * 60000 && distMi(st.snow.loc, st.loc) < 2) return st.snow;
+  const o = { at: Date.now(), loc: { ...st.loc }, model: null, site: null, err: null };
+  try {   // modeled depth at the exact spot, now and 24 h ago
+    const j = await (await fetchT('https://api.open-meteo.com/v1/forecast?latitude=' + st.loc.lat.toFixed(3) + '&longitude=' + st.loc.lon.toFixed(3) + '&current=snow_depth&hourly=snow_depth&past_days=1&forecast_days=2&timezone=auto', {}, 15000)).json();
+    const h = j.hourly, nowIdx = h.time.findIndex(t => Date.parse(t) > Date.now()) - 1;
+    const inch = m => m == null ? null : m * 39.37;
+    o.model = { depthIn: inch(j.current.snow_depth), change24In: nowIdx >= 24 && h.snow_depth[nowIdx] != null && h.snow_depth[nowIdx - 24] != null ? inch(h.snow_depth[nowIdx] - h.snow_depth[nowIdx - 24]) : null,
+      tomorrowIn: h.snow_depth[Math.min(h.time.length - 1, nowIdx + 24)] != null ? inch(h.snow_depth[Math.min(h.time.length - 1, nowIdx + 24)]) : null };
+  } catch (e) { o.err = e.message; }
+  try {   // nearest SNOTEL site within 40 mi: measured depth and water content, last 4 days
+    const list = await snotelStations();
+    let best = null, bd = 40;
+    for (const [t, name, lat, lon, el] of list) { const d = distMi(st.loc, { lat, lon }); if (d < bd) { bd = d; best = { triplet: t, name, lat, lon, elevFt: el, distMi: d }; } }
+    if (best) {
+      const end = new Date(), begin = new Date(Date.now() - 4 * 864e5);
+      const j = await (await fetchT(AWDB + '/data?stationTriplets=' + encodeURIComponent(best.triplet) + '&elements=SNWD,WTEQ&duration=DAILY&beginDate=' + begin.toISOString().slice(0, 10) + '&endDate=' + end.toISOString().slice(0, 10), {}, 15000)).json();
+      const el = c => (((j[0] || {}).data || []).find(d => d.stationElement.elementCode === c) || {}).values || [];
+      const snwd = el('SNWD').filter(v => v.value != null), wteq = el('WTEQ').filter(v => v.value != null);
+      if (snwd.length) { best.depthIn = snwd[snwd.length - 1].value; best.asOf = snwd[snwd.length - 1].date; best.change24In = snwd.length >= 2 ? snwd[snwd.length - 1].value - snwd[snwd.length - 2].value : null; best.change72In = snwd.length >= 4 ? snwd[snwd.length - 1].value - snwd[0].value : null; }
+      if (wteq.length) best.sweIn = wteq[wteq.length - 1].value;
+      o.site = best;
+    }
+  } catch (e) { o.err = (o.err ? o.err + '; ' : '') + e.message; }
+  st.snow = o; return o;
+}
+const inchWord = v => v == null ? '—' : v < 1 ? (v < 0.3 ? 'a trace' : 'under an inch') : Math.round(v) + (Math.round(v) === 1 ? ' inch' : ' inches');
+const snowy = () => S.activity === 'skiing' || (st.wx.hourly0 && st.wx.hourly0.temperature <= 40);
 
 /* ------------------------------ briefing + speech ------------------- */
 const speech = { ok: 'speechSynthesis' in window, voices: [], speaking: false };
@@ -1772,7 +1919,8 @@ function hourStats(hs) {
   return { from: sayTime(hs[0].t), to: sayTime(hs[hs.length - 1].t + 3600e3), maxPop: Math.max(...hs.map(h => h.pop)), rainFrom: rainy.length ? sayTime(rainy[0].t) : null, rainTo: rainy.length ? sayTime(rainy[rainy.length - 1].t + 3600e3) : null, allRain: rainy.length === hs.length,
     thunderFrom: thunder.length ? sayTime(thunder[0].t) : null, thunderTo: thunder.length ? sayTime(thunder[thunder.length - 1].t + 3600e3) : null, maxThunder: Math.max(0, ...hs.map(h => h.thunder || 0)),
     hi: Math.max(...hs.map(h => h.temp)), lo: Math.min(...hs.map(h => h.temp)), feelsHi: Math.max(...hs.map(h => h.feels)), feelsLo: Math.min(...hs.map(h => h.feels)),
-    topGust: Math.max(gust.wind, gust.gust || 0), gustAt: sayTime(gust.t), windDir: hs[0].dir, windDirLater: hs[Math.min(hs.length - 1, 5)].dir, windNow: hs[0].wind, sky: hs[Math.floor(hs.length / 2)].text };
+    topGust: Math.max(gust.wind, gust.gust || 0), gustAt: sayTime(gust.t), windDir: hs[0].dir, windDirLater: hs[Math.min(hs.length - 1, 5)].dir, windNow: hs[0].wind, sky: hs[Math.floor(hs.length / 2)].text,
+    snowIn: +hs.reduce((a, h) => a + (h.snow || 0), 0).toFixed(1), snowFrom: (hs.find(h => h.snow >= 0.05) || {}).t ? sayTime(hs.find(h => h.snow >= 0.05).t) : null, visMin: (() => { const v = hs.map(h => h.vis).filter(x => x != null); return v.length ? +Math.min(...v).toFixed(1) : null; })(), waveMax: (() => { const v = hs.map(h => h.wave).filter(x => x != null); return v.length ? Math.round(Math.max(...v)) : null; })() };
 }
 function briefingFacts() {
   const now = Date.now(), today = localDate(now), tomorrow = localDate(now + 864e5), hourNow = new Date().getHours();
@@ -1805,6 +1953,12 @@ function briefingFacts() {
     sun: sun && sun.rise ? { rise: sayTime(sun.rise), set: sayTime(sun.set), dusk: sayTime(sun.dusk), minsToSunset: Math.round((sun.set - now) / 60000) } : null,
     moon: moonPhase(now),
     pressure: st.wx.pressure ? { inHg: +st.wx.pressure.inHg.toFixed(2), word: st.wx.pressure.word, fast: st.wx.pressure.fast } : null,
+    precipType: precipType(), visibilityMi: st.wx.visMi != null ? +st.wx.visMi.toFixed(1) : null,
+    beach: S.activity === 'beach' && st.beach ? { station: st.beach.station && st.beach.station.name, tides: nextTides(now).map(x => ({ type: x.type === 'H' ? 'high' : 'low', at: sayTime(x.t), ft: x.ft })), waterF: st.beach.wtemp && Math.round(st.beach.wtemp.f),
+      uvMaxToday: st.beach.uv && st.beach.uv.max[0] != null ? Math.round(st.beach.uv.max[0]) : null, uvMaxTomorrow: st.beach.uv && st.beach.uv.max[1] != null ? Math.round(st.beach.uv.max[1]) : null, rip: ripRisk(), alerts: beachAlerts().map(a => a.event) } : null,
+    tropical: st.alerts.filter(a => TROPICAL_EVENTS.test(a.event)).map(a => ({ event: a.event, headline: a.headline })),
+    snowGround: st.snow ? { site: st.snow.site && st.snow.site.depthIn != null ? { name: st.snow.site.name, distMi: Math.round(st.snow.site.distMi), elevFt: st.snow.site.elevFt, depthIn: st.snow.site.depthIn, change24In: st.snow.site.change24In, change72In: st.snow.site.change72In, sweIn: st.snow.site.sweIn } : null,
+      modelDepthIn: st.snow.model && st.snow.model.depthIn != null ? +st.snow.model.depthIn.toFixed(1) : null, modelChange24In: st.snow.model && st.snow.model.change24In != null ? +st.snow.model.change24In.toFixed(1) : null } : null,
   };
 }
 
@@ -1824,6 +1978,34 @@ function leadSentences(f) {
   else out.push('No rain is heading your way right now.');
   if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Lightning is within ten miles, nearest about ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and getting closer' : ''}. Get to shelter.` : `Lightning is ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and approaching' : f.lightning.trend === 'receding' ? ' and moving away' : ''}.`);
   for (const h of f.hazards) out.push(h + '.');
+  for (const t of f.tropical.filter(t => !/Warning/.test(t.event))) out.push(`A ${t.event} is in effect for this area.`);
+  if (f.visibilityMi != null && f.visibilityMi <= 0.5) out.push(`Visibility is down to ${f.visibilityMi <= 0.3 ? 'a quarter mile or less' : f.visibilityMi + ' miles'}${f.precipType !== 'rain' ? ' in ' + f.precipType : ''}.`);
+  return out.map(precipify);
+}
+function beachBody(f) {
+  const s = f.nextStats, b = f.beach, out = [];
+  if (b) {
+    if (b.rip === 'high') out.push('Rip current risk is high today; swim near a lifeguard and stay out if in doubt.');
+    else if (b.rip === 'elevated') out.push(`Coastal advisories are up: ${b.alerts.join(', ')}.`);
+    if (b.tides.length) out.push('Tides: ' + b.tides.slice(0, 3).map(t => t.type + ' at ' + t.at).join(', ') + (b.station ? ', at ' + b.station : '') + '.');
+    if (b.waterF != null) out.push(`Water temperature is ${b.waterF} degrees.`);
+    if (b.uvMaxToday != null) out.push(`UV peaks at ${b.uvMaxToday}, ${uvWord(b.uvMaxToday)}${b.uvMaxToday >= 6 ? '; cover up and reapply sunscreen' : ''}.`);
+  } else out.push('No tide station is within sixty miles of this spot.');
+  if (s) { out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s)); if (s.waveMax != null) out.push(`Waves around ${s.waveMax} feet.`); out.push(`Wind ${s.windNow} from the ${s.windDir || 'variable'}${s.topGust >= 20 ? ', gusting to ' + s.topGust : ''}; temperatures ${deg(s.lo)} to ${deg(s.hi)}.`); }
+  if (f.sun) out.push(`Sunset is at ${f.sun.set}.`);
+  return out;
+}
+function skiingBody(f) {
+  const s = f.nextStats, out = [], g = f.snowGround;
+  if (g && g.site) out.push(`Snow on the ground: ${inchWord(g.site.depthIn)} at the ${g.site.name} snow site, ${g.site.distMi} miles away at ${g.site.elevFt.toLocaleString()} feet${g.site.change24In > 0 ? ', ' + inchWord(g.site.change24In) + ' of that new in the last day' : g.site.change72In > 0 ? ', ' + inchWord(g.site.change72In) + ' new over three days' : ', nothing new recently'}.`);
+  else if (g && g.modelDepthIn != null) out.push(`Snow on the ground at your spot is about ${inchWord(g.modelDepthIn)}, by model estimate${g.modelChange24In > 0.3 ? ', up ' + inchWord(g.modelChange24In) + ' in the last day' : ''}.`);
+  if (!s) return out;
+  out.push(s.snowIn >= 0.5 ? `About ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} inches of new snow${s.snowFrom ? ', starting around ' + s.snowFrom : ''}.` : s.maxPop >= 30 ? `A ${s.maxPop} percent chance of ${f.precipType === 'rain' ? 'rain, not snow' : 'light snow'}.` : 'No new snow in the next few hours.');
+  out.push(`Wind chill gets down to ${deg(s.feelsLo)}${s.feelsLo <= 0 ? '; frostbite is possible on exposed skin within half an hour' : s.feelsLo <= 20 ? '; cover exposed skin' : ''}.`);
+  out.push(s.topGust >= 40 ? `Gusts to ${s.topGust} around ${s.gustAt}; expect wind holds on exposed lifts.` : s.topGust >= 25 ? `Gusts to ${s.topGust} around ${s.gustAt}; upper lifts may slow or hold.` : `Winds are light, so the lifts should run normally.`);
+  if (s.visMin != null && s.visMin < 1) out.push(`Visibility drops to ${s.visMin <= 0.3 ? 'a quarter mile or less' : s.visMin + ' miles'} at times; flat light and whiteout conditions are possible.`);
+  out.push(`Temperatures ${deg(s.lo)} to ${deg(s.hi)}.`);
+  if (f.sun) out.push(`Sunset is at ${f.sun.set}.`);
   return out;
 }
 // `when` is the period in words; `subject` is how to refer to it at the start of a sentence (e.g. "The next few hours look", "It looks")
@@ -1831,6 +2013,7 @@ const rainSentence = (s, when, subject) => !s ? '' : s.rainFrom ? `Rain ${s.allR
 const thunderSentence = s => s && s.thunderFrom ? `Thunderstorms are possible around ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' to ' + s.thunderTo : ''}.` : '';
 function campingBody(f) {
   const s = f.nextStats, out = [];
+  if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`There's ${inchWord(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)} of snow on the ground.`);
   if (!s) return out;
   out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
   if (s.topGust >= 25) out.push(`Wind picks up to about ${s.topGust} around ${s.gustAt}; stake the tarps and keep the fire small.`);
@@ -1860,6 +2043,7 @@ function rvBody(f) {
 }
 function huntingBody(f) {
   const s = f.nextStats, out = [];
+  if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`Snow on the ground: ${inchWord(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)}; good for tracking.`);
   if (!s) return out;
   out.push(`Wind is from the ${s.windDir || 'variable'} at ${s.windNow}${s.windDirLater && s.windDirLater !== s.windDir ? ', shifting to the ' + s.windDirLater + ' later' : ', holding steady'}${s.topGust >= 20 ? ', gusting to ' + s.topGust : ''}.`);
   if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}${f.pressure.word === 'falling' ? '; a front is likely on the way' : f.pressure.word === 'rising' ? '; conditions are settling' : ''}.`);
@@ -1888,6 +2072,8 @@ function outlookSentences(f) {
     if (f.activity === 'rv' && s) out.push(awningSentence(s, 'this afternoon and evening'));
     if (f.activity === 'hunting' && s) out.push(`Evening wind from the ${s.windDirLater || s.windDir || 'variable'}${o.sun ? ', last light about ' + o.sun.dusk : ''}.`);
     if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} at the warmest${o.sun ? ', sunset ' + o.sun.set : ''}.`);
+    if (f.activity === 'skiing' && s) out.push(s.snowIn >= 0.5 ? `About ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} more inches by evening.` : 'No more snow expected today.', s.feelsLo <= 20 ? `Wind chill near ${deg(s.feelsLo)} by evening.` : '');
+    if (f.activity === 'beach' && f.beach) out.push(f.beach.tides.filter(t => true).slice(0, 2).map(t => t.type + ' tide at ' + t.at).join(', ') + '.');
     if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Overnight low around ${deg(o.night.lo)}${o.night.text ? ', ' + o.night.text.toLowerCase() : ''}.`);
     else if (o.night && o.night.lo != null && f.activity !== 'camping') out.push(`Low tonight around ${deg(o.night.lo)}.`);
   } else {
@@ -1898,14 +2084,18 @@ function outlookSentences(f) {
     if (f.activity === 'hunting') out.push(`${s && s.windDir ? 'Morning wind from the ' + s.windDir + (s.windDirLater && s.windDirLater !== s.windDir ? ', going ' + s.windDirLater + ' by midday' : '') + '. ' : ''}${o.sun ? 'First light about ' + o.sun.dawn + ', sunrise ' + o.sun.rise + '.' : ''}`);
     if (f.activity === 'trail' && s) out.push(s.feelsHi >= 90 ? `It'll feel like ${deg(s.feelsHi)} by afternoon; start early.` : s.feelsLo <= 25 ? `Cold start, wind chill near ${deg(s.feelsLo)}.` : `Temperatures ${deg(s.lo)} to ${deg(s.hi)}${o.sun ? ', sunset ' + o.sun.set : ''}.`);
     if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Tomorrow night around ${deg(o.night.lo)}.`);
+    if (f.activity === 'skiing' && s) out.push(s.snowIn >= 0.5 ? `About ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} inches of new snow tomorrow${s.snowFrom ? ', starting around ' + s.snowFrom : ''}.` : 'No new snow tomorrow.', s.topGust >= 25 ? `Gusts to ${s.topGust}; watch for lift holds.` : '', `Wind chill down to ${deg(s.feelsLo)}.`);
+    if (f.activity === 'beach' && f.beach) out.push(f.beach.uvMaxTomorrow != null ? `UV peaks at ${f.beach.uvMaxTomorrow} tomorrow.` : '', s && s.waveMax != null ? `Waves around ${s.waveMax} feet.` : '');
   }
   return out;
 }
 function composeBriefing(f) {
-  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody }[f.activity] || campingBody;
-  return [...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1');
+  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody, beach: beachBody, skiing: skiingBody }[f.activity] || campingBody;
+  return precipify([...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
 }
 async function getBriefing() {
+  if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
+  if (snowy()) { try { await refreshSnow(); } catch (e) {} }
   const facts = briefingFacts();
   let text = composeBriefing(facts), source = 'device';
   if (BE()) {
@@ -2027,7 +2217,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
-    ['activity', 'Activity (shapes the day forecast view)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling']]],
+    ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
   ],
@@ -2057,7 +2247,7 @@ function openSettings(tab) {
       '<div class="row"><label>Chime volume</label><input type="range" min="0" max="1" step="0.05" data-slider="volume" value="' + S.volume + '">' +
       '<div class="btns"><button data-act="rain">Test rain chime</button><button data-act="warn">Test warning alarm</button></div></div>' +
       '<div class="row"><label>Alerts on this device (needs the backend)</label><div id="pushRow"></div></div>' +
-      '<div class="row" style="color:var(--muted);font-size:14px">Tornado, severe thunderstorm, flash flood and flood warnings always sound, even when snoozed. Lightning within 10 miles, a wildfire within 10 miles and major river flooding nearby chime once each.</div>') +
+      '<div class="row" style="color:var(--muted);font-size:14px">Tornado, severe thunderstorm, flash flood, flood, hurricane, tropical storm, storm surge, extreme wind, tsunami, blizzard, ice storm, winter storm, extreme cold and avalanche warnings always sound, even when snoozed. A whiteout (visibility under a quarter mile in snow) chimes once. Lightning within 10 miles, a wildfire within 10 miles and major river flooding nearby chime once each.</div>') +
     pane('brief', '<div class="row"><div class="btns"><button data-act="brief-now">Play a briefing now</button></div></div>' +
       '<div class="row">' +
       '<div class="toggle"><div><div class="tl">Spoken alerts</div><div class="td">Say what the chime is for: rain arriving, lightning, warnings, fire or flooding nearby</div></div><button class="sw ' + (S.brief.speakAlerts ? 'on' : '') + '" data-brief="speakAlerts"></button></div>' +
@@ -2084,7 +2274,7 @@ function openSettings(tab) {
       '<input id="beUrl" type="url" placeholder="https://radar.yourdomain.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>') +
     pane('about', '<div class="diag" id="diag" style="border-top:0;margin-top:0;padding-top:4px"></div>' +
-      '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite), NIFC (wildfires), Open-Meteo (wind arrows), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
+      '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite, tropical cyclones, tides and water temperature), NIFC (wildfires), USDA SNOTEL (snow depth), Open-Meteo (wind arrows, UV, modeled snow depth), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
     '<button class="done" data-act="close">Done</button>';
   renderPushRow();
   renderDiag();
@@ -2100,7 +2290,7 @@ function renderDiag() {
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
-    'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
+    'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + ' · precip type ' + precipType() + (st.wx.visMi != null ? ' · visibility ' + st.wx.visMi.toFixed(1) + ' mi' : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
     'NWS alerts: ' + (st.alertsErr ? 'ERROR — ' + st.alertsErr : ago(st.alertsAt) + ', ' + st.alerts.length + ' active'),
     'Backend: ' + (BE() ? BE() + (st.backendOk === false ? ' — unreachable' : st.backendOk ? ' — OK' : '') : 'none (standalone)'),
     'Lightning: ' + (!BE() ? 'needs backend' : st.lightningErr ? 'ERROR — ' + st.lightningErr : st.lightning ? (st.lightning.within30 + ' strikes within 30 mi · ' + ago(st.lightningAt) + (st.lightning.dataFresh ? '' : ' · feed stale')) : '—'),

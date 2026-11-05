@@ -24,7 +24,7 @@ public sealed class BriefingWriter
     }
 
     private const string System = """
-        You write short spoken weather briefings for someone who is outdoors: camping, in an RV, hunting, or on a trail.
+        You write short spoken weather briefings for someone who is outdoors: camping, in an RV, hunting, on a trail, at the beach, or skiing.
         You are given facts as JSON (current conditions, rain-arrival prediction, lightning, NWS alerts, nearby hazards,
         the next hours, sun times, pressure) and the person's activity. Write 80 to 140 words of plain spoken English,
         no markdown, no lists, no headings, numbers rounded, times as spoken ("about four thirty").
@@ -40,7 +40,7 @@ public sealed class BriefingWriter
         Make each activity's briefing sound different: an RV briefing is about wind, gusts, hail and the awning; a hunting
         briefing about wind direction and shifts, pressure, legal light and the moon; a trail briefing about rain and thunder
         timing, feels-like temperature and daylight; a camp briefing about rain timing, the overnight low, wind and lightning.
-        Never contradict or soften an NWS warning. Never invent facts that are not in the JSON. End with one practical sentence.
+        Never contradict or soften an NWS warning (tornado, severe thunderstorm, flood, hurricane, tropical storm, storm surge, blizzard, ice storm, winter storm, extreme cold, avalanche or tsunami warnings always come first). Never invent facts that are not in the JSON. End with one practical sentence.
         Target 110 to 170 words in total.
         """;
 

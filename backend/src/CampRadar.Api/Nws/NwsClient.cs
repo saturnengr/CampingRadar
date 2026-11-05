@@ -8,7 +8,12 @@ public sealed record NwsAlert(string Id, string Event, string? Headline, string?
 /// <summary>Active NWS alerts for a point, cached briefly per rounded location.</summary>
 public sealed class NwsClient
 {
-    public static readonly string[] Critical = { "Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning", "Flood Warning" };
+    public static readonly string[] Critical =
+    {
+        "Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning", "Flood Warning",
+        "Hurricane Warning", "Tropical Storm Warning", "Storm Surge Warning", "Extreme Wind Warning", "Tsunami Warning",
+        "Blizzard Warning", "Ice Storm Warning", "Winter Storm Warning", "Extreme Cold Warning", "Avalanche Warning"
+    };
     private readonly HttpClient _http;
     private readonly ILogger<NwsClient> _log;
     private readonly ConcurrentDictionary<string, (DateTimeOffset At, List<NwsAlert> Alerts)> _cache = new();
