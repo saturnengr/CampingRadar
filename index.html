@@ -245,6 +245,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <button id="btnPlay" title="Play/pause radar loop"></button>
     <button id="btnPick" title="Set location by tapping map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 22s7-6.6 7-12a7 7 0 0 0-14 0c0 5.4 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg></button>
     <button id="btnNight" title="Day / night"></button>
+    <button id="btnBrief" title="Spoken briefing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
     <button id="btnLayers" title="Map layers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8.5 12 14l10-5.5z"/><path d="m2 13 10 5.5L22 13"/><path d="m2 17.5 10 5.5 10-5.5"/></svg></button>
     <button id="btnSettings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </div>
@@ -594,10 +595,12 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false } };
+  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false },
+  brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
+S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {});
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
 const $ = s => document.querySelector(s);
@@ -1065,7 +1068,7 @@ function renderAlerts() {
     bar.className = 'minor'; $('#warnAck').hidden = true; bar.hidden = false;
   } else bar.hidden = true;
   // alarm repeats every 20 s until acknowledged; never snoozed
-  if (unacked.length && !alarmTimer) { playWarning(); alarmTimer = setInterval(playWarning, 20000); }
+  if (unacked.length && !alarmTimer) { playWarning(); speakAlert(unacked.map(a => a.event).join('. ') + '. Take shelter now.'); alarmTimer = setInterval(playWarning, 20000); }
   if (!unacked.length && alarmTimer) { clearInterval(alarmTimer); alarmTimer = null; }
   // forget acks for alerts that have ended
   const ids = new Set(st.alerts.map(a => a.id));
@@ -1213,7 +1216,7 @@ function overlayLightning(out) {
 // Lightning within 10 mi chimes even during a rain snooze (once per episode, re-armed after 30 quiet minutes).
 function handleLightningEvent(lvl) {
   const e = st.ltEvt;
-  if (lvl === 'alarm') { if (!e.active && Date.now() - e.sentMs > 30 * 60000) { e.active = true; e.sentMs = Date.now(); playChime('imminent'); } }
+  if (lvl === 'alarm') { if (!e.active && Date.now() - e.sentMs > 30 * 60000) { e.active = true; e.sentMs = Date.now(); playChime('imminent'); speakAlert('Lightning within ten miles. Get to shelter.'); } }
   else e.active = false;
 }
 
@@ -1424,8 +1427,8 @@ function bearingTo(a, b) { const r = Math.PI / 180, dLon = (b.lon - a.lon) * r; 
 function handleHazardEvents() {
   const n = st.hz.nearest || {}, e = st.hzEvt;
   const fireClose = n.fire && n.fire.d <= 10, floodClose = (n.gauge && n.gauge.d <= 10 && n.gauge.rank >= 3) || (n.floodAlert && n.floodAlert.warning && n.floodAlert.bounds.contains(L.latLng(st.loc.lat, st.loc.lon)));
-  if (fireClose && !e.fire) { e.fire = true; playChime('imminent'); } if (!fireClose) e.fire = false;
-  if (floodClose && !e.flood) { e.flood = true; playChime('imminent'); } if (!floodClose) e.flood = false;
+  if (fireClose && !e.fire) { e.fire = true; playChime('imminent'); speakAlert('Wildfire within ten miles.'); } if (!fireClose) e.fire = false;
+  if (floodClose && !e.flood) { e.flood = true; playChime('imminent'); speakAlert('Flooding nearby.'); } if (!floodClose) e.flood = false;
 }
 
 // Wind arrows: a grid of points across the view from Open-Meteo (current conditions, mph)
@@ -1520,8 +1523,8 @@ function handleRainEvent(level) {
   const close = level === 'imminent' || level === 'atyou';
   if (threat) {
     e.clear = 0;
-    if (!e.active) { e.active = true; e.imminentDone = close; chimeIfAllowed(close ? 'imminent' : 'rain'); }
-    else if (close && !e.imminentDone) { e.imminentDone = true; chimeIfAllowed('imminent'); }
+    if (!e.active) { e.active = true; e.imminentDone = close; if (Date.now() >= S.snoozeUntil) { chimeIfAllowed(close ? 'imminent' : 'rain'); speakAlert($('#statusMain').textContent); } }
+    else if (close && !e.imminentDone) { e.imminentDone = true; if (Date.now() >= S.snoozeUntil) { chimeIfAllowed('imminent'); speakAlert($('#statusMain').textContent); } }
   } else if (e.active && ++e.clear >= 2) { e.active = false; e.imminentDone = false; }
 }
 
@@ -1642,14 +1645,17 @@ function heatIndexF(t, rh) { if (t < 80 || rh == null) return t; const hi = -42.
 function windChillF(t, v) { if (t > 50 || v < 3) return t; return Math.round(35.74 + 0.6215 * t - 35.75 * Math.pow(v, 0.16) + 0.4275 * t * Math.pow(v, 0.16)); }
 const hourLabel = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric' }).replace(' ', '').toLowerCase();
 
-async function openDay(dateStr) {
-  const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; openModal();
-  const hours = st.wx.hourly.filter(p => p.startTime.slice(0, 10) === dateStr).map(p => {
+function dayHours(dateStr) {
+  return st.wx.hourly.filter(p => p.startTime.slice(0, 10) === dateStr).map(p => {
     const t = Date.parse(p.startTime), g = st.wx.grid || {};
     const temp = p.temperature, rh = rhOf(p), wind = windMph(p), gust = g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null;
     const feels = g.feels && g.feels[t] != null ? Math.round(g.feels[t]) : (temp >= 80 ? heatIndexF(temp, rh) : windChillF(temp, wind));
     return { t, temp, feels, rh, wind, gust, dir: p.windDirection, pop: popOf(p), thunder: g.thunder ? Math.round(g.thunder[t] || 0) : null, text: p.shortForecast, day: p.isDaytime };
   });
+}
+async function openDay(dateStr) {
+  const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; openModal();
+  const hours = dayHours(dateStr);
   const dayP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && p.isDaytime), nightP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && !p.isDaytime);
   const main = dayP || nightP;
   if (!main && !hours.length) { sh.innerHTML = '<h2>No forecast for that day yet</h2><button class="done" data-act="close">Close</button>'; return; }
@@ -1708,6 +1714,125 @@ async function openDay(dateStr) {
   sh.querySelectorAll('[data-actv]').forEach(b => b.addEventListener('click', () => { S.activity = b.dataset.actv; save(); openDay(dateStr); }));
 }
 
+/* ------------------------------ briefing + speech ------------------- */
+const speech = { ok: 'speechSynthesis' in window, voices: [], speaking: false };
+function loadVoices() { if (!speech.ok) return; speech.voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang)); }
+if (speech.ok) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+function pickVoice() {
+  if (!speech.voices.length) loadVoices();
+  const want = S.brief.voice && speech.voices.find(v => v.name === S.brief.voice);
+  return want || speech.voices.find(v => /en-US/i.test(v.lang) && /Google|Natural|Samantha|Premium/i.test(v.name)) || speech.voices.find(v => /en-US/i.test(v.lang)) || speech.voices[0] || null;
+}
+function speak(text, opts) {
+  opts = opts || {};
+  if (!speech.ok || !S.sound) return false;
+  if (!opts.queue) speechSynthesis.cancel();
+  const parts = String(text).replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+  const v = pickVoice();
+  parts.forEach((part, i) => {
+    const u = new SpeechSynthesisUtterance(part.trim()); if (v) u.voice = v; u.rate = S.brief.rate || 1; u.volume = Math.max(0.05, S.volume);
+    u.onstart = () => { speech.speaking = true; updateSpeakBtns(); }; u.onend = u.onerror = () => { if (i === parts.length - 1) { speech.speaking = false; updateSpeakBtns(); } };
+    speechSynthesis.speak(u);
+  });
+  return true;
+}
+function stopSpeaking() { if (speech.ok) speechSynthesis.cancel(); speech.speaking = false; updateSpeakBtns(); }
+function updateSpeakBtns() { document.querySelectorAll('[data-speak]').forEach(b => { b.textContent = speech.speaking ? '■ Stop' : '▶ Listen'; }); }
+const sayTime = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+
+// Everything the briefing is built from, as plain data (also what the backend's writer receives)
+function briefingFacts() {
+  const now = Date.now(), today = new Date().toISOString().slice(0, 10);
+  const hours = dayHours(new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)).filter(h => h.t + 3600e3 > now);
+  const next = hours.slice(0, 12);
+  const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) : null;
+  const status = computeStatus();
+  const nc = st.nc && st.nc.res, hit = nc && nc.hit;
+  return {
+    place: ($('#nowPlace').textContent || '').replace(/^Near /, ''), activity: S.activity, time: sayTime(now),
+    now: { temp: $('#nowTemp').textContent, cond: $('#nowCond').textContent, wind: $('#nowWind').textContent },
+    status: { level: status.level, main: status.main, sub: status.sub },
+    rain: hit ? { etaMin: Math.max(0, Math.round(hit.etaMin - radarLag())), endMin: Math.round(hit.endMin), intensity: intensityWord(hit.maxDbz), from: compassLong(hit.fromBearing), trend: hit.trend && hit.trend.word, fizzles: !!hit.fizzles } : null,
+    passing: nc && nc.passing && !hit ? { distMi: Math.round(nc.passing.distMi), dir: compass(nc.passing.bearing), passDir: compassLong(nc.passing.passBearing) } : null,
+    motion: st.nc && st.nc.motion && st.nc.motion.ok ? { dir: compass(st.nc.motion.headingDeg), mph: Math.round(st.nc.motion.speedMph) } : null,
+    lightning: st.lightning ? { within10: st.lightning.within10, within30: st.lightning.within30, nearestMi: st.lightning.nearestMi && Math.round(st.lightning.nearestMi), dir: st.lightning.nearestBearing != null ? compass(st.lightning.nearestBearing) : null, trend: st.lightning.trend } : null,
+    alerts: st.alerts.map(a => ({ event: a.event, ends: a.ends ? sayTime(Date.parse(a.ends)) : null, critical: CRITICAL.includes(a.event) })),
+    hazards: hazardLines().map(l => l.replace(/^[^\w]+/, '')),
+    next: next.map(h => ({ at: sayTime(h.t), temp: h.temp, feels: h.feels, pop: h.pop, thunder: h.thunder, wind: h.wind, gust: h.gust, dir: h.dir, sky: h.text })),
+    today: (() => { const d = st.wx.daily.find(p => p.startTime.slice(0, 10) === today && p.isDaytime), n = st.wx.daily.find(p => p.startTime.slice(0, 10) === today && !p.isDaytime); return { day: d && { hi: d.temperature, text: d.shortForecast, detail: d.detailedForecast }, night: n && { lo: n.temperature, text: n.shortForecast } }; })(),
+    sun: sun && sun.rise ? { rise: sayTime(sun.rise), set: sayTime(sun.set), dusk: sayTime(sun.dusk), minsToSunset: Math.round((sun.set - now) / 60000) } : null,
+    pressure: st.wx.pressure ? { inHg: +st.wx.pressure.inHg.toFixed(2), word: st.wx.pressure.word, fast: st.wx.pressure.fast } : null,
+  };
+}
+// Plain-language briefing written on the device (the backend's language model, when available, replaces this text)
+function composeBriefing(f) {
+  const out = [], act = f.activity;
+  const hi = f.today.day && f.today.day.hi, lo = f.today.night && f.today.night.lo;
+  out.push(`Here's your ${act === 'rv' ? 'RV' : act === 'hunting' ? 'hunting' : act === 'trail' ? 'trail' : 'camp'} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
+  if (f.now.temp && f.now.temp !== '--°') out.push(`Right now it's ${f.now.temp.replace('°', ' degrees')}${f.now.cond ? ' and ' + f.now.cond.toLowerCase() : ''}${f.now.wind ? ', ' + f.now.wind.toLowerCase().replace('wind ', 'wind from the ') : ''}.`);
+  for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
+  if (f.rain) {
+    if (f.rain.fizzles) out.push(`There's rain to the ${f.rain.from}, but it's weakening and will probably fizzle before it gets here.`);
+    else if (f.rain.etaMin <= 1) out.push(`${f.rain.intensity} rain is on top of you now${f.rain.endMin < 115 ? ', likely easing in about ' + fmtDur(f.rain.endMin) : ''}.`);
+    else out.push(`${f.rain.intensity} rain${f.rain.trend === 'strengthening' ? ', and it\'s strengthening,' : f.rain.trend === 'weakening' ? ', though weakening,' : ''} is coming from the ${f.rain.from} and should reach you in about ${fmtDur(f.rain.etaMin)}.`);
+  } else if (f.passing) out.push(`Rain ${f.passing.distMi} miles to the ${f.passing.dir} is passing to the ${f.passing.passDir}; it should miss you.`);
+  else out.push('No rain is heading your way right now.');
+  if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Lightning is within ten miles, nearest about ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and getting closer' : ''}. Get to shelter.` : `Lightning is ${f.lightning.nearestMi} miles ${f.lightning.dir}${f.lightning.trend === 'approaching' ? ' and approaching' : f.lightning.trend === 'receding' ? ' and moving away' : ''}.`);
+  for (const h of f.hazards) out.push(h + '.');
+  // next hours by activity
+  const n = f.next; if (n.length) {
+    const rainy = n.filter(h => h.pop >= 40), thunder = n.filter(h => (h.thunder || 0) >= 20), gusty = n.filter(h => Math.max(h.wind, h.gust || 0) >= 20);
+    const temps = n.map(h => h.temp), feels = n.map(h => h.feels);
+    if (rainy.length) out.push(`Looking ahead, rain is most likely ${rainy.length === n.length ? 'all day' : 'around ' + rainy[0].at + (rainy.length > 1 ? ' through ' + rainy[rainy.length - 1].at : '')}, up to ${Math.max(...n.map(h => h.pop))} percent.`);
+    else out.push(`The next ${n.length} hours look ${Math.max(...n.map(h => h.pop)) >= 20 ? 'mostly dry' : 'dry'}.`);
+    if (thunder.length) out.push(`Thunderstorms are possible around ${thunder[0].at}${thunder.length > 1 ? ' to ' + thunder[thunder.length - 1].at : ''}.`);
+    if (act === 'rv') { const g = n.reduce((b, h) => Math.max(h.wind, h.gust || 0) > Math.max(b.wind, b.gust || 0) ? h : b); const top = Math.max(g.wind, g.gust || 0); out.push(top >= 30 ? `Wind is the story: gusts to ${top} around ${g.at}. Bring the awning in and expect a rough drive if you're moving.` : top >= 20 ? `Gusts reach about ${top} around ${g.at}; keep an eye on the awning.` : `Winds stay light, under 20.`); }
+    else if (gusty.length) out.push(`Gusts over 20 around ${gusty[0].at}${gusty.length > 1 ? ' through ' + gusty[gusty.length - 1].at : ''}.`);
+    if (act === 'hunting') { const w = n[0]; out.push(`Wind is from the ${w.dir || 'variable'} at ${w.wind}${n.length > 4 && n[4].dir && n[4].dir !== w.dir ? ', shifting to the ' + n[4].dir + ' by ' + n[4].at : ''}.`); if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}.`); }
+    if (act === 'trail') { const hot = Math.max(...feels), cold = Math.min(...feels); if (hot >= 90) out.push(`It'll feel like ${hot} at the peak; carry water and go early.`); else if (cold <= 25) out.push(`Wind chill gets down to ${cold}; cover up.`); else out.push(`Temperatures run ${Math.min(...temps)} to ${Math.max(...temps)}, comfortable for exertion.`); }
+    else if (hi != null || lo != null) out.push(`${hi != null ? 'High near ' + hi : ''}${hi != null && lo != null ? ', ' : ''}${lo != null ? 'low tonight around ' + lo : ''}.`);
+  }
+  if (f.sun) { if (act === 'hunting') out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}; legal light runs about half an hour either side.`); else if (f.sun.minsToSunset > 0 && f.sun.minsToSunset < 300) out.push(`Sunset is at ${f.sun.set}, ${fmtDur(f.sun.minsToSunset)} from now${act === 'trail' ? '; plan to be back by ' + f.sun.dusk : ''}.`); else out.push(`Sunrise ${f.sun.rise}, sunset ${f.sun.set}.`); }
+  return out.join(' ').replace(/\s+/g, ' ');
+}
+async function getBriefing() {
+  const facts = briefingFacts();
+  let text = composeBriefing(facts), source = 'device';
+  if (BE()) {
+    try {
+      const r = await fetchT(BE() + '/brief', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ facts, fallback: text }) }, 20000);
+      if (r.ok) { const j = await r.json(); if (j.text) { text = j.text; source = j.source || 'backend'; } }
+    } catch (e) {}
+  }
+  return { text, source, facts };
+}
+async function openBriefing(autoSpeak) {
+  const sh = $('#sheet');
+  sh.innerHTML = '<h2>Briefing</h2><div class="fctext" id="briefText" style="font-size:17px">Putting it together…</div>' +
+    '<div class="btns"><button data-speak="1">▶ Listen</button><button data-act="brief-refresh">Refresh</button><button data-act="brief-settings">Briefing settings</button></div>' +
+    '<div id="briefSrc" style="color:var(--muted);font-size:13px;margin-top:8px"></div><button class="done" data-act="close">Close</button>';
+  openModal();
+  const b = await getBriefing();
+  if (!$('#briefText')) return;
+  $('#briefText').textContent = b.text; st.lastBrief = b.text;
+  $('#briefSrc').textContent = b.source === 'device' ? 'Written on this device from NWS data' + (BE() ? ' (backend writer not available)' : '') : 'Written by the backend from NWS data';
+  if (autoSpeak) speak(b.text);
+  if (!speech.ok) $('#briefSrc').textContent += ' · this browser cannot speak';
+}
+$('#btnBrief').addEventListener('click', () => openBriefing(true));
+// Spoken alerts: short sentences when a chime fires
+function speakAlert(text) { if (S.brief.speakAlerts) setTimeout(() => speak(text, { queue: true }), 2500); }
+// Scheduled briefings
+let lastAutoBrief = { key: '' };
+function checkScheduledBriefing() {
+  const now = new Date(), hm = now.toTimeString().slice(0, 5), key = now.toDateString() + ' ' + hm;
+  const times = (S.brief.times || '').split(/[,\s]+/).filter(Boolean);
+  if (times.includes(hm) && lastAutoBrief.key !== key && st.wx.fcAt) { lastAutoBrief.key = key; getBriefing().then(b => { st.lastBrief = b.text; speak(b.text); }); }
+}
+setInterval(checkScheduledBriefing, 30000);
+let briefedOnWake = false;
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.brief.onWake && !briefedOnWake) { briefedOnWake = true; setTimeout(() => getBriefing().then(b => speak(b.text)), 4000); setTimeout(() => { briefedOnWake = false; }, 30 * 60000); } });
+
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
@@ -1724,7 +1849,7 @@ const SETTINGS = {
     ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ],
 };
-const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['layers', 'Map layers'], ['data', 'Data & backend'], ['about', 'Status']];
+const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['layers', 'Map layers'], ['data', 'Data & backend'], ['about', 'Status']];
 let settingsTab = 'general';
 const segRows = key => SETTINGS[key].map(([k, label, opts]) => '<div class="row"><label>' + label + '</label><div class="seg">' +
   opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div></div>').join('');
@@ -1742,6 +1867,15 @@ function openSettings(tab) {
       '<div class="btns"><button data-act="rain">Test rain chime</button><button data-act="warn">Test warning alarm</button></div></div>' +
       '<div class="row"><label>Alerts on this device (needs the backend)</label><div id="pushRow"></div></div>' +
       '<div class="row" style="color:var(--muted);font-size:14px">Tornado, severe thunderstorm, flash flood and flood warnings always sound, even when snoozed. Lightning within 10 miles, a wildfire within 10 miles and major river flooding nearby chime once each.</div>') +
+    pane('brief', '<div class="row"><div class="btns"><button data-act="brief-now">Play a briefing now</button></div></div>' +
+      '<div class="row">' +
+      '<div class="toggle"><div><div class="tl">Spoken alerts</div><div class="td">Say what the chime is for: rain arriving, lightning, warnings, fire or flooding nearby</div></div><button class="sw ' + (S.brief.speakAlerts ? 'on' : '') + '" data-brief="speakAlerts"></button></div>' +
+      '<div class="toggle"><div><div class="tl">Briefing when the screen wakes</div><div class="td">Once per half hour at most</div></div><button class="sw ' + (S.brief.onWake ? 'on' : '') + '" data-brief="onWake"></button></div>' +
+      '</div>' +
+      '<div class="row"><label>Scheduled briefing times (24-hour, comma separated, e.g. 06:30, 17:00)</label><input id="briefTimes" type="text" inputmode="numeric" value="' + (S.brief.times || '').replace(/"/g, '') + '" placeholder="06:30, 17:00" ' + inputStyle + '><div class="btns"><button data-act="brief-times">Save times</button></div></div>' +
+      '<div class="row"><label>Voice</label><select id="briefVoice" ' + inputStyle + '>' + ['<option value="">Automatic</option>'].concat((speech.voices.length ? speech.voices : (loadVoices(), speech.voices)).map(v => '<option value="' + v.name.replace(/"/g, '') + '"' + (S.brief.voice === v.name ? ' selected' : '') + '>' + v.name + ' (' + v.lang + ')</option>')).join('') + '</select></div>' +
+      '<div class="row"><label>Speech rate</label><input type="range" min="0.7" max="1.4" step="0.05" data-slider="rate" value="' + S.brief.rate + '"></div>' +
+      '<div class="row" style="color:var(--muted);font-size:14px">Briefings use the device\'s own speech engine and work offline. With a backend configured, the text is written by a language model from the same NWS data; otherwise it is composed on the device. The Sound switch (Alerts tab) silences all speech.</div>') +
     pane('layers', '<div class="row" style="margin-top:4px">' + Object.entries(LAYER_INFO).map(([k, [name, desc]]) =>
       '<div class="toggle"><div><div class="tl">' + name + '</div><div class="td">' + desc + '</div></div><button class="sw ' + (S.layers[k] ? 'on' : '') + '" data-layer="' + k + '" role="switch" aria-checked="' + !!S.layers[k] + '" aria-label="' + name + '"></button></div>').join('') + '</div>' +
       '<div class="row" style="color:var(--muted);font-size:14px">Radar, your rings and NWS warnings are always shown. Lightning appears when a backend is set. Wind arrows come from Open-Meteo; satellite clouds and smoke from NOAA.</div>') +
@@ -1775,7 +1909,7 @@ function renderDiag() {
     'Sound: ' + (!S.sound ? 'off (Settings)' : audio() ? audio().state : 'unavailable'),
   ].join('\n');
 }
-function closeModal() { $('#modal').hidden = true; if (history.state && history.state.sheet) history.back(); }
+function closeModal() { $('#modal').hidden = true; if (speech.speaking && $('#briefText')) stopSpeaking(); if (history.state && history.state.sheet) history.back(); }
 $('#sheetClose').addEventListener('click', closeModal);
 // Back button / swipe-back closes the panel instead of leaving the app
 window.addEventListener('popstate', () => { if (!$('#modal').hidden) $('#modal').hidden = true; });
@@ -1788,6 +1922,12 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'rain') return playChime('rain');
   if (b.dataset.act === 'warn') return playWarning();
   if (b.dataset.tab) { settingsTab = b.dataset.tab; $('#sheet').querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); $('#sheet').querySelectorAll('.tabpane').forEach(p => p.hidden = p.dataset.pane !== settingsTab); return; }
+  if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
+  if (b.dataset.act === 'brief-now') { closeModal(); openBriefing(true); return; }
+  if (b.dataset.act === 'brief-refresh') { openBriefing(true); return; }
+  if (b.dataset.act === 'brief-settings') { openSettings('brief'); return; }
+  if (b.dataset.act === 'brief-times') { S.brief.times = ($('#briefTimes').value.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || []).map(t => t.padStart(5, '0')).join(', '); $('#briefTimes').value = S.brief.times; save(); return; }
+  if (b.dataset.brief) { S.brief[b.dataset.brief] = !S.brief[b.dataset.brief]; save(); b.classList.toggle('on', S.brief[b.dataset.brief]); return; }
   if (b.dataset.layer) { S.layers[b.dataset.layer] = !S.layers[b.dataset.layer]; save(); b.classList.toggle('on', S.layers[b.dataset.layer]); b.setAttribute('aria-checked', String(!!S.layers[b.dataset.layer])); applyLayers(); return; }
   if (b.dataset.act === 'loc') return openLocation();
   if (b.dataset.act === 'besave' || b.dataset.act === 'beclear') {
@@ -1812,8 +1952,10 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
+  if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
   S[k] = +e.target.value; save();
   if (k === 'opacity') showFrame(frameIdx);
 });

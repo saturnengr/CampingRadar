@@ -17,6 +17,7 @@ builder.Services.AddHttpClient("noaa", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd(builder.Configuration["UserAgent"] ?? "CampRadar/1.0 (+https://github.com/saturnengr/CampingRadar)");
     c.DefaultRequestHeaders.Accept.ParseAdd("application/geo+json, application/json, image/png, */*");
 });
+builder.Services.AddHttpClient("anthropic", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
@@ -25,6 +26,7 @@ builder.Services.AddSingleton<NwsClient>();
 builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
+builder.Services.AddSingleton<BriefingWriter>();
 builder.Services.AddSingleton<AlertWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertWorker>());
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
@@ -47,7 +49,8 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     radar = new { scans = m.Times.Count, latest = m.Latest > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.Latest) : (DateTimeOffset?)null, refreshed = m.TimesRefreshedAt },
     lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null, newestFlash = l.NewestFlashMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.NewestFlashMs) : (DateTimeOffset?)null },
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
-    push = new { enabled = p.Enabled, spots = s.All().Count }
+    push = new { enabled = p.Enabled, spots = s.All().Count },
+    briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
@@ -79,6 +82,15 @@ app.MapGet("/status", async (double lat, double lon, StatusService s, Cancellati
 {
     if (lat is < 15 or > 72 || lon is < -170 or > -50) return Results.BadRequest("US coverage only");
     return Results.Ok(await s.GetAsync(lat, lon, new StatusOptions(Math.Clamp(hitMi, 1, 10), Math.Clamp(threshDbz, 10, 40)), ct));
+});
+
+// ---------- spoken briefing text ----------
+app.MapPost("/brief", async ([FromBody] BriefRequest req, BriefingWriter w, CancellationToken ct) =>
+{
+    if (!w.Enabled) return Results.StatusCode(503);
+    if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
+    var text = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct);
+    return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend" });
 });
 
 // ---------- push subscriptions ----------
@@ -117,3 +129,4 @@ public sealed record PushSub(string Endpoint, PushKeys? Keys);
 public sealed record PushKeys(string P256dh, string Auth);
 public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
+public sealed record BriefRequest(JsonElement Facts, string? Fallback);

@@ -20,6 +20,7 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
 | GET | `/lightning?lat&lon&minutes=30` | Counts within 10/20/30 mi, nearest strike, trend |
 | GET | `/lightning/recent?minLat&minLon&maxLat&maxLon` | Strikes in a box, for the map |
 | GET | `/status?lat&lon&hitMi=3&threshDbz=20` | Rain prediction + lightning + NWS alerts, with the same wording as the page |
+| POST | `/brief` | `{facts, fallback}` → a spoken-English briefing written by a language model (needs `Anthropic:ApiKey`) |
 | GET | `/push/vapid-public-key` | Key the browser needs to subscribe |
 | POST | `/push/subscribe` | `{subscription, lat, lon, prefs}` → `{id}` |
 | POST | `/push/{id}/location` · `/push/{id}/snooze` · `/push/{id}/test` | Update a device |
@@ -46,8 +47,12 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
   "AllowedOrigins": "https://saturnengr.github.io",
   "Vapid": { "Subject": "mailto:you@example.com", "PublicKey": "…", "PrivateKey": "…" },
   "AdminKey": "a-long-random-string",
-  "Glm": { "Buckets": "noaa-goes19" }
+  "Glm": { "Buckets": "noaa-goes19" },
+  "Anthropic": { "ApiKey": "sk-ant-…", "Model": "claude-haiku-5-5" }
 }
+```
+`Anthropic:ApiKey` is optional: with it, the app's Briefing is written by a language model; without it the device composes the text itself. A key comes from console.anthropic.com; a briefing costs well under a cent.
+```
 ```
 Add `noaa-goes18` to `Glm:Buckets` (comma-separated) for better lightning coverage west of the Rockies; it doubles the lightning download, which is still small.
 
