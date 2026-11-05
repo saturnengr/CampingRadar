@@ -1,0 +1,16 @@
+{
+  "name": "Camp Radar",
+  "short_name": "Camp Radar",
+  "description": "Weather radar, rain arrival alerts and NWS warnings for camping.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d141b",
+  "theme_color": "#0d141b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

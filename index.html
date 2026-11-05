@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0d141b">
 <title>Camp Radar</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Camp Radar">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{--chrome:#0d141b;--chrome2:#16212c;--text:#eef3f7;--muted:#9fb0bf;--line:#2a3846;--accent:#2f7dd1;--accent2:#7cc4ff}
@@ -99,6 +106,43 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 .alert .hl{font-weight:650}
 .alert p{white-space:pre-wrap;font-size:15px;line-height:1.4;margin:6px 0}
 .done{margin-top:12px;width:100%;background:var(--accent);border-color:var(--accent2);font-weight:750}
+
+/* ---- phones: portrait (narrow) and landscape (short) ---- */
+@media (max-width:600px),(max-height:520px){
+  body{padding-top:env(safe-area-inset-top)}
+  #nowTemp{font-size:46px;letter-spacing:-1px}
+  #nowCond{font-size:17px}#nowWind{font-size:15px}#nowPlace{font-size:13px}
+  .day{padding:4px 4px 3px;border-radius:10px}
+  .day .nm{font-size:12px}.day svg{width:32px;height:32px}.day .t{font-size:15px}.day .p{font-size:11.5px;min-height:14px}
+  #statusbar{min-height:50px;padding:5px 10px;gap:8px}
+  #statusMain{font-size:17px}#statusSub{font-size:13px}
+  #snoozeBtn{min-height:40px;padding:0 10px;font-size:14px}
+  #warnbar{flex-wrap:wrap;font-size:16px;padding:6px 10px;gap:8px}
+  #warnbar button{min-height:38px;font-size:14px}
+  /* map controls become a toolbar along the bottom */
+  #controls{top:auto;bottom:calc(20px + env(safe-area-inset-bottom));left:8px;right:8px;flex-direction:row;gap:5px}
+  #controls .gap{display:none}
+  #controls button{flex:1;width:auto;min-width:0;height:50px;font-size:16px}
+  #controls button small{font-size:10px}
+  #controls svg{width:22px;height:22px}
+  #zoomCtl{right:8px;top:8px;gap:6px}
+  #zoomCtl button{width:48px;height:46px;font-size:26px}
+  #updated{top:8px;left:8px;font-size:12px;padding:4px 7px}
+  #frameInfo{left:8px;bottom:calc(80px + env(safe-area-inset-bottom));font-size:13px;padding:5px 9px}
+  #soundChip{left:8px;bottom:calc(120px + env(safe-area-inset-bottom));min-height:40px;font-size:14px}
+  #pickHint{top:auto;bottom:calc(122px + env(safe-area-inset-bottom));white-space:normal;max-width:calc(100% - 24px);font-size:15px;padding:6px 6px 6px 12px}
+  .sheet{width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:12px 14px 18px}
+  #modal{align-items:flex-end}
+  #snoozeMenu .opts button{min-width:56px}
+}
+/* phone held sideways: keep the banner on one short row */
+@media (max-height:520px) and (orientation:landscape){
+  #banner{flex-wrap:nowrap;padding:4px 10px}
+  #days{width:auto}.day{flex:none;width:84px}
+  #nowTemp{font-size:38px}#nowPlace{display:none}
+  .day svg{width:26px;height:26px}
+  #statusbar{min-height:44px}
+}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
