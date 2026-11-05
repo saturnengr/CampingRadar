@@ -72,7 +72,9 @@ Today every device fetches radar and forecasts itself and runs the rain predicti
 
 ![Target architecture: 4 sources, 1 backend, 3 clients](images/architecture.png)
 
-The web page becomes a thin client of the backend and stays as the free tier; the tablet kiosk and the phone app are the same code wrapped for the stores (Capacitor or a Trusted Web Activity) so they can register for push notifications.
+Built (Nov 5, 2026) as an ASP.NET Core 8 Web API in `backend/` of the repo, hosted on the existing SmarterASP.NET W1050 plan (dedicated app pool, free Let's Encrypt SSL, scheduled tasks). GitHub Actions builds, tests and packages it for IIS on every push. Push notifications use Web Push (VAPID) to the home-screen app, so no store listing is needed for alerts with the screen off; a store wrapper (Capacitor or a Trusted Web Activity) remains the route to the app stores later. Because shared IIS idles a quiet site, a control-panel Scheduled Task calls `/tick` every minute as the heartbeat alongside the app's own background loop.
+
+The web page keeps working standalone (no backend) and gains a *Backend address* setting that turns on the shared radar cache, lightning on the map and in the status bar, and *Alerts on this device*.
 
 ## Pricing and packaging
 
@@ -133,7 +135,7 @@ Five phases, nights-and-weekends pace, each one started only when the previous p
 
 ![Roadmap: 5 phases, 4 gates](images/roadmap.png)
 
-Phase 1 is the one that matters: it removes every licensing problem, enables push and lightning, and is what the paid tier is built on. If it stalls, the free app still stands on its own as a hobby project.
+Phase 1 is the one that matters: it removes every licensing problem, enables push and lightning, and is what the paid tier is built on. Status: the backend code is written and its tests pass in CI; next is deploying it to SmarterASP.NET, generating the push keys, and a week of live alerts to prove the heartbeat. The paid map provider and geocoder swap is still open. If the phase stalls, the free app still stands on its own.
 
 ## Costs and break-even
 
@@ -145,7 +147,7 @@ Running costs are low because the weather data is free; about 40 annual Pro subs
 | Terms and privacy policy review | $500–1,500 | — | Template plus a lawyer's hour or two |
 | Trademark filing | $350 | — | Per class, if pursued |
 | Apple and Google developer accounts | $25 | $8 | Apple $99/yr, Google $25 once |
-| Backend server and storage | — | $20–40 | One VPS plus object storage for cached tiles |
+| Backend hosting | — | $0 extra | Runs on the existing SmarterASP.NET W1050 plan; no new cost |
 | Map tiles and geocoding | — | $0–50 | Free tier covers early use |
 | Push notifications | — | $0 | FCM and APNs are free |
 | Lightning data (GLM from AWS) | — | $0–10 | Egress only; a paid network later would add $50–200+ |
