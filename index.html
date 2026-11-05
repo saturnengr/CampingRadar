@@ -613,7 +613,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false },
+  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
   brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -704,9 +704,13 @@ document.addEventListener('pointerdown', () => { const a = audio(); if (a && a.s
 const map = L.map('map', { zoomControl: false, zoomSnap: 0.25, attributionControl: true }).setView([38.5, -96.5], 4);
 map.attributionControl.setPrefix(false);
 // OpenStreetMap standard tiles: no key needed (night mode darkens them with a CSS filter)
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const osmBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar: NOAA MRMS, IEM · Weather: NWS'
-}).addTo(map);
+});
+// Topographic base map (contours, shaded relief, trails) and a marked-trails overlay, both built from OpenStreetMap data; no key needed.
+const topoBase = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, subdomains: 'abc', attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, SRTM · <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA) · Radar: NOAA MRMS, IEM · Weather: NWS' });
+const trailsLayer = L.tileLayer('https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png', { maxZoom: 18, opacity: 0.9, attribution: 'Trails: <a href="https://hiking.waymarkedtrails.org">Waymarked Trails</a> (CC-BY-SA)' });
+(S.layers && S.layers.topo ? topoBase : osmBase).addTo(map);
 map.createPane('radar'); map.getPane('radar').style.zIndex = 350;
 map.createPane('alerts'); map.getPane('alerts').style.zIndex = 360;
 
@@ -1291,6 +1295,8 @@ const LAYER_INFO = {
   smoke: ['Smoke', "NOAA's surface smoke forecast for the current hour"],
   wind: ['Wind', 'Current wind arrows across the map: speed, gusts and direction'],
   clouds: ['Clouds (satellite)', 'Live GOES imagery: visible by day, infrared at night'],
+  topo: ['Topographic map', 'Swap the street map for a topo map: contour lines, shaded relief, trails and huts (OpenTopoMap)'],
+  trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
 };
 const floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
@@ -1351,6 +1357,8 @@ function applyLayers() {
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
   set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
+  set(trailsLayer, L_.trails);
+  if (L_.topo && !map.hasLayer(topoBase)) { map.removeLayer(osmBase); topoBase.addTo(map); } else if (!L_.topo && !map.hasLayer(osmBase)) { map.removeLayer(topoBase); osmBase.addTo(map); }
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
 
