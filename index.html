@@ -465,7 +465,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null };
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -516,7 +516,7 @@ function audio() {
   if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
   return ac;
 }
-function updateSoundChip() { const a = audio(); $('#soundChip').hidden = !a || a.state === 'running'; }
+function updateSoundChip() { const a = audio(); $('#soundChip').hidden = !S.sound || !a || a.state === 'running'; }
 function tone(freq, start, dur, type, vol) {
   const a = audio(); if (!a) return;
   const t0 = a.currentTime + start, o = a.createOscillator(), g = a.createGain();
@@ -528,6 +528,7 @@ function tone(freq, start, dur, type, vol) {
   o.connect(g).connect(a.destination); o.start(t0); o.stop(t0 + dur + 0.05);
 }
 function playChime(kind) {
+  if (!S.sound) return;
   const a = audio(); if (!a) return;
   if (a.state !== 'running') a.resume().catch(() => {});
   const notes = [523.25, 659.25, 783.99];
@@ -535,6 +536,7 @@ function playChime(kind) {
   for (let r = 0; r < reps; r++) notes.forEach((f, i) => tone(f, r * gap + i * step, 0.9, 'sine', 0.7));
 }
 function playWarning() {
+  if (!S.sound) return;
   const a = audio(); if (!a) return;
   if (a.state !== 'running') a.resume().catch(() => {});
   for (let i = 0; i < 12; i++) tone(i % 2 ? 960 : 853, i * 0.25, 0.24, 'triangle', 0.9);
@@ -1199,6 +1201,7 @@ const SETTINGS = [
   ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
   ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ['threshDbz', 'Count as rain', [[20, 'Light and up'], [30, 'Moderate and up']]],
+  ['sound', 'Sound (chimes and warning alarm)', [[true, 'On'], [false, 'Off']]],
   ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
   ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
 ];
@@ -1235,7 +1238,7 @@ function renderDiag() {
     'Backend: ' + (BE() ? BE() + (st.backendOk === false ? ' — unreachable' : st.backendOk ? ' — OK' : '') : 'none (standalone)'),
     'Lightning: ' + (!BE() ? 'needs backend' : st.lightningErr ? 'ERROR — ' + st.lightningErr : st.lightning ? (st.lightning.within30 + ' strikes within 30 mi · ' + ago(st.lightningAt) + (st.lightning.dataFresh ? '' : ' · feed stale')) : '—'),
     'Alerts on this device: ' + (S.pushId ? 'on' : 'off'),
-    'Sound: ' + (audio() ? audio().state : 'unavailable'),
+    'Sound: ' + (!S.sound ? 'off (Settings)' : audio() ? audio().state : 'unavailable'),
   ].join('\n');
 }
 function closeModal() { $('#modal').hidden = true; }
@@ -1265,6 +1268,7 @@ $('#sheet').addEventListener('click', e => {
   b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   if (k === 'night') applyNight();
   if (k === 'animate') setAnim(v);
+  if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
