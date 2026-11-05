@@ -1632,14 +1632,15 @@ async function pushDisable() {
   try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) {}
   S.pushId = null; save();
 }
-async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); const r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); if (!r.ok) throw new Error('Test failed: ' + r.status); }
+async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); const r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); if (!r.ok) { let d = ''; try { d = (await r.json()).error || ''; } catch (e) {} throw new Error('Test failed (' + r.status + ')' + (d ? ': ' + d : '')); } }
 function pushUpdateLocation() { if (S.pushId && BE() && st.loc) fetchT(BE() + '/push/' + S.pushId + '/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon }) }, 10000).catch(() => {}); }
 function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
 async function pushAction(act, btn) {
   const msg = $('#pushMsg'); if (msg) msg.textContent = 'Working…';
-  try { if (act === 'on') await pushEnable(); else if (act === 'off') await pushDisable(); else await pushTest(); if (msg) msg.textContent = act === 'test' ? 'Test sent — it should pop up in a few seconds.' : act === 'on' ? 'Alerts are on for this device.' : 'Alerts are off for this device.'; }
-  catch (e) { if (msg) msg.textContent = e.message; }
-  renderPushRow();
+  let text;
+  try { if (act === 'on') await pushEnable(); else if (act === 'off') await pushDisable(); else await pushTest(); text = act === 'test' ? 'Test sent — it should pop up in a few seconds.' : act === 'on' ? 'Alerts are on for this device.' : 'Alerts are off for this device.'; }
+  catch (e) { text = e.message; }
+  renderPushRow(); const m2 = $('#pushMsg'); if (m2) m2.textContent = text;
 }
 function renderPushRow() {
   const row = $('#pushRow'); if (!row) return;

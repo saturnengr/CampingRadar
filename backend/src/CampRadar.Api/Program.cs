@@ -109,8 +109,15 @@ app.MapDelete("/push/{id}", (string id, SpotStore store) => { store.Delete(id); 
 app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, CancellationToken ct) =>
 {
     var spot = store.Get(id); if (spot is null) return Results.NotFound();
-    var ok = await p.SendAsync(spot, new { title = "Camp Radar test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
-    return ok ? Results.Ok() : Results.StatusCode(410);
+    try
+    {
+        var ok = await p.SendAsync(spot, new { title = "Camp Radar test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
+        return ok ? Results.Ok() : Results.Json(new { error = "this device's subscription has expired; turn alerts off and on again" }, statusCode: 410);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {   // surfaced to the app's settings page so a host or key problem can be read without server logs
+        var inner = ex.InnerException?.Message; return Results.Json(new { error = ex.Message + (inner is null ? "" : " — " + inner) }, statusCode: 500);
+    }
 });
 
 // ---------- admin ----------
