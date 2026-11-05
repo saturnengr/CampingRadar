@@ -31,7 +31,8 @@ button:active{filter:brightness(1.3)}
 #nowPlace{font-size:14px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nowDetail{min-width:0}
 #days{display:flex;gap:8px}
-.day{width:104px;background:var(--chrome2);border-radius:12px;padding:6px 6px 5px;text-align:center}
+.day{width:104px;background:var(--chrome2);border-radius:12px;padding:6px 6px 5px;text-align:center;cursor:pointer;border:1px solid transparent}
+.day:active{border-color:var(--accent2)}
 .day .nm{font-size:14px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
 .day svg{width:44px;height:44px;display:block;margin:1px auto}
 .day .t{font-size:18px;font-variant-numeric:tabular-nums}.day .t b{font-weight:750}.day .t span{color:var(--muted)}
@@ -103,6 +104,32 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 .diag{font-size:13px;color:var(--muted);white-space:pre-wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:14px;font-variant-numeric:tabular-nums}
 .alert{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
 .alert h3{margin:4px 0;font-size:19px}
+/* ---- day view ---- */
+.dayhead{display:flex;align-items:center;gap:14px;margin:2px 0 8px}
+.dayhead svg{width:56px;height:56px;flex:none}
+.dayhead .hl{font-size:30px;font-weight:300;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dayhead .hl b{font-weight:700}
+.dayhead .sum{font-size:16px;color:var(--muted)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:10px 0}
+.tile{background:#0b1117;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tile .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.tile .v{font-size:22px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+.tile .v small{font-size:13px;font-weight:500;color:var(--muted)}
+.tile .n{font-size:13px;color:var(--muted);margin-top:2px}
+.tile.warn{border-color:#d35f00;background:rgba(211,95,0,.12)}
+.tile.bad{border-color:#c62828;background:rgba(198,40,40,.14)}
+.tile.good{border-color:#1e7a45;background:rgba(30,122,69,.12)}
+.hrs{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums;margin-top:6px}
+.hrs th{font-weight:600;color:var(--muted);text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);font-size:12px;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;background:var(--chrome2)}
+.hrs td{padding:5px 6px;border-bottom:1px solid #1b2733;white-space:nowrap}
+.hrs tr.now td{background:rgba(47,125,209,.18)}
+.hrs tr.dark td{color:var(--muted)}
+.hrs .w{color:#d4ad00;font-weight:700}.hrs .b{color:#ff6d5a;font-weight:700}
+.hrs .bar{display:inline-block;height:8px;background:var(--accent);border-radius:4px;vertical-align:middle;margin-right:4px;opacity:.8}
+.fctext{font-size:15px;line-height:1.45;margin:8px 0}
+.fctext b{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px}
+.sunline{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--muted);margin:6px 0 2px}
+.sunline b{color:var(--text);font-weight:600}
 .alert .hl{font-weight:650}
 .alert p{white-space:pre-wrap;font-size:15px;line-height:1.4;margin:6px 0}
 .done{margin-top:12px;width:100%;background:var(--accent);border-color:var(--accent2);font-weight:750}
@@ -465,7 +492,7 @@ const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar lo
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true };
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: '', pushId: null, sound: true, activity: 'camping' };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -473,7 +500,8 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e
 const $ = s => document.querySelector(s);
 const st = {
   loc: null, gpsAcc: null, gpsErr: null, picking: false,
-  wx: { points: null, key: null, stationId: null, stationName: null, pop2h: null, isDay: null, hourly0: null, obsAt: 0, fcAt: 0, err: null },
+  wx: { points: null, key: null, stationId: null, stationName: null, pop2h: null, isDay: null, hourly0: null, obsAt: 0, fcAt: 0, err: null,
+        daily: [], hourly: [], grid: null, pressure: null },
   nc: null, ncAt: 0, ncErr: null, ncBusy: false,
   alerts: [], alertsAt: 0, alertsErr: null,
   evt: { active: false, imminentDone: false, clear: 0 },
@@ -853,6 +881,8 @@ async function refreshForecast() {
   st.wx.isDay = hp[0] ? hp[0].isDaytime : null;
   const pops = hp.slice(0, 2).map(p => p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value).filter(v => v != null);
   st.wx.pop2h = pops.length ? Math.max(...pops) : null;
+  st.wx.daily = daily.properties.periods || []; st.wx.hourly = hp;
+  fetchGrid(P).catch(() => {});
   const byDate = new Map();
   for (const p of daily.properties.periods || []) {
     const d = p.startTime.slice(0, 10);
@@ -864,7 +894,7 @@ async function refreshForecast() {
     const name = i === 0 ? (e.day ? 'Today' : 'Tonight') : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
     const pop = Math.max(...[e.day, e.night].filter(Boolean).map(p => (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0));
     const hi = e.day ? e.day.temperature + '°' : '—', lo = e.night ? e.night.temperature + '°' : '—';
-    return '<div class="day"><div class="nm">' + name + '</div>' + iconSvg(iconKind(main.shortForecast, !e.day)) +
+    return '<div class="day" data-date="' + d + '" role="button" tabindex="0"><div class="nm">' + name + '</div>' + iconSvg(iconKind(main.shortForecast, !e.day)) +
       '<div class="t"><b>' + hi + '</b> <span>/ ' + lo + '</span></div><div class="p">' + (pop >= 10 ? pop + '% rain' : '') + '</div></div>';
   }).join('');
   $('#days').innerHTML = html;
@@ -1196,8 +1226,132 @@ document.querySelectorAll('[data-snooze]').forEach(b => b.addEventListener('clic
 $('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); $('#snoozeMenu').hidden = true; renderStatus(); pushUpdateSnooze(); });
 document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') && e.target.id !== 'snoozeBtn') $('#snoozeMenu').hidden = true; });
 
+/* ------------------------------ day view --------------------------- */
+const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling' };
+$('#days').addEventListener('click', e => { const d = e.target.closest('.day'); if (d && d.dataset.date) openDay(d.dataset.date); });
+
+// NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
+async function fetchGrid(P) {
+  if (st.wx.grid && Date.now() - st.wx.grid.at < 30 * 60000) return;
+  const g = (await nws(P.forecastGridData)).properties;
+  const expand = (series, conv) => { const m = {}; for (const v of (series && series.values) || []) {
+    const [startS, dur] = v.validTime.split('/'); const start = Date.parse(startS); const hrs = durHours(dur);
+    for (let h = 0; h < hrs; h++) m[start + h * 3600e3] = conv ? conv(v.value) : v.value; } return m; };
+  st.wx.grid = { at: Date.now(), gust: expand(g.windGust, kmhToMph), thunder: expand(g.probabilityOfThunder), feels: expand(g.apparentTemperature, cToF),
+    hail: expand(g.hazards && null), qpf: expand(g.quantitativePrecipitation), sky: expand(g.skyCover) };
+}
+function durHours(iso) { // PT3H, P1DT6H, PT30M
+  const m = /P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/.exec(iso || ''); if (!m) return 1;
+  return Math.max(1, Math.round((+m[1] || 0) * 24 + (+m[2] || 0) + (+m[3] || 0) / 60));
+}
+// Pressure trend from the station's last 6 hours of observations (hunters care; a fast fall also means weather).
+async function fetchPressure() {
+  if (!st.wx.stationId) return null;
+  if (st.wx.pressure && Date.now() - st.wx.pressure.at < 20 * 60000) return st.wx.pressure;
+  const since = new Date(Date.now() - 6 * 3600e3).toISOString();
+  const j = await nws(NWS + '/stations/' + st.wx.stationId + '/observations?start=' + encodeURIComponent(since) + '&limit=60');
+  const obs = (j.features || []).map(f => f.properties).map(p => ({ t: Date.parse(p.timestamp), pa: (p.barometricPressure && p.barometricPressure.value) || (p.seaLevelPressure && p.seaLevelPressure.value) })).filter(o => o.pa).sort((a, b) => a.t - b.t);
+  if (obs.length < 2) return null;
+  const last = obs[obs.length - 1], threeAgo = obs.reduce((b, o) => Math.abs(o.t - (last.t - 3 * 3600e3)) < Math.abs(b.t - (last.t - 3 * 3600e3)) ? o : b, obs[0]);
+  const inHg = pa => pa / 3386.39, d = inHg(last.pa) - inHg(threeAgo.pa), hrs = Math.max(0.5, (last.t - threeAgo.t) / 3600e3);
+  const rate = d / hrs * 3;   // per 3 h
+  st.wx.pressure = { at: Date.now(), inHg: inHg(last.pa), change3h: rate, word: rate > 0.06 ? 'rising' : rate < -0.06 ? 'falling' : 'steady', fast: Math.abs(rate) > 0.12 };
+  return st.wx.pressure;
+}
+// Sun times (NOAA algorithm) and moon phase, computed locally so they work offline.
+function sunTimes(lat, lon, dateStr) {
+  const rad = Math.PI / 180, d0 = new Date(dateStr + 'T12:00:00Z'), J = d0.getTime() / 864e5 + 2440587.5;
+  const n = Math.round(J - 2451545.0 - 0.0009 + lon / 360), Jstar = 2451545.0 + 0.0009 - lon / 360 + n;
+  const M = ((357.5291 + 0.98560028 * (Jstar - 2451545)) % 360 + 360) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const lam = (M + C + 180 + 102.9372) % 360, Jtransit = Jstar + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * lam * rad);
+  const dec = Math.asin(Math.sin(lam * rad) * Math.sin(23.44 * rad));
+  const ha = (alt) => { const c = (Math.sin(alt * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec)); return Math.abs(c) > 1 ? null : Math.acos(c) / rad / 360; };
+  const toMs = j => (j - 2440587.5) * 864e5;
+  const w0 = ha(-0.833), w6 = ha(-6);
+  return { rise: w0 == null ? null : toMs(Jtransit - w0), set: w0 == null ? null : toMs(Jtransit + w0), dawn: w6 == null ? null : toMs(Jtransit - w6), dusk: w6 == null ? null : toMs(Jtransit + w6), noon: toMs(Jtransit) };
+}
+function moonPhase(ms) {
+  const days = (ms - Date.UTC(2000, 0, 6, 18, 14)) / 864e5, ph = ((days / 29.530588853) % 1 + 1) % 1, ill = Math.round((1 - Math.cos(ph * 2 * Math.PI)) / 2 * 100);
+  const name = ph < 0.03 || ph > 0.97 ? 'New moon' : ph < 0.22 ? 'Waxing crescent' : ph < 0.28 ? 'First quarter' : ph < 0.47 ? 'Waxing gibbous' : ph < 0.53 ? 'Full moon' : ph < 0.72 ? 'Waning gibbous' : ph < 0.78 ? 'Last quarter' : 'Waning crescent';
+  return { ill, name };
+}
+const windMph = p => { const m = /(\d+)(?:\s*to\s*(\d+))?/.exec(p.windSpeed || ''); return m ? +(m[2] || m[1]) : 0; };
+const popOf = p => (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0;
+const rhOf = p => p.relativeHumidity && p.relativeHumidity.value;
+function heatIndexF(t, rh) { if (t < 80 || rh == null) return t; const hi = -42.379 + 2.04901523 * t + 10.14333127 * rh - .22475541 * t * rh - .00683783 * t * t - .05481717 * rh * rh + .00122874 * t * t * rh + .00085282 * t * rh * rh - .00000199 * t * t * rh * rh; return Math.round(hi); }
+function windChillF(t, v) { if (t > 50 || v < 3) return t; return Math.round(35.74 + 0.6215 * t - 35.75 * Math.pow(v, 0.16) + 0.4275 * t * Math.pow(v, 0.16)); }
+const hourLabel = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric' }).replace(' ', '').toLowerCase();
+
+async function openDay(dateStr) {
+  const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; $('#modal').hidden = false;
+  const hours = st.wx.hourly.filter(p => p.startTime.slice(0, 10) === dateStr).map(p => {
+    const t = Date.parse(p.startTime), g = st.wx.grid || {};
+    const temp = p.temperature, rh = rhOf(p), wind = windMph(p), gust = g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null;
+    const feels = g.feels && g.feels[t] != null ? Math.round(g.feels[t]) : (temp >= 80 ? heatIndexF(temp, rh) : windChillF(temp, wind));
+    return { t, temp, feels, rh, wind, gust, dir: p.windDirection, pop: popOf(p), thunder: g.thunder ? Math.round(g.thunder[t] || 0) : null, text: p.shortForecast, day: p.isDaytime };
+  });
+  const dayP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && p.isDaytime), nightP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && !p.isDaytime);
+  const main = dayP || nightP;
+  if (!main && !hours.length) { sh.innerHTML = '<h2>No forecast for that day yet</h2><button class="done" data-act="close">Close</button>'; return; }
+  const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, dateStr) : null, moon = moonPhase(Date.parse(dateStr + 'T18:00:00'));
+  const title = new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const hi = dayP ? dayP.temperature : (hours.length ? Math.max(...hours.map(h => h.temp)) : null), lo = nightP ? nightP.temperature : (hours.length ? Math.min(...hours.map(h => h.temp)) : null);
+  const maxPop = Math.max(0, ...hours.map(h => h.pop)), rainHours = hours.filter(h => h.pop >= 40), maxWind = Math.max(0, ...hours.map(h => h.wind)), maxGust = Math.max(0, ...hours.map(h => h.gust || 0));
+  const maxThunder = Math.max(0, ...hours.map(h => h.thunder || 0)), thunderHours = hours.filter(h => (h.thunder || 0) >= 20);
+  const rainWindow = rainHours.length ? hourLabel(rainHours[0].t) + '–' + hourLabel(rainHours[rainHours.length - 1].t + 3600e3) : null;
+  const windiest = hours.length ? hours.reduce((b, h) => (h.gust || h.wind) > (b.gust || b.wind) ? h : b) : null;
+  let pressure = null; try { pressure = await fetchPressure(); } catch (e) {}
+
+  const tile = (k, v, n, cls) => '<div class="tile ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div>' + (n ? '<div class="n">' + n + '</div>' : '') + '</div>';
+  const rainTile = tile('Rain chance', maxPop + '<small>%</small>', rainWindow ? 'Most likely ' + rainWindow : maxPop < 20 ? 'Dry day' : 'Scattered', maxPop >= 60 ? 'bad' : maxPop >= 30 ? 'warn' : 'good');
+  const thunderTile = tile('Thunder', maxThunder != null ? maxThunder + '<small>%</small>' : '—', thunderHours.length ? 'Around ' + hourLabel(thunderHours[0].t) + (thunderHours.length > 1 ? '–' + hourLabel(thunderHours[thunderHours.length - 1].t + 3600e3) : '') : 'Low', maxThunder >= 40 ? 'bad' : maxThunder >= 20 ? 'warn' : 'good');
+  const windTile = tile('Wind', Math.round(maxWind) + '<small> mph' + (maxGust > maxWind + 3 ? ', gusts ' + Math.round(maxGust) : '') + '</small>', windiest ? 'Strongest ' + hourLabel(windiest.t) + ' from the ' + (windiest.dir || '?') : '', Math.max(maxWind, maxGust) >= 30 ? 'bad' : Math.max(maxWind, maxGust) >= 20 ? 'warn' : 'good');
+  const tempTile = tile('Temps', (hi != null ? hi + '°' : '—') + ' <small>/ ' + (lo != null ? lo + '°' : '—') + '</small>', hours.length ? 'Feels ' + Math.min(...hours.map(h => h.feels)) + '° to ' + Math.max(...hours.map(h => h.feels)) + '°' : '', '');
+  const sunTile = sun && sun.rise ? tile('Sun', '<small>↑</small>' + clock(sun.rise) + ' <small>↓</small>' + clock(sun.set), 'Daylight ' + fmtDur((sun.set - sun.rise) / 60000), '') : '';
+  const legalTile = sun && sun.rise ? tile('Shooting light', clock(sun.rise - 30 * 60000) + '<small> – </small>' + clock(sun.set + 30 * 60000), '½ h before sunrise to ½ h after sunset (check your state)', '') : '';
+  const moonTile = tile('Moon', moon.ill + '<small>%</small>', moon.name, '');
+  const pressTile = pressure ? tile('Pressure', pressure.inHg.toFixed(2) + '<small> inHg</small>', (pressure.change3h >= 0 ? '+' : '') + pressure.change3h.toFixed(2) + ' in 3 h · ' + pressure.word + (pressure.fast ? ' fast' : ''), pressure.fast && pressure.change3h < 0 ? 'warn' : '') : tile('Pressure', '—', 'Needs a recent station report', '');
+  const feelsHot = Math.max(...hours.map(h => h.feels), -99), feelsCold = Math.min(...hours.map(h => h.feels), 999);
+  const exertTile = tile('Feels like', (feelsCold < 999 ? feelsCold + '°' : '—') + ' <small>to</small> ' + (feelsHot > -99 ? feelsHot + '°' : '—'), feelsHot >= 95 ? 'Heat index high — go early' : feelsCold <= 20 ? 'Wind chill — cover skin' : 'Comfortable for exertion', feelsHot >= 100 || feelsCold <= 10 ? 'bad' : feelsHot >= 90 || feelsCold <= 25 ? 'warn' : 'good');
+  const lastLight = sun && sun.set ? tile('Last light', clock(sun.dusk || sun.set), 'Sunset ' + clock(sun.set) + '; be back by dusk', '') : '';
+  const awning = tile('Awning / driving', Math.max(maxWind, maxGust) >= 30 ? 'Retract' : Math.max(maxWind, maxGust) >= 20 ? 'Watch it' : 'Fine', Math.max(maxWind, maxGust) >= 20 ? 'Gusts over 20 mph can damage an awning; 30+ is rough for high-profile driving' : 'Gusts under 20 mph', Math.max(maxWind, maxGust) >= 30 ? 'bad' : Math.max(maxWind, maxGust) >= 20 ? 'warn' : 'good');
+  const hailNote = tile('Hail risk', maxThunder >= 40 ? 'Possible' : maxThunder >= 20 ? 'Low' : 'Unlikely', 'From thunderstorm chance; the live radar is the real check', maxThunder >= 40 ? 'warn' : '');
+  const overnight = nightP ? tile('Overnight', nightP.temperature + '°', nightP.shortForecast, '') : '';
+  const tilesByActivity = {
+    camping: [rainTile, thunderTile, windTile, overnight, sunTile, tempTile],
+    rv: [windTile, awning, hailNote, rainTile, thunderTile, tempTile],
+    hunting: [windTile, pressTile, legalTile, moonTile, tempTile, rainTile],
+    trail: [rainTile, thunderTile, exertTile, lastLight, windTile, tempTile],
+  };
+  const act = S.activity in ACTIVITIES ? S.activity : 'camping';
+
+  const now = Date.now();
+  const rows = hours.map(h => {
+    const gustTxt = h.gust && h.gust > h.wind + 3 ? ' <span class="' + (h.gust >= 30 ? 'b' : h.gust >= 20 ? 'w' : '') + '">g' + h.gust + '</span>' : '';
+    const th = h.thunder != null ? '<td><span class="' + (h.thunder >= 40 ? 'b' : h.thunder >= 20 ? 'w' : '') + '">' + (h.thunder ? h.thunder + '%' : '') + '</span></td>' : '';
+    return '<tr class="' + (now >= h.t && now < h.t + 3600e3 ? 'now ' : '') + (h.day ? '' : 'dark') + '"><td>' + hourLabel(h.t) + '</td><td>' + h.temp + '°' + (h.feels !== h.temp ? ' <small style="color:var(--muted)">(' + h.feels + '°)</small>' : '') + '</td>' +
+      '<td><span class="bar" style="width:' + Math.round(h.pop * 0.4) + 'px"></span>' + (h.pop ? h.pop + '%' : '') + '</td>' + th +
+      '<td>' + (h.dir || '') + ' ' + h.wind + gustTxt + '</td><td style="white-space:normal;color:var(--muted)">' + h.text + '</td></tr>';
+  }).join('');
+  const hasTh = hours.some(h => h.thunder != null);
+  sh.innerHTML = '<div class="dayhead">' + iconSvg(iconKind(main ? main.shortForecast : hours[0].text, !dayP)) +
+    '<div><h2 style="margin:0">' + title + '</h2><div class="sum">' + (main ? main.shortForecast : '') + '</div></div>' +
+    '<div class="hl" style="margin-left:auto"><b>' + (hi != null ? hi + '°' : '—') + '</b> / ' + (lo != null ? lo + '°' : '—') + '</div></div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="color:var(--muted);font-size:13px">What matters for <b style="color:var(--text)">' + ACTIVITIES[act] + '</b></div>' +
+    '<div class="seg" style="gap:4px">' + Object.entries(ACTIVITIES).map(([k, v]) => '<button data-actv="' + k + '" class="' + (k === act ? 'on' : '') + '" style="min-height:36px;padding:0 10px;font-size:13px">' + v.split(' /')[0] + '</button>').join('') + '</div></div>' +
+    '<div class="tiles">' + tilesByActivity[act].filter(Boolean).join('') + '</div>' +
+    (sun && sun.rise ? '<div class="sunline"><span>Dawn <b>' + clock(sun.dawn) + '</b></span><span>Sunrise <b>' + clock(sun.rise) + '</b></span><span>Sunset <b>' + clock(sun.set) + '</b></span><span>Dusk <b>' + clock(sun.dusk) + '</b></span><span>Moon <b>' + moon.ill + '% ' + moon.name.toLowerCase() + '</b></span></div>' : '') +
+    (hours.length ? '<div style="max-height:46vh;overflow:auto;margin-top:8px"><table class="hrs"><thead><tr><th>Hour</th><th>Temp (feels)</th><th>Rain</th>' + (hasTh ? '<th>Thunder</th>' : '') + '<th>Wind mph</th><th>Sky</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="fctext">Hour-by-hour detail is not available this far out.</div>') +
+    '<div class="fctext">' + (dayP ? '<b>' + dayP.name + '</b>' + dayP.detailedForecast : '') + (nightP ? '<b>' + nightP.name + '</b>' + nightP.detailedForecast : '') + '</div>' +
+    '<button class="done" data-act="close">Close</button>';
+  sh.scrollTop = 0;
+  sh.querySelectorAll('[data-actv]').forEach(b => b.addEventListener('click', () => { S.activity = b.dataset.actv; save(); openDay(dateStr); }));
+}
+
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = [
+  ['activity', 'Activity (shapes the day forecast view)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling']]],
   ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
   ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ['threshDbz', 'Count as rain', [[20, 'Light and up'], [30, 'Moderate and up']]],
