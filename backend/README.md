@@ -31,7 +31,9 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
 
 **1. Create the site**
 - Control panel → *Websites* → add a site (or a subdomain such as `radar.yourdomain.com`).
-- Set the application pool to **.NET 8 (Core)**, 64-bit, *Integrated*.
+- Set the site's framework to **.NET Core** (the panel offers one ".NET Core" choice; the app's runtimeconfig selects .NET 8).
+- A subdomain created in the panel (e.g. `radar.yourdomain.com` → folder `radar`) is served as its own site root, so the API answers at `https://radar.yourdomain.com/health` with no path prefix.
+- Keep the shipped `web.config` as is: it is intentionally minimal because this host locks IIS's `requestFiltering` section; adding `<security>` or `<httpErrors>` blocks to it makes every request return a bare 500 with an empty `logs` folder.
 - *SSL* → turn on the free Let's Encrypt certificate for that host name. The app page is HTTPS and push notifications require HTTPS, so this is not optional.
 
 **2. Generate the push keys (once, ever)**
