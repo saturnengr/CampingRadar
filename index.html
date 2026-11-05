@@ -1826,10 +1826,19 @@ function campingBody(f) {
   if (f.sun && f.sun.minsToSunset > 0 && f.sun.minsToSunset < 360) out.push(`Sunset is at ${f.sun.set}, ${fmtDur(f.sun.minsToSunset)} from now.`);
   return out;
 }
+// Awning advice with the actual number: most awnings should come in around 20 mph gusts, all of them by 30.
+function awningSentence(s, when) {
+  if (!s) return '';
+  const g = s.topGust, at = s.gustAt;
+  if (g >= 30) return `Wind is the story ${when}: gusts to ${g} around ${at}. Bring the awning in before then, and it's a rough drive for a high-profile rig.`;
+  if (g >= 20) return `Gusts reach about ${g} around ${at}; that's awning-retracting wind, so plan to bring it in by then.`;
+  if (g >= 15) return `Peak gusts about ${g} around ${at}: the awning can stay out, but watch it if the wind picks up.`;
+  return `Peak gusts only about ${g} ${when}${g > 5 ? ', around ' + at : ''}; the awning can stay out.`;
+}
 function rvBody(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
-  out.push(s.topGust >= 30 ? `Wind is the story: gusts to ${s.topGust} around ${s.gustAt}. Bring the awning in, and it's a rough drive for a high-profile rig.` : s.topGust >= 20 ? `Gusts reach about ${s.topGust} around ${s.gustAt}; keep an eye on the awning.` : `Winds stay under 20; the awning is fine.`);
+  out.push(awningSentence(s, 'the next few hours'));
   out.push(rainSentence(s, 'the next few hours'), thunderSentence(s));
   if (s.maxThunder >= 40) out.push('With storms that strong, hail is possible; the live radar is the thing to watch.');
   out.push(`Temperatures run ${deg(s.lo)} to ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' overnight' : ''}.`);
@@ -1862,7 +1871,7 @@ function outlookSentences(f) {
   out.push(`Looking at ${o.label}:`);
   if (f.morning) {
     if (s) { out.push(rainSentence(s, 'this afternoon and evening'), thunderSentence(s)); }
-    if (f.activity === 'rv' && s) out.push(s.topGust >= 20 ? `Gusts to ${s.topGust} around ${s.gustAt}.` : 'Winds stay light.');
+    if (f.activity === 'rv' && s) out.push(awningSentence(s, 'this afternoon and evening'));
     if (f.activity === 'hunting' && s) out.push(`Evening wind from the ${s.windDirLater || s.windDir || 'variable'}${o.sun ? ', last light about ' + o.sun.dusk : ''}.`);
     if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} at the warmest${o.sun ? ', sunset ' + o.sun.set : ''}.`);
     if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Overnight low around ${deg(o.night.lo)}${o.night.text ? ', ' + o.night.text.toLowerCase() : ''}.`);
@@ -1870,7 +1879,8 @@ function outlookSentences(f) {
   } else {
     if (o.day) out.push(`Tomorrow: ${o.day.text ? o.day.text.toLowerCase() : ''}${o.day.hi != null ? ', high near ' + deg(o.day.hi) : ''}${o.day.pop >= 20 ? ', ' + o.day.pop + ' percent chance of rain' : ''}.`);
     if (s) out.push(thunderSentence(s));
-    if (f.activity === 'rv' && (s || o.day)) out.push(s && s.topGust >= 20 ? `Gusts to ${s.topGust} around ${s.gustAt}; plan the awning and any driving around that.` : `Winds look manageable${o.day && o.day.wind ? ', ' + o.day.wind + ' from the ' + (o.day.windDir || '') : ''}.`);
+    if (f.activity === 'rv' && s) out.push(awningSentence(s, 'tomorrow'));
+    else if (f.activity === 'rv' && o.day && o.day.wind) out.push(`Winds tomorrow ${o.day.wind} from the ${o.day.windDir || ''}.`);
     if (f.activity === 'hunting') out.push(`${s && s.windDir ? 'Morning wind from the ' + s.windDir + (s.windDirLater && s.windDirLater !== s.windDir ? ', going ' + s.windDirLater + ' by midday' : '') + '. ' : ''}${o.sun ? 'First light about ' + o.sun.dawn + ', sunrise ' + o.sun.rise + '.' : ''}`);
     if (f.activity === 'trail' && s) out.push(s.feelsHi >= 90 ? `It'll feel like ${deg(s.feelsHi)} by afternoon; start early.` : s.feelsLo <= 25 ? `Cold start, wind chill near ${deg(s.feelsLo)}.` : `Temperatures ${deg(s.lo)} to ${deg(s.hi)}${o.sun ? ', sunset ' + o.sun.set : ''}.`);
     if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Tomorrow night around ${deg(o.night.lo)}.`);
