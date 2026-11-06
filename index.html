@@ -614,7 +614,7 @@ const KEY = 'campRadar.v1';
 const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
-  brief: { speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
+  brief: { lang: 'en', speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
@@ -1905,17 +1905,30 @@ const inchWord = v => v == null ? '—' : v < 1 ? (v < 0.3 ? 'a trace' : 'under 
 const snowy = () => S.activity === 'skiing' || (st.wx.hourly0 && st.wx.hourly0.temperature <= 40);
 
 /* ------------------------------ briefing + speech ------------------- */
+/* ---- languages: the device writes English and Spanish itself; the backend's model writer handles the rest ---- */
+const LANGS = { en: ['English', 'en-US'], es: ['Español', 'es-US'], zh: ['中文 (普通话)', 'zh-CN'], vi: ['Tiếng Việt', 'vi-VN'], tl: ['Filipino / Tagalog', 'fil-PH'], fr: ['Français', 'fr-FR'], ko: ['한국어', 'ko-KR'], ar: ['العربية', 'ar-SA'], ru: ['Русский', 'ru-RU'], de: ['Deutsch', 'de-DE'], pt: ['Português', 'pt-BR'], ht: ['Kreyòl ayisyen', 'ht-HT'] };
+const LANG_NAMES_EN = { en: 'English', es: 'Spanish (US)', zh: 'Simplified Chinese (Mandarin)', vi: 'Vietnamese', tl: 'Filipino (Tagalog)', fr: 'French', ko: 'Korean', ar: 'Arabic', ru: 'Russian', de: 'German', pt: 'Brazilian Portuguese', ht: 'Haitian Creole' };
+const lang = () => LANGS[S.brief.lang] ? S.brief.lang : 'en';
+const DEVICE_LANGS = ['en', 'es'];
+
 const speech = { ok: 'speechSynthesis' in window, voices: [], speaking: false };
-function loadVoices() { if (!speech.ok) return; speech.voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang)); }
+function voiceLangRe() { const l = lang(); return new RegExp('^' + (l === 'tl' ? '(fil|tl)' : l === 'zh' ? 'zh' : l), 'i'); }
+function loadVoices() { if (!speech.ok) return; speech.voices = speechSynthesis.getVoices().filter(v => voiceLangRe().test(v.lang.replace('_', '-'))); }
 if (speech.ok) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
 function pickVoice() {
   if (!speech.voices.length) loadVoices();
   const want = S.brief.voice && speech.voices.find(v => v.name === S.brief.voice);
-  return want || speech.voices.find(v => /en-US/i.test(v.lang) && /Google|Natural|Samantha|Premium/i.test(v.name)) || speech.voices.find(v => /en-US/i.test(v.lang)) || speech.voices[0] || null;
+  const pref = { en: /en-US/i, es: /es-(US|MX|419)/i, zh: /zh-CN|cmn/i, pt: /pt-BR/i, fr: /fr-(CA|FR)/i, ar: /ar/i }[lang()] || voiceLangRe();
+  return want || speech.voices.find(v => pref.test(v.lang) && /Google|Natural|Samantha|Premium|Neural/i.test(v.name)) || speech.voices.find(v => pref.test(v.lang)) || speech.voices[0] || null;
 }
 const DIR_WORDS = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast', SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest', W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
 // Make status text and briefings read well aloud
 function spokenForm(text) {
+  if (lang() === 'es') return String(text)
+    .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_ES[d] || m)
+    .replace(/(\d)\s*mi\b/g, '$1 millas').replace(/\bmph\b/g, 'millas por hora').replace(/°/g, ' grados').replace(/≈/g, 'hacia las').replace(/\bg(\d+)/g, 'con ráfagas de $1')
+    .replace(/\b(\d+)\s*h\b/g, '$1 horas').replace(/\b1 horas\b/g, '1 hora').replace(/\b1 min\b/g, '1 minuto').replace(/\bmin\b/g, 'minutos').replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
+  if (lang() !== 'en') return String(text).replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
   return String(text)
     .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_WORDS[d] || m)
     .replace(/\b(nne|ene|ese|sse|ssw|wsw|wnw|nnw)\b/g, m => DIR_WORDS[m.toUpperCase()])
@@ -1930,7 +1943,7 @@ function speak(text, opts) {
   const parts = String(text).replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
   const v = pickVoice();
   parts.forEach((part, i) => {
-    const u = new SpeechSynthesisUtterance(part.trim()); if (v) u.voice = v; u.rate = S.brief.rate || 1; u.volume = Math.max(0.05, S.volume);
+    const u = new SpeechSynthesisUtterance(part.trim()); u.lang = LANGS[lang()][1]; if (v) u.voice = v; u.rate = S.brief.rate || 1; u.volume = Math.max(0.05, S.volume);
     u.onstart = () => { speech.speaking = true; updateSpeakBtns(); }; u.onend = u.onerror = () => { if (i === parts.length - 1) { speech.speaking = false; updateSpeakBtns(); } };
     speechSynthesis.speak(u);
   });
@@ -2119,15 +2132,192 @@ function outlookSentences(f) {
   }
   return out;
 }
-function composeBriefing(f) {
+function composeBriefingEN(f) {
   const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody, beach: beachBody, skiing: skiingBody }[f.activity] || campingBody;
   return precipify([...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
 }
+
+// --- Spanish word lists ---
+const DIRS_LONG_ES = ['norte', 'nornoreste', 'noreste', 'estenoreste', 'este', 'estesureste', 'sureste', 'sursureste', 'sur', 'sursuroeste', 'suroeste', 'oestesuroeste', 'oeste', 'oestenoroeste', 'noroeste', 'nornoroeste'];
+const DIR_ES = { N: 'norte', NNE: 'nornoreste', NE: 'noreste', ENE: 'estenoreste', E: 'este', ESE: 'estesureste', SE: 'sureste', SSE: 'sursureste', S: 'sur', SSW: 'sursuroeste', SW: 'suroeste', WSW: 'oestesuroeste', W: 'oeste', WNW: 'oestenoroeste', NW: 'noroeste', NNW: 'nornoroeste' };
+const DIR_LONG_ES = { north: 'norte', northeast: 'noreste', east: 'este', southeast: 'sureste', south: 'sur', southwest: 'suroeste', west: 'oeste', northwest: 'noroeste', variable: 'variable' };
+const dirES = d => { if (!d) return 'variable'; const k = String(d).toUpperCase(); if (DIR_ES[k]) return DIR_ES[k]; return DIR_LONG_ES[String(d).toLowerCase()] || d; };
+const INTENSITY_ES = { Light: 'ligera', Moderate: 'moderada', Heavy: 'fuerte', 'Very heavy': 'muy fuerte' };
+const PRECIP_ES = { rain: 'lluvia', snow: 'nieve', sleet: 'aguanieve', 'freezing rain': 'lluvia helada', 'wintry mix': 'mezcla invernal' };
+const MOON_ES = { 'New moon': 'luna nueva', 'Waxing crescent': 'luna creciente', 'First quarter': 'cuarto creciente', 'Waxing gibbous': 'gibosa creciente', 'Full moon': 'luna llena', 'Waning gibbous': 'gibosa menguante', 'Last quarter': 'cuarto menguante', 'Waning crescent': 'luna menguante' };
+const PRESSURE_ES = { rising: 'subiendo', falling: 'bajando', steady: 'estable' };
+const uvWordES = u => u >= 11 ? 'extremo' : u >= 8 ? 'muy alto' : u >= 6 ? 'alto' : u >= 3 ? 'moderado' : 'bajo';
+const inchWordES = v => v == null ? '—' : v < 1 ? (v < 0.3 ? 'una traza' : 'menos de una pulgada') : Math.round(v) + (Math.round(v) === 1 ? ' pulgada' : ' pulgadas');
+function fmtDurES(min, exact) { min = Math.round(min); const ex = m => { if (m < 60) return m + ' min'; const h = Math.floor(m / 60), r = m % 60; return h + ' h' + (r ? ' ' + r + ' min' : ''); }; if (exact || min < 10) return ex(min); const d = min % 10; return d === 0 ? ex(min) : d < 5 ? 'poco más de ' + ex(min - d) : 'poco menos de ' + ex(min - d + 10); }
+// NWS forecast phrases ("Mostly Sunny then Slight Chance Showers") in Spanish; longest phrases first
+const WX_ES = [['slight chance of', 'ligera probabilidad de'], ['slight chance', 'ligera probabilidad de'], ['chance of', 'probabilidad de'], ['chance', 'probabilidad de'], ['likely', 'probable'], ['rain showers', 'chubascos'], ['snow showers', 'chubascos de nieve'], ['showers and thunderstorms', 'chubascos y tormentas'], ['thunderstorms', 'tormentas'], ['showers', 'chubascos'], ['freezing rain', 'lluvia helada'], ['freezing drizzle', 'llovizna helada'], ['freezing fog', 'niebla helada'], ['wintry mix', 'mezcla invernal'], ['blowing snow', 'ventisca de nieve'], ['heavy snow', 'nieve fuerte'], ['light snow', 'nieve ligera'], ['light rain', 'lluvia ligera'], ['heavy rain', 'lluvia fuerte'], ['sleet', 'aguanieve'], ['drizzle', 'llovizna'], ['rain', 'lluvia'], ['snow', 'nieve'], ['mostly sunny', 'mayormente soleado'], ['partly sunny', 'parcialmente soleado'], ['mostly clear', 'mayormente despejado'], ['partly cloudy', 'parcialmente nublado'], ['mostly cloudy', 'mayormente nublado'], ['patchy fog', 'niebla dispersa'], ['dense fog', 'niebla densa'], ['areas of fog', 'áreas de niebla'], ['areas of', 'áreas de'], ['sunny', 'soleado'], ['clear', 'despejado'], ['cloudy', 'nublado'], ['overcast', 'cubierto'], ['fog', 'niebla'], ['haze', 'bruma'], ['smoke', 'humo'], ['windy', 'ventoso'], ['breezy', 'con brisa'], ['blustery', 'ventoso'], ['hot', 'caluroso'], ['cold', 'frío'], ['isolated', 'aislados'], ['scattered', 'dispersos'], ['frost', 'escarcha'], ['hail', 'granizo'], ['then', 'luego'], ['and', 'y']];
+function wxES(t) { if (!t) return ''; let s = ' ' + String(t).toLowerCase() + ' '; for (const [en, es] of WX_ES) s = s.replace(new RegExp('(?<![a-záéíóú])' + en + '(?![a-záéíóú])', 'g'), es); return s.trim(); }
+// NWS alert names
+const EVENT_ES = { Tornado: 'tornado', 'Severe Thunderstorm': 'tormenta severa', 'Flash Flood': 'inundación repentina', Flood: 'inundación', 'Coastal Flood': 'inundación costera', 'Areal Flood': 'inundación', Hurricane: 'huracán', 'Tropical Storm': 'tormenta tropical', 'Storm Surge': 'marejada ciclónica', 'Extreme Wind': 'viento extremo', 'High Wind': 'viento fuerte', Wind: 'viento', 'Lake Wind': 'viento en el lago', Tsunami: 'tsunami', Blizzard: 'ventisca', 'Ice Storm': 'tormenta de hielo', 'Winter Storm': 'tormenta invernal', 'Winter Weather': 'clima invernal', 'Extreme Cold': 'frío extremo', 'Cold Weather': 'frío', 'Wind Chill': 'sensación térmica baja', Freeze: 'heladas', 'Hard Freeze': 'heladas fuertes', Frost: 'escarcha', Avalanche: 'avalancha', 'Excessive Heat': 'calor excesivo', 'Extreme Heat': 'calor extremo', Heat: 'calor', 'Red Flag': 'bandera roja', 'Fire Weather': 'clima propicio para incendios', 'Rip Current': 'corrientes de resaca', 'High Surf': 'oleaje alto', 'Small Craft': 'embarcaciones pequeñas', Gale: 'vendaval', 'Dense Fog': 'niebla densa', 'Dense Smoke': 'humo denso', 'Dust Storm': 'tormenta de polvo', 'Air Quality': 'calidad del aire', 'Special Weather': 'tiempo especial', Hydrologic: 'hidrológico', 'Beach Hazards': 'peligros en la playa', 'Severe Weather': 'tiempo severo' };
+function eventES(ev) {
+  if (!ev) return '';
+  const m = ev.match(/^(.*?)\s*(Warning|Watch|Advisory|Statement|Outlook|Emergency)$/);
+  const kind = m ? { Warning: 'aviso de', Watch: 'vigilancia de', Advisory: 'advertencia de', Statement: 'declaración de', Outlook: 'perspectiva de', Emergency: 'emergencia de' }[m[2]] : '';
+  const noun = m ? (EVENT_ES[m[1]] || m[1].toLowerCase()) : (EVENT_ES[ev] || ev.toLowerCase());
+  const r = (kind + ' ' + noun).trim(); return r[0].toUpperCase() + r.slice(1);
+}
+// Status line (English, built by computeStatus) rendered in Spanish for spoken alerts and the "estado" command
+function statusES(t) {
+  return String(t)
+    .replace(/No rain heading your way/g, 'No viene lluvia hacia ti').replace(/Clear within 50 miles/g, 'Despejado en 50 millas a la redonda')
+    .replace(/Rain arriving in ~(\d+) min/g, 'Lluvia llega en unos $1 minutos').replace(/Rain arriving ≈ ([^(]+) \(in ([^)]+)\)/g, (m, c, d) => 'Lluvia llega hacia las ' + c.trim() + ' (en ' + d.replace('just over', 'poco más de').replace('just under', 'poco menos de') + ')')
+    .replace(/(Light|Moderate|Heavy|Very heavy)(, strengthening|, weakening)? rain at your location/g, (m, i, tr) => 'Lluvia ' + INTENSITY_ES[i] + (tr ? (/strength/.test(tr) ? ', intensificándose,' : ', debilitándose,') : '') + ' sobre tu ubicación')
+    .replace(/(Light|Moderate|Heavy|Very heavy)(, strengthening|, weakening)? rain from the (\w+)/g, (m, i, tr, d) => 'Lluvia ' + INTENSITY_ES[i] + (tr ? (/strength/.test(tr) ? ', intensificándose,' : ', debilitándose,') : '') + ' desde el ' + dirES(d))
+    .replace(/Rain to the (\w+) is weakening — may fizzle before it reaches you/g, (m, d) => 'La lluvia al ' + dirES(d) + ' se está debilitando; puede disiparse antes de llegar')
+    .replace(/Light rain may reach you ≈ (.+)/g, 'Lluvia ligera podría llegar hacia las $1').replace(/Low confidence — NWS shows (\d+)% chance in the next 2 hours/g, 'Poca confianza: el NWS da $1% de probabilidad en las próximas 2 horas')
+    .replace(/Rain (\d+) mi (\w+) — passing to the (\w+)/g, (m, n, d, p) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', pasando hacia el ' + dirES(p)).replace(/Rain (\d+) mi (\w+) — not heading your way/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', no viene hacia ti')
+    .replace(/Rain (\d+) mi (\w+)/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d)).replace(/Likely ending ≈/g, 'Probablemente termina hacia las').replace(/May continue for a while/g, 'Puede continuar un rato')
+    .replace(/Closest ≈ (\d+) mi/g, 'Lo más cerca: $1 millas').replace(/Movement unclear[^·—]*/g, 'Movimiento poco claro').replace(/keep an eye on it/g, 'vigílala').replace(/Storms moving (\w+) at (\d+) mph/g, (m, d, s) => 'Tormentas moviéndose al ' + dirES(d) + ' a ' + s + ' millas por hora')
+    .replace(/(\d+) strikes? within 10 mi/g, '$1 rayos en 10 millas').replace(/Lightning within ten miles\.?/g, 'Rayos a menos de diez millas.').replace(/Wildfire within ten miles\.?/g, 'Incendio forestal a menos de diez millas.').replace(/Flooding nearby\.?/g, 'Inundación cercana.')
+    .replace(/Take shelter now\.?/g, 'Busca refugio ahora.').replace(/Whiteout conditions: visibility under a quarter mile in (.+)/g, (m, p) => 'Condiciones de visibilidad nula: menos de un cuarto de milla por ' + (PRECIP_ES[p] || p))
+    .replace(/Rain tracking unavailable/g, 'Seguimiento de lluvia no disponible').replace(/Waiting for location…/g, 'Esperando la ubicación…').replace(/Checking radar…/g, 'Revisando el radar…')
+    .replace(/\b(Tornado|Severe Thunderstorm|Flash Flood|Flood|Hurricane|Tropical Storm|Storm Surge|Extreme Wind|Tsunami|Blizzard|Ice Storm|Winter Storm|Extreme Cold|Avalanche) (Warning|Watch|Advisory)\b/g, m => eventES(m));
+}
+
+const precipifyES = (text, pt) => { if (!pt || pt === 'rain' || !text) return text; const w = PRECIP_ES[pt] || pt; return String(text).replace(/\bLluvia\b/g, w[0].toUpperCase() + w.slice(1)).replace(/\blluvia\b/g, w); };
+const rainSentenceES = (s, when, subject) => !s ? '' : s.rainFrom ? `Lluvia ${s.allRain ? 'la mayor parte de ' + when : 'alrededor de las ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' a las ' + s.rainTo : '')}, hasta ${s.maxPop} por ciento.` : s.maxPop >= 20 ? `Poca probabilidad de lluvia ${when}, ${s.maxPop} por ciento como máximo.` : `${subject} seco.`;
+const thunderSentenceES = s => s && s.thunderFrom ? `Posibles tormentas alrededor de las ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' a las ' + s.thunderTo : ''}.` : '';
+function awningSentenceES(s, when) {
+  if (!s) return '';
+  const g = s.topGust, at = s.gustAt;
+  if (g >= 30) return `El viento es lo importante ${when}: ráfagas de ${g} alrededor de las ${at}. Recoge el toldo antes, y será un camino difícil para un vehículo alto.`;
+  if (g >= 20) return `Ráfagas de unas ${g} alrededor de las ${at}; es viento para recoger el toldo, así que planea guardarlo para entonces.`;
+  if (g >= 15) return `Ráfagas máximas de unas ${g} alrededor de las ${at}: el toldo puede quedarse fuera, pero vigílalo si el viento aumenta.`;
+  return `Ráfagas máximas de solo ${g} ${when}${g > 5 ? ', alrededor de las ' + at : ''}; el toldo puede quedarse fuera.`;
+}
+function leadSentencesES(f) {
+  const out = [], pt = f.precipType, lluvia = PRECIP_ES[pt] || 'lluvia';
+  const name = { camping: 'de campamento', rv: 'para la casa rodante', hunting: 'de caza', trail: 'de sendero', beach: 'de playa', skiing: 'de esquí' }[f.activity] || 'de campamento';
+  out.push(`Este es tu informe ${name}${f.place ? ' cerca de ' + f.place : ''} a las ${f.time}.`);
+  if (f.now.temp && f.now.temp !== '--°') out.push(`Ahora mismo hay ${f.now.temp.replace('°', ' grados')}${f.now.cond ? ', ' + wxES(f.now.cond) : ''}${f.now.wind ? ', viento del ' + dirES((f.now.wind.match(/wind\s+(\w+)/i) || [])[1]) + ' a ' + ((f.now.wind.match(/(\d+)\s*mph/i) || [])[1] || '') + ' millas por hora' : ''}.`);
+  for (const a of f.alerts.filter(a => a.critical)) out.push(`Atención: hay ${/^(Vigilancia|Advertencia|Declaración|Emergencia)/.test(eventES(a.event)) ? 'una' : 'un'} ${eventES(a.event).toLowerCase()} en vigor${a.ends ? ' hasta las ' + a.ends : ''}. Tómalo en serio.`);
+  if (f.rain) {
+    const ints = INTENSITY_ES[f.rain.intensity] || '';
+    if (f.rain.fizzles) out.push(`Hay ${lluvia} al ${dirES(f.rain.from)}, pero se está debilitando y probablemente se disipe antes de llegar.`);
+    else if (f.rain.etaMin <= 1) out.push(`Hay ${lluvia} ${ints} sobre ti ahora${f.rain.endMin < 115 ? ', que probablemente amaine en ' + fmtDurES(f.rain.endMin) : ''}.`);
+    else out.push(`Viene ${lluvia} ${ints}${f.rain.trend === 'strengthening' ? ', y se está intensificando,' : f.rain.trend === 'weakening' ? ', aunque debilitándose,' : ''} desde el ${dirES(f.rain.from)} y debería llegar en ${fmtDurES(f.rain.etaMin)}.`);
+  } else if (f.passing) out.push(`Hay ${lluvia} a ${f.passing.distMi} millas al ${dirES(f.passing.dir)} que pasa hacia el ${dirES(f.passing.passDir)}; no debería alcanzarte.`);
+  else out.push(`No viene ${lluvia} hacia ti por ahora.`);
+  if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Hay rayos a menos de diez millas, el más cercano a unas ${f.lightning.nearestMi} millas al ${dirES(f.lightning.dir)}${f.lightning.trend === 'approaching' ? ' y acercándose' : ''}. Busca refugio.` : `Hay rayos a ${f.lightning.nearestMi} millas al ${dirES(f.lightning.dir)}${f.lightning.trend === 'approaching' ? ', acercándose' : f.lightning.trend === 'receding' ? ', alejándose' : ''}.`);
+  for (const h of f.hazards) out.push(h + '.');
+  for (const t of f.tropical.filter(t => !/Warning/.test(t.event))) out.push(`Hay ${/^(Vigilancia|Advertencia|Declaración|Emergencia)/.test(eventES(t.event)) ? 'una' : 'un'} ${eventES(t.event).toLowerCase()} en vigor para esta zona.`);
+  if (f.visibilityMi != null && f.visibilityMi <= 0.5) out.push(`La visibilidad baja a ${f.visibilityMi <= 0.3 ? 'un cuarto de milla o menos' : f.visibilityMi + ' millas'}${pt !== 'rain' ? ' por ' + lluvia : ''}.`);
+  return out;
+}
+function beachBodyES(f) {
+  const s = f.nextStats, b = f.beach, out = [];
+  if (b) {
+    if (b.rip === 'high') out.push('El riesgo de corrientes de resaca es alto hoy; nada cerca de un salvavidas y no entres si tienes dudas.');
+    else if (b.rip === 'elevated') out.push(`Hay avisos costeros: ${b.alerts.map(e => eventES(e).toLowerCase()).join(', ')}.`);
+    if (b.tides.length) out.push('Mareas: ' + b.tides.slice(0, 3).map(t => (t.type === 'high' ? 'alta' : 'baja') + ' a las ' + t.at).join(', ') + (b.station ? ', en ' + b.station : '') + '.');
+    if (b.waterF != null) out.push(`El agua está a ${b.waterF} grados.`);
+    if (b.uvMaxToday != null) out.push(`El índice UV llega a ${b.uvMaxToday}, ${uvWordES(b.uvMaxToday)}${b.uvMaxToday >= 6 ? '; cúbrete y vuelve a aplicar protector solar' : ''}.`);
+  } else out.push('No hay estación de mareas a menos de sesenta millas de aquí.');
+  if (s) { out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s)); if (s.waveMax != null) out.push(`Olas de alrededor de ${s.waveMax} pies.`); out.push(`Viento de ${s.windNow} del ${dirES(s.windDir)}${s.topGust >= 20 ? ', con ráfagas de ' + s.topGust : ''}; temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`); }
+  if (f.sun) out.push(`El sol se pone a las ${f.sun.set}.`);
+  return out;
+}
+function skiingBodyES(f) {
+  const s = f.nextStats, out = [], g = f.snowGround;
+  if (g && g.site) out.push(`Nieve en el suelo: ${inchWordES(g.site.depthIn)} en la estación de nieve ${g.site.name}, a ${g.site.distMi} millas y ${g.site.elevFt.toLocaleString()} pies${g.site.change24In > 0 ? ', ' + inchWordES(g.site.change24In) + ' nuevas en el último día' : g.site.change72In > 0 ? ', ' + inchWordES(g.site.change72In) + ' nuevas en tres días' : ', sin nieve nueva recientemente'}.`);
+  else if (g && g.modelDepthIn != null) out.push(`La nieve en el suelo en tu sitio es de unas ${inchWordES(g.modelDepthIn)}, según el modelo${g.modelChange24In > 0.3 ? ', ' + inchWordES(g.modelChange24In) + ' más en el último día' : ''}.`);
+  if (!s) return out;
+  out.push(s.snowIn >= 0.5 ? `Unas ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} pulgadas de nieve nueva${s.snowFrom ? ', empezando alrededor de las ' + s.snowFrom : ''}.` : s.maxPop >= 30 ? `Un ${s.maxPop} por ciento de probabilidad de ${f.precipType === 'rain' ? 'lluvia, no nieve' : 'nieve ligera'}.` : 'Sin nieve nueva en las próximas horas.');
+  out.push(`La sensación térmica baja a ${deg(s.feelsLo)}${s.feelsLo <= 0 ? '; posible congelación de la piel expuesta en media hora' : s.feelsLo <= 20 ? '; cubre la piel expuesta' : ''}.`);
+  out.push(s.topGust >= 40 ? `Ráfagas de ${s.topGust} alrededor de las ${s.gustAt}; espera cierres por viento en los remontes expuestos.` : s.topGust >= 25 ? `Ráfagas de ${s.topGust} alrededor de las ${s.gustAt}; los remontes altos pueden ir lentos o cerrar.` : 'Vientos suaves, así que los remontes deberían funcionar con normalidad.');
+  if (s.visMin != null && s.visMin < 1) out.push(`La visibilidad baja a ${s.visMin <= 0.3 ? 'un cuarto de milla o menos' : s.visMin + ' millas'} por momentos; posible luz plana y condiciones de visibilidad nula.`);
+  out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`);
+  if (f.sun) out.push(`El sol se pone a las ${f.sun.set}.`);
+  return out;
+}
+function campingBodyES(f) {
+  const s = f.nextStats, out = [];
+  if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`Hay ${inchWordES(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)} de nieve en el suelo.`);
+  if (!s) return out;
+  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  if (s.topGust >= 25) out.push(`El viento sube a unas ${s.topGust} alrededor de las ${s.gustAt}; asegura las lonas y mantén la fogata pequeña.`);
+  else if (s.topGust >= 15) out.push(`Brisa de hasta ${s.topGust} alrededor de las ${s.gustAt}.`);
+  else out.push('El viento se mantiene suave.');
+  if (f.today.night && f.today.night.lo != null) out.push(`Esta noche baja a unos ${deg(f.today.night.lo)}${f.today.night.text ? ', ' + wxES(f.today.night.text) : ''}.`);
+  if (f.sun && f.sun.minsToSunset > 0 && f.sun.minsToSunset < 360) out.push(`El sol se pone a las ${f.sun.set}, en ${fmtDurES(f.sun.minsToSunset)}.`);
+  return out;
+}
+function rvBodyES(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(awningSentenceES(s, 'en las próximas horas'));
+  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  if (s.maxThunder >= 40) out.push('Con tormentas así de fuertes es posible el granizo; el radar en vivo es lo que hay que vigilar.');
+  out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' por la noche' : ''}.`);
+  return out;
+}
+function huntingBodyES(f) {
+  const s = f.nextStats, out = [];
+  if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`Nieve en el suelo: ${inchWordES(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)}; buena para rastrear.`);
+  if (!s) return out;
+  out.push(`El viento viene del ${dirES(s.windDir)} a ${s.windNow}${s.windDirLater && s.windDirLater !== s.windDir ? ', girando al ' + dirES(s.windDirLater) + ' más tarde' : ', y se mantiene'}${s.topGust >= 20 ? ', con ráfagas de ' + s.topGust : ''}.`);
+  if (f.pressure) out.push(`La presión está en ${f.pressure.inHg} y ${PRESSURE_ES[f.pressure.word] || f.pressure.word}${f.pressure.fast ? ' rápido' : ''}${f.pressure.word === 'falling' ? '; probablemente se acerca un frente' : f.pressure.word === 'rising' ? '; el tiempo se está asentando' : ''}.`);
+  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`);
+  if (f.sun) out.push(`Amanece a las ${f.sun.rise} y anochece a las ${f.sun.set}; la luz legal va más o menos media hora antes y después. La luna está al ${f.moon.ill} por ciento, ${MOON_ES[f.moon.name] || f.moon.name.toLowerCase()}.`);
+  return out;
+}
+function trailBodyES(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  if (s.feelsHi >= 90) out.push(`La sensación térmica llegará a ${deg(s.feelsHi)} en el punto más alto; lleva agua extra y sal temprano.`);
+  else if (s.feelsLo <= 25) out.push(`La sensación térmica baja a ${deg(s.feelsLo)}; abrígate.`);
+  else out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}, cómodas para el esfuerzo.`);
+  if (s.topGust >= 20) out.push(`Ráfagas de ${s.topGust} alrededor de las ${s.gustAt}; espera viento en contra en los tramos expuestos.`);
+  if (f.sun && f.sun.minsToSunset > 0) out.push(`El sol se pone a las ${f.sun.set}, en ${fmtDurES(f.sun.minsToSunset)}; planea estar de vuelta para las ${f.sun.dusk}.`);
+  return out;
+}
+function outlookSentencesES(f) {
+  const o = f.outlook, s = o.stats, out = [];
+  if (!s && !o.day && !o.night) return out;
+  const label = f.morning ? 'esta tarde y esta noche' : 'mañana';
+  out.push(`Mirando ${label}:`);
+  if (f.morning) {
+    if (s) out.push(rainSentenceES(s, 'esta tarde y esta noche', 'Se ve'), thunderSentenceES(s));
+    if (f.activity === 'rv' && s) out.push(awningSentenceES(s, 'esta tarde y esta noche'));
+    if (f.activity === 'hunting' && s) out.push(`Viento de la tarde del ${dirES(s.windDirLater || s.windDir)}${o.sun ? ', última luz alrededor de las ' + o.sun.dusk : ''}.`);
+    if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} en lo más cálido${o.sun ? ', puesta de sol a las ' + o.sun.set : ''}.`);
+    if (f.activity === 'skiing' && s) out.push(s.snowIn >= 0.5 ? `Unas ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} pulgadas más para la noche.` : 'No se espera más nieve hoy.', s.feelsLo <= 20 ? `Sensación térmica cerca de ${deg(s.feelsLo)} al anochecer.` : '');
+    if (f.activity === 'beach' && f.beach) out.push(f.beach.tides.slice(0, 2).map(t => 'marea ' + (t.type === 'high' ? 'alta' : 'baja') + ' a las ' + t.at).join(', ') + '.');
+    if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Mínima nocturna de unos ${deg(o.night.lo)}${o.night.text ? ', ' + wxES(o.night.text) : ''}.`);
+    else if (o.night && o.night.lo != null && f.activity !== 'camping') out.push(`Mínima esta noche de unos ${deg(o.night.lo)}.`);
+  } else {
+    if (o.day) out.push(`Mañana: ${wxES(o.day.text)}${o.day.hi != null ? ', máxima cerca de ' + deg(o.day.hi) : ''}${o.day.pop >= 20 ? ', ' + o.day.pop + ' por ciento de probabilidad de lluvia' : ''}.`);
+    if (s) out.push(thunderSentenceES(s));
+    if (f.activity === 'rv' && s) out.push(awningSentenceES(s, 'mañana'));
+    else if (f.activity === 'rv' && o.day && o.day.wind) out.push(`Vientos mañana de ${o.day.wind.replace(/mph/, 'millas por hora')} del ${dirES(o.day.windDir)}.`);
+    if (f.activity === 'hunting') out.push(`${s && s.windDir ? 'Viento de la mañana del ' + dirES(s.windDir) + (s.windDirLater && s.windDirLater !== s.windDir ? ', girando al ' + dirES(s.windDirLater) + ' hacia el mediodía' : '') + '. ' : ''}${o.sun ? 'Primera luz alrededor de las ' + o.sun.dawn + ', amanecer a las ' + o.sun.rise + '.' : ''}`);
+    if (f.activity === 'trail' && s) out.push(s.feelsHi >= 90 ? `La sensación térmica llegará a ${deg(s.feelsHi)} por la tarde; empieza temprano.` : s.feelsLo <= 25 ? `Inicio frío, sensación térmica cerca de ${deg(s.feelsLo)}.` : `Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}${o.sun ? ', puesta de sol a las ' + o.sun.set : ''}.`);
+    if (f.activity === 'camping' && o.night && o.night.lo != null) out.push(`Mañana por la noche unos ${deg(o.night.lo)}.`);
+    if (f.activity === 'skiing' && s) out.push(s.snowIn >= 0.5 ? `Unas ${s.snowIn < 10 ? s.snowIn : Math.round(s.snowIn)} pulgadas de nieve nueva mañana${s.snowFrom ? ', empezando alrededor de las ' + s.snowFrom : ''}.` : 'Sin nieve nueva mañana.', s.topGust >= 25 ? `Ráfagas de ${s.topGust}; atento a cierres de remontes.` : '', `Sensación térmica hasta ${deg(s.feelsLo)}.`);
+    if (f.activity === 'beach' && f.beach) out.push(f.beach.uvMaxTomorrow != null ? `El índice UV llega a ${f.beach.uvMaxTomorrow} mañana.` : '', s && s.waveMax != null ? `Olas de alrededor de ${s.waveMax} pies.` : '');
+  }
+  return out;
+}
+function composeBriefingES(f) {
+  const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES }[f.activity] || campingBodyES;
+  return precipifyES([...leadSentencesES(f), ...body(f), ...outlookSentencesES(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'), f.precipType);
+}
+function composeBriefing(f) { return lang() === 'es' ? composeBriefingES(f) : composeBriefingEN(f); }
+// Text for the speech engine in the selected language (status lines and alerts are built in English)
+function localizeSpoken(text) { return lang() === 'es' ? statusES(text) : text; }
+
 async function getBriefing() {
   if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
   if (snowy()) { try { await refreshSnow(); } catch (e) {} }
-  const facts = briefingFacts();
-  let text = composeBriefing(facts), source = 'device';
+  const facts = briefingFacts(); facts.language = LANGS[lang()][1]; facts.languageName = LANG_NAMES_EN[lang()];
+  let text = composeBriefing(facts), source = DEVICE_LANGS.includes(lang()) ? 'device' : 'device-en';
   if (BE()) {
     try {
       const r = await fetchT(BE() + '/brief', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ facts, fallback: text }) }, 20000);
@@ -2145,13 +2335,13 @@ async function openBriefing(autoSpeak) {
   const b = await getBriefing();
   if (!$('#briefText')) return;
   $('#briefText').textContent = b.text; st.lastBrief = b.text;
-  $('#briefSrc').textContent = b.source === 'device' ? 'Written on this device from NWS data' + (BE() ? ' (backend writer not available)' : '') : 'Written by the backend from NWS data';
+  $('#briefSrc').textContent = b.source === 'device-en' ? 'Shown in English: ' + LANG_NAMES_EN[lang()] + ' briefings need the backend writer, which is not available right now' : b.source === 'device' ? 'Written on this device from NWS data' + (BE() ? ' (backend writer not available)' : '') : 'Written by the backend from NWS data';
   if (autoSpeak) speak(b.text);
   if (!speech.ok) $('#briefSrc').textContent += ' · this browser cannot speak';
 }
 $('#btnBrief').addEventListener('click', () => openBriefing(true));
 // Spoken alerts: short sentences when a chime fires
-function speakAlert(text) { if (S.brief.speakAlerts) setTimeout(() => speak(text, { queue: true }), 2500); }
+function speakAlert(text) { if (S.brief.speakAlerts) setTimeout(() => speak(localizeSpoken(text), { queue: true }), 2500); }
 // Scheduled briefings
 let lastAutoBrief = { key: '' };
 function checkScheduledBriefing() {
@@ -2201,7 +2391,7 @@ function listenForCommand() {
   if (voice.listening) return;
   voice.listening = true; $('#voiceChip').hidden = false; $('#voiceChip').textContent = 'Listening…';
   if (speech.speaking) stopSpeaking();
-  const r = new SR(); voice.rec = r; r.lang = 'en-US'; r.continuous = false; r.interimResults = true; r.maxAlternatives = 5;
+  const r = new SR(); voice.rec = r; r.lang = LANGS[lang()][1]; r.continuous = false; r.interimResults = true; r.maxAlternatives = 5;
   let finalDone = false;
   const finish = () => { voice.listening = false; $('#voiceChip').hidden = true; voice.rec = null; };
   const timer = setTimeout(() => { try { r.stop(); } catch (e) {} }, 7000);
@@ -2214,30 +2404,32 @@ function listenForCommand() {
   r.onend = () => { clearTimeout(timer); if (!finalDone) finish(); };
   try { r.start(); } catch (e) { finish(); }
 }
-const say = t => { if (S.voice.confirm) speak(t); };
+const SAY_ES = { 'Here is your briefing.': 'Aquí está tu informe.', 'Zooming in.': 'Acercando.', 'Zooming out.': 'Alejando.', 'Centered.': 'Centrado.', 'Ten miles.': 'Diez millas.', 'Thirty miles.': 'Treinta millas.', 'Fifty miles.': 'Cincuenta millas.', 'Night mode.': 'Modo nocturno.', 'Day mode.': 'Modo diurno.', 'Automatic.': 'Automático.', "I didn't catch that.": 'No te entendí.', "Sorry, I didn't understand that. Say help for the list of commands.": 'Perdón, no entendí. Di ayuda para la lista de comandos.', 'Voice commands are not supported in this browser.': 'Este navegador no admite comandos de voz.' };
+const say = t => { if (S.voice.confirm) speak(lang() === 'es' ? (SAY_ES[t] || t) : t); };
+const COMMANDS_HELP_ES = 'Di la palabra de activación y luego: informe, acercar, alejar, posponer (una, dos, cuatro u ocho horas), alto, centrar, diez, treinta o cincuenta millas, modo nocturno, modo diurno, estado o ayuda.';
 function handleCommand(alts) {
   const text = alts.join(' | ').toLowerCase();
   const has = re => re.test(text);
-  const hours = (text.match(/\b(one|two|four|eight|1|2|4|8)\b/) || [])[1];
-  const hrs = { one: 1, two: 2, four: 4, eight: 8, '1': 1, '2': 2, '4': 4, '8': 8 }[hours] || 1;
-  if (has(/brief|briefing|forecast|weather report/)) { say('Here is your briefing.'); openBriefing(true); return; }
-  if (has(/zoom in|closer|zoom closer/)) { manualZoom(1); say('Zooming in.'); return; }
-  if (has(/zoom out|back out|farther|further/)) { manualZoom(-1); say('Zooming out.'); return; }
-  if (has(/snooze/)) { S.snoozeUntil = Date.now() + hrs * 3600e3; save(); renderStatus(); pushUpdateSnooze(); say('Rain chime snoozed for ' + hrs + (hrs === 1 ? ' hour.' : ' hours.')); return; }
-  if (has(/\b(stop|quiet|silence|be quiet|shut up|cancel)\b/)) {
+  const hours = (text.match(/\b(one|two|four|eight|una|uno|dos|cuatro|ocho|1|2|4|8)\b/) || [])[1];
+  const hrs = { one: 1, two: 2, four: 4, eight: 8, una: 1, uno: 1, dos: 2, cuatro: 4, ocho: 8, '1': 1, '2': 2, '4': 4, '8': 8 }[hours] || 1;
+  if (has(/brief|briefing|forecast|weather report|informe|reporte|resumen|pronóstico|pronostico/)) { say('Here is your briefing.'); openBriefing(true); return; }
+  if (has(/zoom in|closer|zoom closer|acerca|acercar|ampliar|más cerca|mas cerca/)) { manualZoom(1); say('Zooming in.'); return; }
+  if (has(/zoom out|back out|farther|further|aleja|alejar|más lejos|mas lejos/)) { manualZoom(-1); say('Zooming out.'); return; }
+  if (has(/snooze|posponer|pospón|pospon|silenciar|pausa/)) { S.snoozeUntil = Date.now() + hrs * 3600e3; save(); renderStatus(); pushUpdateSnooze(); say(lang() === 'es' ? 'Aviso de lluvia pospuesto por ' + hrs + (hrs === 1 ? ' hora.' : ' horas.') : 'Rain chime snoozed for ' + hrs + (hrs === 1 ? ' hour.' : ' hours.')); return; }
+  if (has(/\b(stop|quiet|silence|be quiet|shut up|cancel|alto|para|detente|silencio|cállate|callate|cancelar)\b/)) {
     stopSpeaking();
     if (alarmTimer) { for (const a of critAlerts()) S.ack[a.id] = Date.now(); save(); renderAlerts(); }
     return;
   }
-  if (has(/center|centre|recenter|go home|my location/)) { fitRange(); say('Centered.'); return; }
-  if (has(/\b(ten|10)\b/)) { S.range = 10; save(); drawRings(); fitRange(); say('Ten miles.'); return; }
-  if (has(/\b(thirty|30)\b/)) { S.range = 30; save(); drawRings(); fitRange(); say('Thirty miles.'); return; }
-  if (has(/\b(fifty|50)\b/)) { S.range = 50; save(); drawRings(); fitRange(); say('Fifty miles.'); return; }
-  if (has(/night mode|dark mode/)) { S.night = 'night'; save(); applyNight(); say('Night mode.'); return; }
-  if (has(/day mode|light mode/)) { S.night = 'day'; save(); applyNight(); say('Day mode.'); return; }
-  if (has(/auto mode|automatic/)) { S.night = 'auto'; save(); applyNight(); say('Automatic.'); return; }
-  if (has(/status|what's happening|what is happening|any rain|is it going to rain|radar/)) { speak($('#statusMain').textContent + '. ' + $('#statusSub').textContent); return; }
-  if (has(/help|what can you do|commands/)) { speak(COMMANDS_HELP); return; }
+  if (has(/center|centre|recenter|go home|my location|centrar|centro|mi ubicación|mi ubicacion/)) { fitRange(); say('Centered.'); return; }
+  if (has(/\b(ten|diez|10)\b/)) { S.range = 10; save(); drawRings(); fitRange(); say('Ten miles.'); return; }
+  if (has(/\b(thirty|treinta|30)\b/)) { S.range = 30; save(); drawRings(); fitRange(); say('Thirty miles.'); return; }
+  if (has(/\b(fifty|cincuenta|50)\b/)) { S.range = 50; save(); drawRings(); fitRange(); say('Fifty miles.'); return; }
+  if (has(/night mode|dark mode|modo nocturno|modo noche/)) { S.night = 'night'; save(); applyNight(); say('Night mode.'); return; }
+  if (has(/day mode|light mode|modo diurno|modo día|modo dia/)) { S.night = 'day'; save(); applyNight(); say('Day mode.'); return; }
+  if (has(/auto mode|automatic|automático|automatico/)) { S.night = 'auto'; save(); applyNight(); say('Automatic.'); return; }
+  if (has(/status|what's happening|what is happening|any rain|is it going to rain|radar|estado|qué pasa|que pasa|va a llover/)) { speak(localizeSpoken($('#statusMain').textContent + '. ' + $('#statusSub').textContent)); return; }
+  if (has(/help|what can you do|commands|ayuda|comandos/)) { speak(lang() === 'es' ? COMMANDS_HELP_ES : COMMANDS_HELP); return; }
   say("Sorry, I didn't understand that. Say help for the list of commands.");
 }
 $('#micBtn').addEventListener('click', () => { const a = audio(); if (a && a.state !== 'running') a.resume().catch(() => {}); if (voice.listening) { try { voice.rec && voice.rec.stop(); } catch (e) {} } else listenForCommand(); });
@@ -2283,9 +2475,11 @@ function openSettings(tab) {
       '<div class="toggle"><div><div class="tl">Briefing when the screen wakes</div><div class="td">Once per half hour at most</div></div><button class="sw ' + (S.brief.onWake ? 'on' : '') + '" data-brief="onWake"></button></div>' +
       '</div>' +
       '<div class="row"><label>Scheduled briefing times (24-hour, comma separated, e.g. 06:30, 17:00)</label><input id="briefTimes" type="text" inputmode="numeric" value="' + (S.brief.times || '').replace(/"/g, '') + '" placeholder="06:30, 17:00" ' + inputStyle + '><div class="btns"><button data-act="brief-times">Save times</button></div></div>' +
+      '<div class="row"><label>Language (briefings, spoken alerts and voice commands)</label><select id="briefLang" ' + inputStyle + '>' + Object.entries(LANGS).map(([k, [name]]) => '<option value="' + k + '"' + (lang() === k ? ' selected' : '') + '>' + name + (DEVICE_LANGS.includes(k) ? '' : ' — needs the backend writer') + '</option>').join('') + '</select>' +
+      (speech.ok && (loadVoices(), !speech.voices.length) ? '<div style="color:var(--warn,#ffa000);font-size:13px;margin-top:4px">No ' + LANGS[lang()][0] + ' voice is installed on this device; the text will show but cannot be spoken. On Android, install it under Settings → System → Languages → Text-to-speech.</div>' : '') + '</div>' +
       '<div class="row"><label>Voice</label><select id="briefVoice" ' + inputStyle + '>' + ['<option value="">Automatic</option>'].concat((speech.voices.length ? speech.voices : (loadVoices(), speech.voices)).map(v => '<option value="' + v.name.replace(/"/g, '') + '"' + (S.brief.voice === v.name ? ' selected' : '') + '>' + v.name + ' (' + v.lang + ')</option>')).join('') + '</select></div>' +
       '<div class="row"><label>Speech rate</label><input type="range" min="0.7" max="1.4" step="0.05" data-slider="rate" value="' + S.brief.rate + '"></div>' +
-      '<div class="row" style="color:var(--muted);font-size:14px">Briefings use the device\'s own speech engine and work offline. With a backend configured, the text is written by a language model from the same NWS data; otherwise it is composed on the device. The Sound switch (Alerts tab) silences all speech.</div>') +
+      '<div class="row" style="color:var(--muted);font-size:14px">Briefings use the device\'s own speech engine and work offline. English and Spanish are written on the device; the other languages are written by the backend\'s language model from the same NWS data (and English is shown when it is unavailable). The Sound switch (Alerts tab) silences all speech.</div>') +
     pane('voice', '<div class="row">' +
       '<div class="toggle"><div><div class="tl">Wake word</div><div class="td">Always listen for the wake word while the app is on screen; then say a command</div></div><button class="sw ' + (S.voice.enabled ? 'on' : '') + '" data-voice="enabled"></button></div>' +
       '<div class="toggle"><div><div class="tl">Spoken confirmations</div><div class="td">"Zooming in", "Snoozed for one hour"</div></div><button class="sw ' + (S.voice.confirm ? 'on' : '') + '" data-voice="confirm"></button></div></div>' +
@@ -2377,7 +2571,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : lang() === 'en' ? 'Briefings will be in English.' : ''); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
