@@ -1906,19 +1906,19 @@ const snowy = () => S.activity === 'skiing' || (st.wx.hourly0 && st.wx.hourly0.t
 
 /* ------------------------------ briefing + speech ------------------- */
 /* ---- languages: the device writes English and Spanish itself; the backend's model writer handles the rest ---- */
-const LANGS = { en: ['English', 'en-US'], es: ['Español', 'es-US'], zh: ['中文 (普通话)', 'zh-CN'], vi: ['Tiếng Việt', 'vi-VN'], tl: ['Filipino / Tagalog', 'fil-PH'], fr: ['Français', 'fr-FR'], ko: ['한국어', 'ko-KR'], ar: ['العربية', 'ar-SA'], ru: ['Русский', 'ru-RU'], de: ['Deutsch', 'de-DE'], pt: ['Português', 'pt-BR'], ht: ['Kreyòl ayisyen', 'ht-HT'] };
-const LANG_NAMES_EN = { en: 'English', es: 'Spanish (US)', zh: 'Simplified Chinese (Mandarin)', vi: 'Vietnamese', tl: 'Filipino (Tagalog)', fr: 'French', ko: 'Korean', ar: 'Arabic', ru: 'Russian', de: 'German', pt: 'Brazilian Portuguese', ht: 'Haitian Creole' };
+const LANGS = { en: ['English', 'en-US'], es: ['Español', 'es-US'] };
+const LANG_NAMES_EN = { en: 'English', es: 'Spanish (US)' };
 const lang = () => LANGS[S.brief.lang] ? S.brief.lang : 'en';
 const DEVICE_LANGS = ['en', 'es'];
 
 const speech = { ok: 'speechSynthesis' in window, voices: [], speaking: false };
-function voiceLangRe() { const l = lang(); return new RegExp('^' + (l === 'tl' ? '(fil|tl)' : l === 'zh' ? 'zh' : l), 'i'); }
+function voiceLangRe() { return new RegExp('^' + lang(), 'i'); }
 function loadVoices() { if (!speech.ok) return; speech.voices = speechSynthesis.getVoices().filter(v => voiceLangRe().test(v.lang.replace('_', '-'))); }
 if (speech.ok) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
 function pickVoice() {
   if (!speech.voices.length) loadVoices();
   const want = S.brief.voice && speech.voices.find(v => v.name === S.brief.voice);
-  const pref = { en: /en-US/i, es: /es-(US|MX|419)/i, zh: /zh-CN|cmn/i, pt: /pt-BR/i, fr: /fr-(CA|FR)/i, ar: /ar/i }[lang()] || voiceLangRe();
+  const pref = { en: /en-US/i, es: /es-(US|MX|419)/i }[lang()] || voiceLangRe();
   return want || speech.voices.find(v => pref.test(v.lang) && /Google|Natural|Samantha|Premium|Neural/i.test(v.name)) || speech.voices.find(v => pref.test(v.lang)) || speech.voices[0] || null;
 }
 const DIR_WORDS = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast', SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest', W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
@@ -1928,7 +1928,6 @@ function spokenForm(text) {
     .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_ES[d] || m)
     .replace(/(\d)\s*mi\b/g, '$1 millas').replace(/\bmph\b/g, 'millas por hora').replace(/°/g, ' grados').replace(/≈/g, 'hacia las').replace(/\bg(\d+)/g, 'con ráfagas de $1')
     .replace(/\b(\d+)\s*h\b/g, '$1 horas').replace(/\b1 horas\b/g, '1 hora').replace(/\b1 min\b/g, '1 minuto').replace(/\bmin\b/g, 'minutos').replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
-  if (lang() !== 'en') return String(text).replace(/·/g, '.').replace(/—/g, ',').replace(/🔥|🌊|⚡/g, '');
   return String(text)
     .replace(/\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|SE|SW|NW|N|E|S|W)\b(?![a-z])/g, (m, d) => DIR_WORDS[d] || m)
     .replace(/\b(nne|ene|ese|sse|ssw|wsw|wnw|nnw)\b/g, m => DIR_WORDS[m.toUpperCase()])
@@ -2323,7 +2322,7 @@ async function getBriefing() {
   if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
   if (snowy()) { try { await refreshSnow(); } catch (e) {} }
   const facts = briefingFacts(); facts.language = LANGS[lang()][1]; facts.languageName = LANG_NAMES_EN[lang()];
-  let text = composeBriefing(facts), source = DEVICE_LANGS.includes(lang()) ? 'device' : 'device-en';
+  let text = composeBriefing(facts), source = 'device';
   if (BE()) {
     try {
       const r = await fetchT(BE() + '/brief', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ facts, fallback: text }) }, 20000);
@@ -2341,7 +2340,7 @@ async function openBriefing(autoSpeak) {
   const b = await getBriefing();
   if (!$('#briefText')) return;
   $('#briefText').textContent = b.text; st.lastBrief = b.text;
-  $('#briefSrc').textContent = b.source === 'device-en' ? 'Shown in English: ' + LANG_NAMES_EN[lang()] + ' briefings need the backend writer, which is not available right now' : b.source === 'device' ? 'Written on this device from NWS data' + (BE() ? ' (backend writer not available)' : '') : 'Written by the backend from NWS data';
+  $('#briefSrc').textContent = b.source === 'device' ? 'Written on this device from NWS data' + (BE() ? ' (backend writer not available)' : '') : 'Written by the backend from NWS data';
   if (autoSpeak) speak(b.text);
   if (!speech.ok) $('#briefSrc').textContent += ' · this browser cannot speak';
 }
@@ -2481,11 +2480,11 @@ function openSettings(tab) {
       '<div class="toggle"><div><div class="tl">Briefing when the screen wakes</div><div class="td">Once per half hour at most</div></div><button class="sw ' + (S.brief.onWake ? 'on' : '') + '" data-brief="onWake"></button></div>' +
       '</div>' +
       '<div class="row"><label>Scheduled briefing times (24-hour, comma separated, e.g. 06:30, 17:00)</label><input id="briefTimes" type="text" inputmode="numeric" value="' + (S.brief.times || '').replace(/"/g, '') + '" placeholder="06:30, 17:00" ' + inputStyle + '><div class="btns"><button data-act="brief-times">Save times</button></div></div>' +
-      '<div class="row"><label>Language (briefings, spoken alerts and voice commands)</label><select id="briefLang" ' + inputStyle + '>' + Object.entries(LANGS).map(([k, [name]]) => '<option value="' + k + '"' + (lang() === k ? ' selected' : '') + '>' + name + (DEVICE_LANGS.includes(k) ? '' : ' — needs the backend writer') + '</option>').join('') + '</select>' +
+      '<div class="row"><label>Language (briefings, spoken alerts and voice commands)</label><select id="briefLang" ' + inputStyle + '>' + Object.entries(LANGS).map(([k, [name]]) => '<option value="' + k + '"' + (lang() === k ? ' selected' : '') + '>' + name + '</option>').join('') + '</select>' +
       (speech.ok && (loadVoices(), !speech.voices.length) ? '<div style="color:var(--warn,#ffa000);font-size:13px;margin-top:4px">No ' + LANGS[lang()][0] + ' voice is installed on this device; the text will show but cannot be spoken. On Android, install it under Settings → System → Languages → Text-to-speech.</div>' : '') + '</div>' +
       '<div class="row"><label>Voice</label><select id="briefVoice" ' + inputStyle + '>' + ['<option value="">Automatic</option>'].concat((speech.voices.length ? speech.voices : (loadVoices(), speech.voices)).map(v => '<option value="' + v.name.replace(/"/g, '') + '"' + (S.brief.voice === v.name ? ' selected' : '') + '>' + v.name + ' (' + v.lang + ')</option>')).join('') + '</select></div>' +
       '<div class="row"><label>Speech rate</label><input type="range" min="0.7" max="1.4" step="0.05" data-slider="rate" value="' + S.brief.rate + '"></div>' +
-      '<div class="row" style="color:var(--muted);font-size:14px">Briefings use the device\'s own speech engine and work offline. English and Spanish are written on the device; the other languages are written by the backend\'s language model from the same NWS data (and English is shown when it is unavailable). The Sound switch (Alerts tab) silences all speech.</div>') +
+      '<div class="row" style="color:var(--muted);font-size:14px">Briefings use the device\'s own speech engine and work offline. With a backend configured, the text is written by a language model from the same NWS data in the chosen language; otherwise it is composed on the device. The Sound switch (Alerts tab) silences all speech.</div>') +
     pane('voice', '<div class="row">' +
       '<div class="toggle"><div><div class="tl">Wake word</div><div class="td">Always listen for the wake word while the app is on screen; then say a command</div></div><button class="sw ' + (S.voice.enabled ? 'on' : '') + '" data-voice="enabled"></button></div>' +
       '<div class="toggle"><div><div class="tl">Spoken confirmations</div><div class="td">"Zooming in", "Snoozed for one hour"</div></div><button class="sw ' + (S.voice.confirm ? 'on' : '') + '" data-voice="confirm"></button></div></div>' +
@@ -2577,7 +2576,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : lang() === 'en' ? 'Briefings will be in English.' : ''); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }

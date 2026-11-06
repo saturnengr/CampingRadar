@@ -40,10 +40,9 @@ public sealed class BriefingWriter
         Make each activity's briefing sound different: an RV briefing is about wind, gusts, hail and the awning; a hunting
         briefing about wind direction and shifts, pressure, legal light and the moon; a trail briefing about rain and thunder
         timing, feels-like temperature and daylight; a camp briefing about rain timing, the overnight low, wind and lightning.
-        Language: write the whole briefing in the language named by "languageName" / "language" (a BCP-47 tag) in the facts;
-        when absent, write English. Use the variety spoken in the United States (US Spanish, not Castilian; Brazilian Portuguese;
-        Simplified Chinese). Keep units as given (miles, miles per hour, degrees Fahrenheit, inches) and name them in that
-        language; keep place names, NWS alert names may be translated but keep them recognisable.
+        Language: write the whole briefing in English, or in US Spanish when "language" in the facts is "es-US" (not Castilian;
+        keep units as given in miles, miles per hour, degrees Fahrenheit and inches, named in Spanish; keep place names; NWS alert
+        names may be translated but should stay recognisable).
         Never contradict or soften an NWS warning (tornado, severe thunderstorm, flood, hurricane, tropical storm, storm surge, blizzard, ice storm, winter storm, extreme cold, avalanche or tsunami warnings always come first). Never invent facts that are not in the JSON. End with one practical sentence.
         Target 110 to 170 words in total.
         """;
