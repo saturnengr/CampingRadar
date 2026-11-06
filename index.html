@@ -2179,8 +2179,14 @@ function statusES(t) {
     .replace(/\b(Tornado|Severe Thunderstorm|Flash Flood|Flood|Hurricane|Tropical Storm|Storm Surge|Extreme Wind|Tsunami|Blizzard|Ice Storm|Winter Storm|Extreme Cold|Avalanche) (Warning|Watch|Advisory)\b/g, m => eventES(m));
 }
 
+function hazardES(h) {
+  return String(h)
+    .replace(/^(.+?) fire (\d+) mi (\w+)(?:, ([\d,]+) ac)?(?:, (\d+)% contained)?$/, (m, name, d, dir, ac, c) => 'Incendio ' + name + ' a ' + d + ' millas al ' + dirES(dir) + (ac ? ', ' + ac + ' acres' : '') + (c ? ', ' + c + '% contenido' : ''))
+    .replace(/^River gauge at (.+?) reports (\w+) flooding, (\d+) mi (\w+)$/, (m, loc, st_, d, dir) => 'La estación fluvial de ' + loc + ' reporta inundación ' + ({ action: 'incipiente', minor: 'menor', moderate: 'moderada', major: 'mayor' }[st_] || st_) + ', a ' + d + ' millas al ' + dirES(dir))
+    .replace(/^(.+?) in effect here$/, (m, ev) => eventES(ev) + ' en vigor aquí').replace(/^(.+?) nearby$/, (m, ev) => eventES(ev) + ' cerca de aquí');
+}
 const precipifyES = (text, pt) => { if (!pt || pt === 'rain' || !text) return text; const w = PRECIP_ES[pt] || pt; return String(text).replace(/\bLluvia\b/g, w[0].toUpperCase() + w.slice(1)).replace(/\blluvia\b/g, w); };
-const rainSentenceES = (s, when, subject) => !s ? '' : s.rainFrom ? `Lluvia ${s.allRain ? 'la mayor parte de ' + when : 'alrededor de las ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' a las ' + s.rainTo : '')}, hasta ${s.maxPop} por ciento.` : s.maxPop >= 20 ? `Poca probabilidad de lluvia ${when}, ${s.maxPop} por ciento como máximo.` : `${subject} seco.`;
+const rainSentenceES = (s, when, subject) => !s ? '' : s.rainFrom ? `Lluvia ${s.allRain ? 'la mayor parte de ' + when : 'alrededor de las ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' a las ' + s.rainTo : '')}, hasta ${s.maxPop} por ciento.` : s.maxPop >= 20 ? `Poca probabilidad de lluvia ${when}, ${s.maxPop} por ciento como máximo.` : `${subject}.`;
 const thunderSentenceES = s => s && s.thunderFrom ? `Posibles tormentas alrededor de las ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' a las ' + s.thunderTo : ''}.` : '';
 function awningSentenceES(s, when) {
   if (!s) return '';
@@ -2204,7 +2210,7 @@ function leadSentencesES(f) {
   } else if (f.passing) out.push(`Hay ${lluvia} a ${f.passing.distMi} millas al ${dirES(f.passing.dir)} que pasa hacia el ${dirES(f.passing.passDir)}; no debería alcanzarte.`);
   else out.push(`No viene ${lluvia} hacia ti por ahora.`);
   if (f.lightning && f.lightning.within30) out.push(f.lightning.within10 ? `Hay rayos a menos de diez millas, el más cercano a unas ${f.lightning.nearestMi} millas al ${dirES(f.lightning.dir)}${f.lightning.trend === 'approaching' ? ' y acercándose' : ''}. Busca refugio.` : `Hay rayos a ${f.lightning.nearestMi} millas al ${dirES(f.lightning.dir)}${f.lightning.trend === 'approaching' ? ', acercándose' : f.lightning.trend === 'receding' ? ', alejándose' : ''}.`);
-  for (const h of f.hazards) out.push(h + '.');
+  for (const h of f.hazards) out.push(hazardES(h) + '.');
   for (const t of f.tropical.filter(t => !/Warning/.test(t.event))) out.push(`Hay ${/^(Vigilancia|Advertencia|Declaración|Emergencia)/.test(eventES(t.event)) ? 'una' : 'un'} ${eventES(t.event).toLowerCase()} en vigor para esta zona.`);
   if (f.visibilityMi != null && f.visibilityMi <= 0.5) out.push(`La visibilidad baja a ${f.visibilityMi <= 0.3 ? 'un cuarto de milla o menos' : f.visibilityMi + ' millas'}${pt !== 'rain' ? ' por ' + lluvia : ''}.`);
   return out;
@@ -2218,7 +2224,7 @@ function beachBodyES(f) {
     if (b.waterF != null) out.push(`El agua está a ${b.waterF} grados.`);
     if (b.uvMaxToday != null) out.push(`El índice UV llega a ${b.uvMaxToday}, ${uvWordES(b.uvMaxToday)}${b.uvMaxToday >= 6 ? '; cúbrete y vuelve a aplicar protector solar' : ''}.`);
   } else out.push('No hay estación de mareas a menos de sesenta millas de aquí.');
-  if (s) { out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s)); if (s.waveMax != null) out.push(`Olas de alrededor de ${s.waveMax} pies.`); out.push(`Viento de ${s.windNow} del ${dirES(s.windDir)}${s.topGust >= 20 ? ', con ráfagas de ' + s.topGust : ''}; temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`); }
+  if (s) { out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s)); if (s.waveMax != null) out.push(`Olas de alrededor de ${s.waveMax} pies.`); out.push(`Viento de ${s.windNow} del ${dirES(s.windDir)}${s.topGust >= 20 ? ', con ráfagas de ' + s.topGust : ''}; temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`); }
   if (f.sun) out.push(`El sol se pone a las ${f.sun.set}.`);
   return out;
 }
@@ -2239,7 +2245,7 @@ function campingBodyES(f) {
   const s = f.nextStats, out = [];
   if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`Hay ${inchWordES(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)} de nieve en el suelo.`);
   if (!s) return out;
-  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
   if (s.topGust >= 25) out.push(`El viento sube a unas ${s.topGust} alrededor de las ${s.gustAt}; asegura las lonas y mantén la fogata pequeña.`);
   else if (s.topGust >= 15) out.push(`Brisa de hasta ${s.topGust} alrededor de las ${s.gustAt}.`);
   else out.push('El viento se mantiene suave.');
@@ -2251,7 +2257,7 @@ function rvBodyES(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
   out.push(awningSentenceES(s, 'en las próximas horas'));
-  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
   if (s.maxThunder >= 40) out.push('Con tormentas así de fuertes es posible el granizo; el radar en vivo es lo que hay que vigilar.');
   out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' por la noche' : ''}.`);
   return out;
@@ -2262,7 +2268,7 @@ function huntingBodyES(f) {
   if (!s) return out;
   out.push(`El viento viene del ${dirES(s.windDir)} a ${s.windNow}${s.windDirLater && s.windDirLater !== s.windDir ? ', girando al ' + dirES(s.windDirLater) + ' más tarde' : ', y se mantiene'}${s.topGust >= 20 ? ', con ráfagas de ' + s.topGust : ''}.`);
   if (f.pressure) out.push(`La presión está en ${f.pressure.inHg} y ${PRESSURE_ES[f.pressure.word] || f.pressure.word}${f.pressure.fast ? ' rápido' : ''}${f.pressure.word === 'falling' ? '; probablemente se acerca un frente' : f.pressure.word === 'rising' ? '; el tiempo se está asentando' : ''}.`);
-  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
   out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`);
   if (f.sun) out.push(`Amanece a las ${f.sun.rise} y anochece a las ${f.sun.set}; la luz legal va más o menos media hora antes y después. La luna está al ${f.moon.ill} por ciento, ${MOON_ES[f.moon.name] || f.moon.name.toLowerCase()}.`);
   return out;
@@ -2270,7 +2276,7 @@ function huntingBodyES(f) {
 function trailBodyES(f) {
   const s = f.nextStats, out = [];
   if (!s) return out;
-  out.push(rainSentenceES(s, 'las próximas horas', 'Las próximas horas se ven'), thunderSentenceES(s));
+  out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
   if (s.feelsHi >= 90) out.push(`La sensación térmica llegará a ${deg(s.feelsHi)} en el punto más alto; lleva agua extra y sal temprano.`);
   else if (s.feelsLo <= 25) out.push(`La sensación térmica baja a ${deg(s.feelsLo)}; abrígate.`);
   else out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}, cómodas para el esfuerzo.`);
@@ -2284,7 +2290,7 @@ function outlookSentencesES(f) {
   const label = f.morning ? 'esta tarde y esta noche' : 'mañana';
   out.push(`Mirando ${label}:`);
   if (f.morning) {
-    if (s) out.push(rainSentenceES(s, 'esta tarde y esta noche', 'Se ve'), thunderSentenceES(s));
+    if (s) out.push(rainSentenceES(s, 'esta tarde y esta noche', 'Se ve seco'), thunderSentenceES(s));
     if (f.activity === 'rv' && s) out.push(awningSentenceES(s, 'esta tarde y esta noche'));
     if (f.activity === 'hunting' && s) out.push(`Viento de la tarde del ${dirES(s.windDirLater || s.windDir)}${o.sun ? ', última luz alrededor de las ' + o.sun.dusk : ''}.`);
     if (f.activity === 'trail' && s) out.push(`${deg(s.hi)} en lo más cálido${o.sun ? ', puesta de sol a las ' + o.sun.set : ''}.`);
