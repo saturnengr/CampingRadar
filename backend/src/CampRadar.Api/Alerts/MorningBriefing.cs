@@ -91,8 +91,8 @@ public sealed class BriefingFactsBuilder
 /// <summary>Sunrise / sunset / civil dawn and dusk (NOAA solar equations), returned in the given offset.</summary>
 public static class Sun
 {
-    public sealed record Times(DateTimeOffset Rise, DateTimeOffset Set, DateTimeOffset Dawn, DateTimeOffset Dusk);
-    public static Times? Times(double lat, double lon, DateTime date, TimeSpan offset)
+    public sealed record SunTimes(DateTimeOffset Rise, DateTimeOffset Set, DateTimeOffset Dawn, DateTimeOffset Dusk);
+    public static SunTimes? Times(double lat, double lon, DateTime date, TimeSpan offset)
     {
         DateTimeOffset? Calc(double zenith, bool rising)
         {
@@ -114,7 +114,7 @@ public static class Sun
             return DateTimeOffset.FromUnixTimeSeconds((long)((j - 2440587.5) * 86400)).ToOffset(offset);
         }
         var rise = Calc(90.833, true); var set = Calc(90.833, false); var dawn = Calc(96, true); var dusk = Calc(96, false);
-        return rise is null || set is null ? null : new Times(rise.Value, set.Value, dawn ?? rise.Value, dusk ?? set.Value);
+        return rise is null || set is null ? null : new SunTimes(rise.Value, set.Value, dawn ?? rise.Value, dusk ?? set.Value);
     }
 }
 
