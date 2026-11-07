@@ -144,12 +144,14 @@ app.MapPost("/push/subscribe", (HttpRequest http, EntitlementStore ent, [FromBod
     return Results.Ok(new { id });
 });
 app.MapPost("/push/{id}/location", (string id, [FromBody] LocationRequest r, SpotStore store) => { if (store.Get(id) is null) return Results.NotFound(); store.SetLocation(id, r.Lat, r.Lon); return Results.Ok(); });
-app.MapPost("/push/{id}/prefs", (string id, [FromBody] JsonElement body, SpotStore store) =>
+app.MapPost("/push/{id}/prefs", (HttpRequest http, string id, [FromBody] JsonElement body, SpotStore store, EntitlementStore ent) =>
 {
     if (store.Get(id) is null) return Results.NotFound();
     if (body.ValueKind != JsonValueKind.Object || body.GetRawText().Length > 4000) return Results.BadRequest();
     var patch = new Dictionary<string, object?>();
     foreach (var p in body.EnumerateObject()) if (p.Name != "email") patch[p.Name] = p.Value.ValueKind == JsonValueKind.Null ? null : p.Value.Clone();
+    // the email never comes from the body — only from a valid sign-in token (heals subscriptions made before sign-in existed)
+    var (_, _, tok) = ent.Check(Bearer(http)); if (tok is not null) patch["email"] = tok.Email;
     store.MergePrefs(id, patch); return Results.Ok();
 });
 app.MapPost("/push/{id}/snooze", (string id, [FromBody] SnoozeRequest r, SpotStore store) => { if (store.Get(id) is null) return Results.NotFound(); store.SetSnooze(id, r.UntilMs); return Results.Ok(); });

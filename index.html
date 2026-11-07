@@ -715,7 +715,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07n';
+const APP_VERSION = '2026.11.07o';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2035,7 +2035,9 @@ function pushUpdateBriefPrefs() {
   if (!S.pushId || !BE()) return;
   const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {});
   const body = m.on ? { brief: { at: m.at, days: m.days, offsetMin: -new Date().getTimezoneOffset(), tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), lang: lang(), activity: S.activity } } : { brief: null };
-  fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 10000).catch(() => {});
+  // the alert thresholds ride along, and the sign-in token lets the server (re)attach the account email to this subscription
+  body.hitMi = S.hitMi; body.threshDbz = S.threshDbz;
+  fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify(body) }, 10000).catch(() => {});
 }
 function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
 async function pushAction(act, btn) {
@@ -3472,7 +3474,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
-  if (k === 'hitMi' || k === 'threshDbz') runNowcast();
+  if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('change', e => { if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
@@ -3508,7 +3510,7 @@ fitRange();
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
-refreshAccount().then(() => { refreshFamily(); refreshSites(); });
+refreshAccount().then(() => { refreshFamily(); refreshSites(); if (S.pushId && signedIn()) pushUpdateBriefPrefs(); });
 applySentinel();
 // Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
