@@ -70,7 +70,7 @@ string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); retu
 IResult? RequirePro(HttpRequest r, EntitlementStore ent) => ent.Check(Bearer(r)).Pro ? null : Results.Json(new { error = "pro", message = "This needs LeadTime Pro. Sign in or enter an activation code in Settings → Account." }, statusCode: 402);
 
 // ---------- health / heartbeat ----------
-app.MapGet("/", () => Results.Text("Camp Radar API. See /health", "text/plain"));
+app.MapGet("/", () => Results.Text("LeadTime API. See /health", "text/plain"));
 app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender p, SpotStore s) => new
 {
     ok = true, utc = DateTimeOffset.UtcNow,
@@ -161,7 +161,7 @@ app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, 
     var spot = store.Get(id); if (spot is null) return Results.NotFound();
     try
     {
-        var ok = await p.SendAsync(spot, new { title = "Camp Radar test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
+        var ok = await p.SendAsync(spot, new { title = "LeadTime test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
         return ok ? Results.Ok() : Results.Json(new { error = "this device's subscription has expired; turn alerts off and on again" }, statusCode: 410);
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
