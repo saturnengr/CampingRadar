@@ -143,13 +143,13 @@ Three foundations, then feature phases that are thin layers on them.
 
 **Foundations**
 1. *Households* — a Pro owner invites family and friends; members inherit Pro; per-member consent for location sharing (always with an end time) and messages. **Built (Phase A below).**
-2. *Saved sites* — named places on the account (home, the lease, the lake) with their own alerts, digest and thresholds; the device's current location stays separate.
+2. *Saved sites* — named places on the account (home, the lease, the lake) with their own alerts, digest and thresholds; the device's current location stays separate. **Built (Phase B below).**
 3. *Server-side weather facts* — forecast assembly on the server (done for the morning briefing); add tides, SNOTEL, gauges, fire lines and the MRMS hail product so every feature can be evaluated for any site with no app open.
 
 | Phase | Ships | Depends on | Effort |
 | --- | --- | --- | --- |
 | **A — Household** ✅ | Invites by email or code, consent screens, member list, leave/remove; people on the map with 24-hour trails (opt-in, timed); quick messages with reply chips, read aloud; "Weather turning — head back" with live status | 1 | done 7 Nov |
-| **B — Sites & rules** | Saved sites; per-site alerts and morning digest; user thresholds (gust, low temperature, UV, visibility); dry-window finder; "leave by" | 2, 3 | ~1 week |
+| **B — Sites & rules** ✅ | Saved places (up to 12 per account, pins on the map); per-place alerts (rain, lightning, warnings) and a line each in the morning briefing; personal limits (gusts, cold, heat, rain chance, visibility) checked server-side once a day per limit; dry-window finder (48 h); "leave by" from forecast plus live radar with your walk-back time. UV deferred (NWS gridpoints don't carry it). | 2, 3 | done 7 Nov |
 | **C — Hail & fishing** | Hail layer and alerts (MRMS MESH); Fishing activity (solunar, pressure, water temperature, lightning on open water) | 3 | ~1 week |
 | **D — Travel** | Route weather for the drive (OSRM routing + forecast sampling); trip pack (offline forecast, radar, topo); clear-sky tonight; shareable camp card | 2 | ~1 week |
 | **E — Native shell** | Capacitor app, Android first then iOS: background location that follows you, FCM/APNs push, home-screen widget; required for the app stores | A | 2–3 weeks + review |

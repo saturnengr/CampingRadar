@@ -108,6 +108,7 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 #updateChip{position:absolute;left:12px;bottom:118px;z-index:850;background:#1e6b3a;border-color:#6fd39a;font-weight:700}
 #msgChip{position:absolute;left:12px;right:12px;bottom:162px;z-index:850;background:#4a2f8a;border-color:#b48cff;text-align:left;font-weight:500;max-width:560px}#msgChip .x{float:right;opacity:.7;margin-left:10px}
 .person{width:34px;height:34px;border-radius:50%;background:#ffb74d;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);display:grid;place-items:center;font-weight:800;color:#1a1200;font-size:15px}.person.stale{background:#9fb3c2}
+.site{width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#4fc3f7;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);display:grid;place-items:center}.site span{transform:rotate(45deg);font-size:16px;line-height:1}
 .mini{min-height:30px;padding:4px 10px;font-size:13px;border-radius:8px}
 table.fam{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}table.fam td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:middle}table.fam small{color:var(--muted)}
 #voiceChip{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:900;background:#c62828;color:#fff;padding:10px 18px;border-radius:999px;font-size:18px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:pulse 1.2s ease-in-out infinite}
@@ -621,7 +622,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true },
+  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -647,7 +648,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.06';
+const APP_VERSION = '2026.11.07';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -752,7 +753,7 @@ async function deleteAccount() {
 }
 async function signOut() {
   try { if (BE() && S.account && S.account.token) await fetchT(BE() + '/auth/signout', { method: 'POST', headers: authHeaders() }, 8000); } catch (e) {}
-  S.account = null; save(); applyProState(); fam.info = null; fam.positions = []; drawPeople();
+  S.account = null; save(); applyProState(); fam.info = null; fam.positions = []; drawPeople(); sites.list = []; sites.plan = {}; drawSites();
 }
 // Turn Pro-only things off when Pro is not active; refresh data that depends on it.
 function applyProState() {
@@ -1448,6 +1449,7 @@ const LAYER_INFO = {
   wind: ['Wind', 'Current wind arrows across the map: speed, gusts and direction'],
   clouds: ['Clouds (satellite)', 'Live GOES imagery: visible by day, infrared at night'],
   people: ['People in your group', 'Family and friends who are sharing their location, with their trail for the day'],
+  places: ['Saved places', 'Your saved campsites, cabins and trailheads (Settings → Places)'],
   topo: ['Topographic map', 'Swap the street map for a topo map: contour lines, shaded relief, trails and huts (OpenTopoMap)'],
   trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
@@ -1512,6 +1514,7 @@ function applyLayers() {
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   set(trailsLayer, L_.trails);
   if (typeof drawPeople === 'function') drawPeople();
+  if (typeof drawSites === 'function') drawSites();
   if (L_.topo && !map.hasLayer(topoBase)) { map.removeLayer(osmBase); topoBase.addTo(map); } else if (!L_.topo && !map.hasLayer(osmBase)) { map.removeLayer(topoBase); osmBase.addTo(map); }
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
@@ -2851,7 +2854,121 @@ $('#sheet').addEventListener('click', async e => {
   const rm = e.target.closest('[data-fam-remove]'); if (rm) { if (!confirm((lang() === 'es' ? 'Quitar a ' : 'Remove ') + rm.dataset.famRemove + '?')) return; try { await famApi('/group/member/' + encodeURIComponent(rm.dataset.famRemove), { method: 'DELETE' }); await refreshFamily(); openSettings('family'); } catch (err) { alert(err.message); } return; }
 });
 
-const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['voice', 'Voice'], ['layers', 'Map layers'], ['account', 'Account'], ['family', 'Family'], ['data', 'Data & backend'], ['about', 'Status']];
+// ---------- saved places: per-site alerts and digest, personal limits, dry windows, leave-by ----------
+const sites = { list: [], max: 12, plan: {}, planKey: null, edit: null, busy: false };
+const sitesLayer = L.layerGroup().addTo(map);
+const SITE_ICON = { camping: '⛺', rv: '🚐', hunting: '🦌', trail: '🥾', beach: '🏖', skiing: '🎿', sentinel: '📍' };
+const THR_FIELDS = [['gustMph', 'Gusts over (mph)', 'Ráfagas de más de (mph)', 30], ['lowF', 'Colder than (°F)', 'Más frío que (°F)', 32], ['highF', 'Feels hotter than (°F)', 'Sensación mayor que (°F)', 95], ['popPct', 'Rain chance over (%)', 'Prob. de lluvia mayor que (%)', 60], ['visMi', 'Visibility under (mi)', 'Visibilidad menor que (mi)', 1]];
+const thrDefaults = () => ({ gustMph: 30, lowF: 32, highF: 95, popPct: 60 });
+async function refreshSites() {
+  if (!signedIn()) { sites.list = []; drawSites(); return; }
+  try { const j = await famApi('/sites'); sites.list = j.sites || []; sites.max = j.max || 12; } catch (e) {}
+  drawSites();
+}
+function drawSites() {
+  sitesLayer.clearLayers();
+  if (S.layers.places === false) return;
+  for (const s of sites.list) {
+    const icon = L.divIcon({ className: '', html: '<div class="site"><span>' + (SITE_ICON[s.activity] || '📍') + '</span></div>', iconSize: [34, 34], iconAnchor: [17, 30] });
+    L.marker([s.lat, s.lon], { icon, zIndexOffset: 800 }).bindPopup('<b>' + escapeHtml(s.name) + '</b><br><button class="mini" data-site-plan="' + s.id + '">' + (lang() === 'es' ? 'Plan' : 'Plan') + '</button> <button class="mini" data-person-weather="' + s.lat + ',' + s.lon + '">' + (lang() === 'es' ? 'Tiempo allí' : 'Weather there') + '</button>').addTo(sitesLayer);
+  }
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-site-plan]'); if (!b) return; map.closePopup(); sites.planKey = b.dataset.sitePlan; openSettings('places'); });
+// Times shown in the place's own time zone (offsetMin comes back with the plan).
+function atLocal(ms, off) { const d = new Date(ms + off * 60000); let h = d.getUTCHours(); const m = d.getUTCMinutes(), ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + (m ? ':' + String(m).padStart(2, '0') : '') + ' ' + ap; }
+function dayWord(ms, nowMs, off) {
+  const d = Math.floor((ms + off * 60000) / 86400000) - Math.floor((nowMs + off * 60000) / 86400000), es = lang() === 'es';
+  if (d <= 0) return es ? 'hoy' : 'today'; if (d === 1) return es ? 'mañana' : 'tomorrow';
+  return new Date(ms + off * 60000).toLocaleDateString(es ? 'es-US' : 'en-US', { weekday: 'long', timeZone: 'UTC' });
+}
+function planHtml(p) {
+  const es = lang() === 'es', off = p.offsetMin, now = p.nowMs;
+  let h = '';
+  if (p.leaveBy) {
+    const lb = p.leaveBy, soon = lb.atMs - now < 15 * 60000;
+    h += '<div style="padding:10px 12px;border-radius:12px;background:' + (soon ? '#5a1f1f' : '#2a3a1f') + ';margin-bottom:10px"><div style="font-weight:800;font-size:18px">' + (soon ? (es ? 'Regresa ahora' : 'Head back now') : (es ? 'Sal a más tardar a las ' : 'Leave by ') + atLocal(lb.atMs, off)) + '</div><div style="font-size:14px">' + (es ? lb.reasonEs : lb.reason) + ' · ' + (es ? 'alrededor de las ' : 'around ') + atLocal(lb.troubleMs, off) + ' ' + dayWord(lb.troubleMs, now, off) + (es ? ', con ' : ', with ') + (S.backMin || 45) + (es ? ' min de regreso' : ' min to get back') + '</div></div>';
+  } else h += '<div style="padding:10px 12px;border-radius:12px;background:#1f3a2a;margin-bottom:10px;font-weight:700">' + (es ? 'Nada que te obligue a volver en las próximas 12 horas.' : 'Nothing in the next 12 hours that should send you back early.') + '</div>';
+  if (p.hits && p.hits.length) h += '<div class="tl" style="margin-top:6px">' + (es ? 'Tus límites' : 'Your limits') + '</div>' + p.hits.map(x => '<div style="font-size:14px">• ' + escapeHtml(es ? x.labelEs : x.label) + '</div>').join('');
+  h += '<div class="tl" style="margin-top:10px">' + (es ? 'Ventanas secas, próximas 48 h' : 'Dry windows, next 48 h') + '</div>';
+  if (!p.windows || !p.windows.length) h += '<div class="muted" style="font-size:14px">' + (es ? 'Ninguna de 2 horas o más. Lluvia, tormentas o viento la mayor parte del tiempo.' : 'None of 2 hours or more — rain, storms or wind most of the time.') + '</div>';
+  else h += '<table class="fam"><tbody>' + p.windows.slice(0, 8).map(w => '<tr><td><b>' + dayWord(w.fromMs, now, off) + '</b> ' + atLocal(w.fromMs, off) + ' – ' + atLocal(w.toMs, off) + '</td><td class="muted">' + w.hours + ' h · ' + Math.round(w.lo) + '–' + Math.round(w.hi) + '° · ' + (es ? 'lluvia' : 'rain') + ' ≤' + w.maxPop + '% · ' + (es ? 'ráfagas' : 'gusts') + ' ' + w.maxGust + '</td></tr>').join('') + '</tbody></table>';
+  h += '<div class="muted" style="font-size:12px;margin-top:6px">' + (p.place ? escapeHtml(p.place) + ' · ' : '') + (es ? 'Pronóstico horario del NWS más el radar en vivo.' : 'NWS hourly forecast plus live radar.') + '</div>';
+  return h;
+}
+async function loadPlan(key) {
+  const box = $('#planBox'); if (!box) return;
+  const es = lang() === 'es'; box.innerHTML = '<span class="muted">' + (es ? 'Calculando…' : 'Working it out…') + '</span>';
+  try {
+    const back = Math.max(0, +(S.backMin || 45));
+    let p;
+    if (key === 'here') { if (!st.loc) throw new Error(es ? 'Sin ubicación todavía.' : 'No location yet.'); p = await famApi('/plan', { method: 'POST', body: JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon, backMin: back, thresholds: S.thr || thrDefaults() }) }); }
+    else p = await famApi('/sites/' + key + '/plan?backMin=' + back);
+    sites.plan[key] = p; if ($('#planBox')) $('#planBox').innerHTML = planHtml(p);
+  } catch (e) { if ($('#planBox')) $('#planBox').innerHTML = '<span style="color:#ef9a9a">' + escapeHtml(e.message) + '</span>'; }
+}
+function thrInputs(prefix, vals) {
+  const es = lang() === 'es';
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' + THR_FIELDS.map(([k, en, esl]) => '<div><label style="margin:0 0 2px">' + (es ? esl : en) + '</label><input type="number" inputmode="decimal" id="' + prefix + k + '" value="' + (vals && vals[k] != null ? vals[k] : '') + '" placeholder="' + (es ? 'apagado' : 'off') + '" ' + inputStyle + '></div>').join('') + '</div>';
+}
+function readThr(prefix) { const o = {}; for (const [k] of THR_FIELDS) { const v = parseFloat(($('#' + prefix + k) || {}).value); if (!isNaN(v)) o[k] = v; } return o; }
+function placesPane() {
+  const es = lang() === 'es';
+  let h = '<div class="row"><div class="tl">' + (es ? 'Lugares guardados' : 'Saved places') + (isPro() ? '' : ' <span class="pro">PRO</span>') + '</div><div class="td">' + (es ? 'Tu campamento, cabaña, lago o sendero favorito, aparte de donde está el dispositivo. Cada lugar puede avisarte de lluvia, rayos y tus propios límites, y aparecer en el informe de la mañana.' : 'Your campsite, cabin, lake or favorite trailhead, separate from where this device is. Each place can alert you to rain, lightning and your own limits, and show up in the morning briefing.') + '</div></div>';
+  if (!signedIn()) return h + '<div class="row"><div class="btns"><button data-act="go-account">' + (es ? 'Iniciar sesión primero' : 'Sign in first') + '</button></div></div>';
+  // plan for here or a saved place
+  const key = sites.planKey && sites.list.some(s => s.id === sites.planKey) ? sites.planKey : 'here';
+  const opts = '<option value="here"' + (key === 'here' ? ' selected' : '') + '>' + (es ? 'Donde estoy' : 'Where I am') + '</option>' + sites.list.map(s => '<option value="' + s.id + '"' + (key === s.id ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>').join('');
+  h += '<div class="row"><div class="tl">' + (es ? 'Plan del día' : "Today's plan") + '</div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="planFor" ' + inputStyle.replace('width:100%', 'flex:1;min-width:140px') + '>' + opts + '</select><label style="margin:0">' + (es ? 'Regreso' : 'Back in') + '</label><input id="planBack" type="number" inputmode="numeric" min="0" max="600" value="' + (S.backMin || 45) + '" ' + inputStyle.replace('width:100%', 'width:80px') + '><span class="muted">min</span><button data-act="site-plan">' + (es ? 'Calcular' : 'Plan') + '</button></div>' +
+    '<div id="planBox" style="margin-top:10px">' + (sites.plan[key] ? planHtml(sites.plan[key]) : '<span class="muted">' + (es ? '"Regreso" es cuánto tardas en volver a cubierto. Te decimos a qué hora salir y cuándo estará seco.' : '"Back in" is how long it takes you to get back under cover. We tell you when to leave and when it will be dry.') + '</span>') + '</div></div>';
+  // the list
+  if (sites.list.length) h += '<div class="row"><table class="fam"><tbody>' + sites.list.map(s => '<tr><td>' + (SITE_ICON[s.activity] || '📍') + ' <b>' + escapeHtml(s.name) + '</b><br><small class="muted">' + (s.alerts ? (es ? 'alertas' : 'alerts') : '') + (s.alerts && s.digest ? ' · ' : '') + (s.digest ? (es ? 'informe' : 'briefing') : '') + (!s.alerts && !s.digest ? (es ? 'solo en el mapa' : 'map only') : '') + '</small></td><td style="text-align:right;white-space:nowrap"><button class="mini" data-act="site-go" data-id="' + s.id + '">' + (es ? 'Ver' : 'Show') + '</button> <button class="mini" data-act="site-edit" data-id="' + s.id + '">' + (es ? 'Editar' : 'Edit') + '</button></td></tr>').join('') + '</tbody></table></div>';
+  // add / edit form
+  const e = sites.edit; const editing = e && e.id;
+  if (e) {
+    h += '<div class="row"><div class="tl">' + (editing ? (es ? 'Editar lugar' : 'Edit place') : (es ? 'Nuevo lugar' : 'New place')) + '</div>' +
+      '<label>' + (es ? 'Nombre' : 'Name') + '</label><input id="siteName" maxlength="40" value="' + escapeHtml(e.name || '') + '" placeholder="' + (es ? 'p. ej. Campamento del lago' : 'e.g. Lake campsite') + '" ' + inputStyle + '>' +
+      '<label style="margin-top:8px">' + (es ? 'Actividad' : 'Activity') + '</label><select id="siteAct" ' + inputStyle + '>' + Object.entries(ACTIVITIES).filter(([k]) => k !== 'sentinel').map(([k, v]) => '<option value="' + k + '"' + ((e.activity || S.activity) === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select>' +
+      '<label style="margin-top:8px">' + (es ? 'Ubicación' : 'Location') + '</label><div class="btns" style="flex-wrap:wrap"><button class="mini" data-act="site-use-here">' + (es ? 'Donde estoy' : 'Where I am') + '</button><button class="mini" data-act="site-use-center">' + (es ? 'Centro del mapa' : 'Map center') + '</button><span id="siteLatLon" class="muted" style="font-size:14px;align-self:center">' + (e.lat != null ? e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) : (es ? 'elige una' : 'pick one')) + '</span></div>' +
+      '<div class="toggle" style="margin-top:10px"><div><div class="tl">' + (es ? 'Alertas para este lugar' : 'Alerts for this place') + '</div><div class="td">' + (es ? 'Lluvia en camino, rayos a 10 millas, avisos del NWS y tus límites de abajo. Llegan a todos tus dispositivos con alertas.' : 'Rain on the way, lightning within 10 miles, NWS warnings, and your limits below. Delivered to every device of yours with alerts on.') + '</div></div><button class="sw ' + (e.alerts ? 'on' : '') + '" data-act="site-tog" data-k="alerts" role="switch"></button></div>' +
+      '<div class="toggle"><div><div class="tl">' + (es ? 'En el informe de la mañana' : 'In the morning briefing') + '</div><div class="td">' + (es ? 'Una frase sobre este lugar en tu informe diario.' : 'One line about this place in your daily briefing.') + '</div></div><button class="sw ' + (e.digest ? 'on' : '') + '" data-act="site-tog" data-k="digest" role="switch"></button></div>' +
+      '<div class="tl" style="margin-top:10px">' + (es ? 'Mis límites aquí' : 'My limits here') + '</div><div class="td" style="margin-bottom:6px">' + (es ? 'Vacío = apagado. Se revisan las próximas 12 horas del pronóstico, una vez al día por límite.' : 'Blank = off. Checked against the next 12 forecast hours, once a day per limit.') + '</div>' + thrInputs('sthr_', e.thresholds || S.thr || thrDefaults()) +
+      '<div class="btns" style="margin-top:10px"><button data-act="site-save">' + (es ? 'Guardar' : 'Save') + '</button><button class="mini" data-act="site-cancel">' + (es ? 'Cancelar' : 'Cancel') + '</button>' + (editing ? '<button class="mini" data-act="site-delete" style="margin-left:auto;border-color:#ef5350">' + (es ? 'Eliminar' : 'Delete') + '</button>' : '') + '</div><div id="siteMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>';
+  } else h += '<div class="row"><div class="btns"><button data-act="site-new"' + (sites.list.length >= sites.max ? ' disabled' : '') + '>' + (es ? '+ Guardar un lugar' : '+ Save a place') + '</button></div>' + (sites.list.length >= sites.max ? '<div class="muted" style="font-size:14px">' + (es ? 'Máximo ' : 'Up to ') + sites.max + (es ? ' lugares.' : ' places.') + '</div>' : '') + '</div>';
+  // default limits (used for "where I am" and new places)
+  h += '<div class="row"><div class="tl">' + (es ? 'Mis límites por defecto' : 'My default limits') + '</div><div class="td" style="margin-bottom:6px">' + (es ? 'Para "Donde estoy" y como punto de partida de lugares nuevos.' : 'Used for "Where I am" and as the starting point for new places.') + '</div>' + thrInputs('dthr_', S.thr || thrDefaults()) + '<div class="btns" style="margin-top:8px"><button class="mini" data-act="site-save-thr">' + (es ? 'Guardar límites' : 'Save limits') + '</button><span id="thrMsg" class="muted" style="font-size:14px;align-self:center"></span></div></div>';
+  return h;
+}
+async function placesAction(b) {
+  const act = b.dataset.act, es = lang() === 'es';
+  const say_ = (id, t) => { const m = $(id); if (m) m.textContent = t; };
+  try {
+    if (act === 'site-plan') { S.backMin = Math.max(0, +($('#planBack').value) || 0); save(); sites.planKey = $('#planFor').value; if (!isPro()) { openSettings('account'); return true; } loadPlan(sites.planKey); return true; }
+    if (act === 'site-new') { if (!isPro()) { openSettings('account'); return true; } sites.edit = { name: '', activity: S.activity === 'sentinel' ? 'camping' : S.activity, lat: st.loc ? st.loc.lat : null, lon: st.loc ? st.loc.lon : null, alerts: true, digest: true, thresholds: Object.assign({}, S.thr || thrDefaults()) }; openSettings('places'); setTimeout(() => { const i = $('#siteName'); if (i) i.focus(); }, 50); return true; }
+    if (act === 'site-edit') { const s = sites.list.find(x => x.id === b.dataset.id); if (s) { sites.edit = Object.assign({}, s, { thresholds: Object.assign({}, s.thresholds || {}) }); openSettings('places'); } return true; }
+    if (act === 'site-go') { const s = sites.list.find(x => x.id === b.dataset.id); if (s) { closeModal(); map.setView([s.lat, s.lon], Math.max(map.getZoom(), 11)); } return true; }
+    if (act === 'site-cancel') { sites.edit = null; openSettings('places'); return true; }
+    if (act === 'site-tog') { sites.edit[b.dataset.k] = !sites.edit[b.dataset.k]; b.classList.toggle('on', sites.edit[b.dataset.k]); return true; }
+    if (act === 'site-use-here' || act === 'site-use-center') {
+      const c = act === 'site-use-here' ? (st.loc ? { lat: st.loc.lat, lon: st.loc.lon } : null) : (() => { const ll = map.getCenter(); return { lat: ll.lat, lon: ll.lng }; })();
+      if (!c) { say_('#siteMsg', es ? 'Sin ubicación todavía.' : 'No location yet.'); return true; }
+      sites.edit.lat = +c.lat.toFixed(5); sites.edit.lon = +c.lon.toFixed(5); say_('#siteLatLon', sites.edit.lat.toFixed(4) + ', ' + sites.edit.lon.toFixed(4)); return true;
+    }
+    if (act === 'site-save') {
+      const e = sites.edit; e.name = ($('#siteName').value || '').trim(); e.activity = $('#siteAct').value; e.thresholds = readThr('sthr_');
+      if (!e.name) { say_('#siteMsg', es ? 'Ponle un nombre.' : 'Give it a name.'); return true; }
+      if (e.lat == null) { say_('#siteMsg', es ? 'Elige la ubicación.' : 'Pick the location.'); return true; }
+      say_('#siteMsg', es ? 'Guardando…' : 'Saving…');
+      await famApi('/sites', { method: 'POST', body: JSON.stringify({ id: e.id || null, name: e.name, lat: e.lat, lon: e.lon, activity: e.activity, alerts: !!e.alerts, digest: !!e.digest, thresholds: e.thresholds }) });
+      if (e.alerts && !S.pushId) alert(es ? 'Las alertas de este lugar llegan por notificaciones. Activa las alertas en Ajustes → Alertas en al menos un dispositivo.' : 'Alerts for this place arrive as notifications. Turn alerts on under Settings → Alerts on at least one device.');
+      sites.edit = null; await refreshSites(); openSettings('places'); return true;
+    }
+    if (act === 'site-delete') { if (!confirm(es ? '¿Eliminar este lugar?' : 'Delete this place?')) return true; await famApi('/sites/' + sites.edit.id, { method: 'DELETE' }); sites.edit = null; delete sites.plan[b.dataset.id]; await refreshSites(); openSettings('places'); return true; }
+    if (act === 'site-save-thr') { S.thr = readThr('dthr_'); save(); say_('#thrMsg', es ? 'Guardado.' : 'Saved.'); return true; }
+  } catch (e) { alert(e.message); return true; }
+  return false;
+}
+
+const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['voice', 'Voice'], ['layers', 'Map layers'], ['account', 'Account'], ['family', 'Family'], ['places', 'Places'], ['data', 'Data & backend'], ['about', 'Status']];
 let settingsTab = 'general';
 const inputStyle = 'style="width:100%;box-sizing:border-box;min-height:46px;font:inherit;font-size:16px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#0b1117;color:var(--text)"';
 const segRows = key => SETTINGS[key].map(([k, label, opts, kind]) => '<div class="row"><label>' + label + '</label>' + (kind === 'select'
@@ -2904,6 +3021,7 @@ function openSettings(tab) {
       '<input id="beUrl" type="url" placeholder="https://radar.tieroneehs.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>') +
     pane('family', familyPane()) +
+    pane('places', placesPane()) +
     pane('account', (S.account && S.account.email
       ? '<div class="row"><div class="tl">' + (isPro() ? '<span class="pro">PRO</span> LeadTime Pro is active' : 'Signed in — free version') + '</div><div class="td">' + S.account.email + (isPro() && S.account.expiresMs ? ' · Pro until ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div>' +
         '<div class="td" style="margin-top:4px">Settings sync across your signed-in devices' + (S.syncedAt ? ' · last synced ' + new Date(S.syncedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '') + '.</div>' +
@@ -2958,6 +3076,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.tab) { settingsTab = b.dataset.tab; $('#sheet').querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); $('#sheet').querySelectorAll('.tabpane').forEach(p => p.hidden = p.dataset.pane !== settingsTab); return; }
   if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
   if (b.dataset.act && (b.dataset.act.startsWith('fam-') || b.dataset.act === 'go-account')) { familyAction(b); return; }
+  if (b.dataset.act && b.dataset.act.startsWith('site-')) { placesAction(b); return; }
   if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
@@ -3038,7 +3157,7 @@ fitRange();
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
-refreshAccount().then(() => refreshFamily());
+refreshAccount().then(() => { refreshFamily(); refreshSites(); });
 applySentinel();
 // Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });

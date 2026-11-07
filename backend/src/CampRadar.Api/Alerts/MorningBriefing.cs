@@ -15,7 +15,7 @@ public sealed class BriefingFactsBuilder
     private readonly StatusService _status;
     public BriefingFactsBuilder(NwsForecastClient fc, StatusService status) { _fc = fc; _status = status; }
 
-    public async Task<JsonElement?> BuildAsync(double lat, double lon, string activity, string lang, CancellationToken ct)
+    public async Task<JsonElement?> BuildAsync(double lat, double lon, string activity, string lang, CancellationToken ct, IReadOnlyList<string>? siteLines = null)
     {
         var f = await _fc.GetAsync(lat, lon, ct);
         if (f is null || f.Hours.Count == 0) return null;
@@ -56,7 +56,8 @@ public sealed class BriefingFactsBuilder
             moon = Moon.Phase(now),
             pressure = (object?)null, precipType = precip, visibilityMi = h0.VisMi.HasValue ? Math.Round(h0.VisMi.Value, 1) : (double?)null,
             beach = (object?)null, tropical = s.Alerts.Where(a => a.Event.Contains("Hurricane") || a.Event.Contains("Tropical") || a.Event.Contains("Storm Surge")).Select(a => new { @event = a.Event, headline = a.Headline }),
-            snowGround = (object?)null
+            snowGround = (object?)null,
+            sites = siteLines is { Count: > 0 } ? siteLines : null
         };
         return JsonSerializer.SerializeToElement(facts);
     }
@@ -148,6 +149,7 @@ public static class PlainBriefing
         var hi = S("nextStats.hi"); var lo = S("nextStats.lo"); if (hi.Length > 0) sb.Add(es ? $"Temperaturas de {lo} a {hi}." : $"Temperatures {lo} to {hi}.");
         var nl = S("today.night.lo"); if (nl.Length > 0) sb.Add(es ? $"Esta noche baja a unos {nl}." : $"Tonight drops to around {nl}.");
         var set = S("sun.set"); if (set.Length > 0) sb.Add(es ? $"El sol se pone a las {set}." : $"Sunset is at {set}.");
+        if (f.TryGetProperty("sites", out var sites) && sites.ValueKind == JsonValueKind.Array) foreach (var line in sites.EnumerateArray()) if (line.GetString() is { Length: > 0 } ln) sb.Add(ln);
         foreach (var a in f.GetProperty("alerts").EnumerateArray()) if (a.GetProperty("critical").GetBoolean()) sb.Insert(0, es ? $"Atención: {a.GetProperty("event").GetString()} en vigor." : $"Heads up: a {a.GetProperty("event").GetString()} is in effect.");
         return string.Join(" ", sb);
     }

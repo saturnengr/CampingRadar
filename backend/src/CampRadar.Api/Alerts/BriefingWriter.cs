@@ -66,6 +66,7 @@ public sealed class BriefingWriter
         Language: write the whole briefing in English, or in US Spanish when "language" in the facts is "es-US" (not Castilian;
         keep units as given in miles, miles per hour, degrees Fahrenheit and inches, named in Spanish; keep place names; NWS alert
         names may be translated but should stay recognisable).
+        If the facts include "sites" (the person's saved places), add one short sentence per place near the end, using the given text; keep place names exactly.
         Never contradict or soften an NWS warning (tornado, severe thunderstorm, flood, hurricane, tropical storm, storm surge, blizzard, ice storm, winter storm, extreme cold, avalanche or tsunami warnings always come first). Never invent facts that are not in the JSON. End with one practical sentence.
         Target 110 to 170 words in total. Output only the briefing text.
         """;

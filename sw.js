@@ -4,7 +4,7 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'Camp Radar', body: e.data && e.data.text() }; }
-  const critical = d.tag === 'warning' || d.level === 'imminent' || d.level === 'atyou';
+  const critical = (d.tag || '').startsWith('warning') || d.level === 'imminent' || d.level === 'atyou';
   const opts = { body: d.body || '', tag: d.tag || 'campradar', renotify: true, requireInteraction: critical, data: d, icon: './icon-192.png', badge: './icon-192.png', vibrate: critical ? [300, 100, 300, 100, 600] : [150, 80, 150] };
   if (d.tag === 'msg' && d.replyToken) opts.actions = (d.lang === 'es' ? ['OK', '5 min', 'No puedo'] : ['OK', '5 min', "Can't"]).map(t => ({ action: 'reply:' + t, title: t }));
   e.waitUntil(self.registration.showNotification(d.title || 'Camp Radar', opts));

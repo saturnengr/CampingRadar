@@ -46,6 +46,7 @@ builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
 builder.Services.AddSingleton<GroupStore>();
+builder.Services.AddSingleton<SiteStore>();
 builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
@@ -208,13 +209,66 @@ app.MapPut("/me/settings", (HttpRequest r, [FromBody] JsonElement body, Entitlem
     var raw = body.GetRawText(); if (body.ValueKind != JsonValueKind.Object || raw.Length > 32000) return Results.BadRequest(new { error = "settings object required (max 32 KB)" });
     return Results.Ok(new { updatedMs = ent.PutSettings(t.Email, raw) });
 });
-app.MapDelete("/me", (HttpRequest r, EntitlementStore ent, SpotStore spots) =>
+app.MapDelete("/me", (HttpRequest r, EntitlementStore ent, SpotStore spots, SiteStore sites) =>
 {
     var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    sites.DeleteFor(t.Email);
     foreach (var sp in spots.All().Where(sp => sp.Prefs.Contains("\"email\":\"" + t.Email + "\""))) spots.Delete(sp.Id);
     app.Services.GetRequiredService<GroupStore>().DeleteEverythingFor(t.Email);
     ent.DeleteAccount(t.Email);
     return Results.Ok(new { deleted = true });
+});
+
+// ---------- saved places, dry windows, leave-by ----------
+object SiteView(Site s) => new { s.Id, s.Name, s.Lat, s.Lon, s.Activity, s.Alerts, s.Digest, thresholds = JsonDocument.Parse(s.Thresholds).RootElement.Clone(), s.UpdatedMs };
+app.MapGet("/sites", (HttpRequest r, EntitlementStore ent, SiteStore sites) =>
+{
+    var (pro, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    return Results.Ok(new { pro, max = SiteStore.MaxPerAccount, sites = sites.ForEmail(t.Email).Select(SiteView) });
+});
+app.MapPost("/sites", (HttpRequest r, [FromBody] SiteRequest req, EntitlementStore ent, SiteStore sites) =>
+{
+    var (pro, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    if (!pro) return Results.Json(new { error = "pro", message = "Saved places need LeadTime Pro." }, statusCode: 402);
+    var name = (req.Name ?? "").Trim(); if (name.Length is 0 or > 40) return Results.BadRequest(new { error = "name: 1 to 40 characters" });
+    if (req.Lat is < -90 or > 90 || req.Lon is < -180 or > 180) return Results.BadRequest(new { error = "bad coordinates" });
+    var thr = req.Thresholds is { ValueKind: JsonValueKind.Object } th && th.GetRawText().Length < 500 ? th.GetRawText() : "{}";
+    var s = sites.Upsert(t.Email, req.Id, name, req.Lat, req.Lon, string.IsNullOrWhiteSpace(req.Activity) ? "camping" : req.Activity!, req.Alerts, req.Digest, thr, out var err);
+    return s is null ? Results.BadRequest(new { error = err }) : Results.Ok(SiteView(s));
+});
+app.MapDelete("/sites/{id}", (string id, HttpRequest r, EntitlementStore ent, SiteStore sites) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    sites.Delete(id, t.Email); return Results.Ok();
+});
+// Plan for any point: dry windows over the next 48 h, personal threshold crossings in the next 12 h, and when to start back.
+// backMin = how long the walk/paddle/drive back to shelter takes. Pro.
+async Task<IResult> PlanAsync(HttpRequest r, EntitlementStore ent, NwsForecastClient fc, StatusService status, double lat, double lon, int backMin, JsonElement? thrJson, CancellationToken ct)
+{
+    if (RequirePro(r, ent) is { } gate) return gate;
+    var f = await fc.GetAsync(lat, lon, ct); if (f is null) return Results.Json(new { error = "No forecast for that spot (outside NWS coverage?)" }, statusCode: 502);
+    Status? s = null; try { s = await status.GetAsync(lat, lon, new StatusOptions(), ct); } catch { }
+    var thr = new Dictionary<string, double>(Planner.DefaultThresholds);
+    if (thrJson is { ValueKind: JsonValueKind.Object } tj) { thr.Clear(); foreach (var p in tj.EnumerateObject()) if (p.Value.ValueKind == JsonValueKind.Number) thr[p.Name] = p.Value.GetDouble(); }
+    var now = DateTimeOffset.UtcNow.ToOffset(f.Offset);
+    var windows = Planner.DryWindows(f, now, 48, 2, thr.TryGetValue("gustMph", out var g) ? Math.Min(g, 25) : 25);
+    var leave = Planner.LeaveByTime(f, s, now, Math.Clamp(backMin, 0, 600), thr);
+    return Results.Ok(new
+    {
+        place = f.Place, offsetMin = (int)f.Offset.TotalMinutes, nowMs = now.ToUnixTimeMilliseconds(),
+        windows = windows.Select(w => new { fromMs = w.From.ToUnixTimeMilliseconds(), toMs = w.To.ToUnixTimeMilliseconds(), w.Hours, w.MaxPop, w.MaxGust, w.Hi, w.Lo, w.Sky, w.Label }),
+        leaveBy = leave is null ? null : new { atMs = leave.At.ToUnixTimeMilliseconds(), troubleMs = leave.Trouble.ToUnixTimeMilliseconds(), leave.Reason, leave.ReasonEs, leave.Confidence },
+        hits = Planner.ThresholdHits(f, now, thr, 12).Select(h => new { h.Key, h.Label, h.LabelEs, h.Value, atMs = h.At.ToUnixTimeMilliseconds(), h.Now }),
+        hourly = f.Hours.Where(h => h.T.AddHours(1) > now && h.T < now.AddHours(48)).Select(h => new { tMs = h.T.ToUnixTimeMilliseconds(), temp = Math.Round(h.Temp), h.Pop, h.Thunder, gust = Math.Round(Math.Max(h.WindMph, h.GustMph)), h.Sky })
+    });
+}
+app.MapGet("/plan", (HttpRequest r, EntitlementStore ent, NwsForecastClient fc, StatusService status, double lat, double lon, CancellationToken ct, int backMin = 60) => PlanAsync(r, ent, fc, status, lat, lon, backMin, null, ct));
+app.MapPost("/plan", (HttpRequest r, [FromBody] PlanRequest req, EntitlementStore ent, NwsForecastClient fc, StatusService status, CancellationToken ct) => PlanAsync(r, ent, fc, status, req.Lat, req.Lon, req.BackMin ?? 60, req.Thresholds, ct));
+app.MapGet("/sites/{id}/plan", async (string id, HttpRequest r, EntitlementStore ent, SiteStore sites, NwsForecastClient fc, StatusService status, CancellationToken ct, int backMin = 60) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var s = sites.Get(id, t.Email); if (s is null) return Results.NotFound();
+    return await PlanAsync(r, ent, fc, status, s.Lat, s.Lon, backMin, JsonDocument.Parse(s.Thresholds).RootElement.Clone(), ct);
 });
 
 // ---------- household: invites, members, location sharing, messages ----------
@@ -432,7 +486,7 @@ app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, Entitleme
     return Results.Ok(new { e.Email, e.Plan, e.ExpiresMs, active = e.Active, code });
 });
 app.MapPost("/admin/code", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) => IsAdmin(r) ? (ent.Get(g.Email) is { Active: true } ? Results.Ok(new { code = ent.NewCode(g.Email) }) : Results.BadRequest(new { error = "no active entitlement for that email" })) : Results.Unauthorized());
-app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsClient m, LightningStore l, AlertWorker w, PushSender p) =>
+app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, SiteStore sites, MrmsClient m, LightningStore l, AlertWorker w, PushSender p) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
     d.Prune(90);
@@ -445,6 +499,7 @@ app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsCl
         today = devices.Count(x => now - x.LastMs < 86400000L),
         week = week.Count,
         pushSpots = s.All().Count,
+        savedSites = sites.Count(),
         groups = app.Services.GetRequiredService<GroupStore>().AdminSummary(),
         alerts24 = p.SentLast24h,
         activities = week.GroupBy(x => x.Activity).ToDictionary(g => g.Key, g => g.Count()),
@@ -487,4 +542,6 @@ public sealed record StartRequest(string Email);
 public sealed record MailTestRequest(string To);
 public sealed record VerifyRequest(string Email, string Code, string DeviceId);
 public sealed record GrantRequest(string Email, int Months, string? Plan, string? Note);
+public sealed record SiteRequest(string? Id, string? Name, double Lat, double Lon, string? Activity, bool Alerts, bool Digest, JsonElement? Thresholds);
+public sealed record PlanRequest(double Lat, double Lon, int? BackMin, JsonElement? Thresholds);
 public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);

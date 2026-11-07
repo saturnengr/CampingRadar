@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CampRadar.Api.Lightning;
+using CampRadar.Api.Nws;
 using CampRadar.Api.Push;
 using CampRadar.Api.Radar;
 using CampRadar.Api.Spots;
@@ -21,6 +22,8 @@ public sealed class AlertWorker : BackgroundService
     private readonly BriefingFactsBuilder _facts;
     private readonly BriefingWriter _writer;
     private readonly GroupStore _groups;
+    private readonly SiteStore _sites;
+    private readonly NwsForecastClient _fc;
     private long _lastBriefMs;
     private readonly PushSender _push;
     private readonly ILogger<AlertWorker> _log;
@@ -29,8 +32,8 @@ public sealed class AlertWorker : BackgroundService
     public DateTimeOffset LastCycle { get; private set; }
     public string LastCycleNote { get; private set; } = "not yet";
 
-    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, GroupStore groups, ILogger<AlertWorker> log)
-    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _groups = groups; _log = log; }
+    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, GroupStore groups, SiteStore sites, NwsForecastClient fc, ILogger<AlertWorker> log)
+    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _groups = groups; _sites = sites; _fc = fc; _log = log; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -53,7 +56,7 @@ public sealed class AlertWorker : BackgroundService
             var notes = new List<string>();
             if (now - _lastRadarMs > 120_000) { long before = _mrms.Latest; await _mrms.RefreshTimesAsync(ct); _lastRadarMs = now; if (_mrms.Latest != before) { notes.Add("new radar scan"); _lastEvalMs = 0; } }
             if (now - _lastGlmMs > 60_000) { await _glm.RunAsync(ct); _lastGlmMs = now; notes.Add("glm ok"); }
-            if (now - _lastEvalMs > 300_000) { int n = await EvaluateSpotsAsync(ct); _lastEvalMs = now; notes.Add($"evaluated {n} spots"); }
+            if (now - _lastEvalMs > 300_000) { int n = await EvaluateSpotsAsync(ct); int ns = await EvaluateSitesAsync(ct); _lastEvalMs = now; notes.Add($"evaluated {n} spots" + (ns > 0 ? $", {ns} site pushes" : "")); }
             if (now - _lastBriefMs > 60_000) { int b = await MorningBriefingsAsync(ct); _lastBriefMs = now; if (b > 0) notes.Add($"{b} morning briefings"); }
             if (now - _lastPruneMs > 3_600_000) { _mrms.PruneCache(TimeSpan.FromHours(5)); _groups.Prune(); _lastPruneMs = now; }
             LastCycle = DateTimeOffset.UtcNow; LastCycleNote = string.Join(", ", notes);
@@ -162,7 +165,14 @@ public sealed class AlertWorker : BackgroundService
                 string lang = b.TryGetProperty("lang", out var l) ? l.GetString() ?? "en" : "en";
                 string activity = b.TryGetProperty("activity", out var a) ? a.GetString() ?? "camping" : "camping";
 
-                var facts = await _facts.BuildAsync(spot.Lat, spot.Lon, activity, lang, ct);
+                // saved places with the digest switch on ride along in the same briefing
+                var lines = new List<string>();
+                foreach (var site in _sites.ForEmail(email).Where(x => x.Digest).Take(6))
+                {
+                    try { var sf = await _fc.GetAsync(site.Lat, site.Lon, ct); if (sf is not null) { var ln = Planner.DigestLine(site.Name, sf, nowUtc.ToOffset(sf.Offset), lang); if (ln.Length > 0) lines.Add(ln); } }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "digest line failed for site {Id}", site.Id); }
+                }
+                var facts = await _facts.BuildAsync(spot.Lat, spot.Lon, activity, lang, ct, lines);
                 if (facts is null) { _log.LogWarning("morning briefing: no forecast for spot {Id}", spot.Id); continue; }
                 var plain = PlainBriefing.Compose(facts.Value, lang);
                 var (text, provider) = await _writer.WriteAsync(facts.Value, plain, ct);
@@ -180,6 +190,74 @@ public sealed class AlertWorker : BackgroundService
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "morning briefing failed for spot {Id}", spot.Id); }
         }
         return sent;
+    }
+
+    private sealed class SiteState { public string Rain { get; set; } = "none"; public string Lightning { get; set; } = "none"; public List<string> Warnings { get; set; } = new(); public long RainSentMs { get; set; } public long LightningSentMs { get; set; } public Dictionary<string, string> ThrSent { get; set; } = new(); }
+
+    /// <summary>
+    /// Saved places with alerts on: same rain/lightning/warning edge detection as a device, plus the owner's thresholds against the
+    /// next 12 forecast hours (each threshold at most once per local day). Pushes go to every device signed in with the owner's email.
+    /// </summary>
+    private async Task<int> EvaluateSitesAsync(CancellationToken ct)
+    {
+        var sites = _sites.All().Where(s => s.Alerts).ToList();
+        if (sites.Count == 0) return 0;
+        var spots = _spots.All();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        int n = 0;
+        foreach (var site in sites)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                if (!_ent.IsPro(site.Email)) continue;
+                var devices = spots.Where(sp => string.Equals(ExtractEmail(sp.Prefs), site.Email, StringComparison.OrdinalIgnoreCase) && sp.Failures < 10).ToList();
+                if (devices.Count == 0) continue;
+                var thr = SiteStore.ParseThresholds(site.Thresholds);
+                var s = await _status.GetAsync(site.Lat, site.Lon, new StatusOptions(3, 20), ct);
+                var prev = JsonSerializer.Deserialize<SiteState>(site.LastState) ?? new SiteState();
+                var next = new SiteState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs, ThrSent = prev.ThrSent };
+                var msgs = new List<(string Tag, string Title, string Body, bool Urgent)>();
+                string pfx = site.Name + ": ";
+
+                var crit = s.Alerts.Where(a => a.Critical).ToList();
+                foreach (var a in crit.Where(a => !prev.Warnings.Contains(a.Id))) msgs.Add(("warning", pfx + a.Event.ToUpperInvariant(), a.Headline ?? "Take shelter now.", true));
+                next.Warnings = crit.Select(a => a.Id).ToList();
+
+                int Rank(string l) => l switch { "incoming" => 1, "imminent" => 2, "atyou" => 2, _ => 0 };
+                if (Rank(s.Rain.Level) > Rank(prev.Rain) && now - prev.RainSentMs > 20 * 60000L) { msgs.Add(("rain", pfx + s.Rain.Main, s.Rain.Sub, Rank(s.Rain.Level) >= 2)); next.RainSentMs = now; }
+                next.Rain = Rank(s.Rain.Level) == 0 ? "none" : (Rank(s.Rain.Level) >= Rank(prev.Rain) ? s.Rain.Level : prev.Rain);
+
+                if (s.LightningLevel == "alarm" && prev.Lightning != "alarm" && now - prev.LightningSentMs > 30 * 60000L) { msgs.Add(("lightning", pfx + "Lightning within 10 miles", s.Main, true)); next.LightningSentMs = now; }
+                next.Lightning = s.LightningLevel;
+
+                if (thr.Count > 0)
+                {
+                    var f = await _fc.GetAsync(site.Lat, site.Lon, ct);
+                    if (f is not null)
+                    {
+                        var local = DateTimeOffset.UtcNow.ToOffset(f.Offset); string today = local.ToString("yyyy-MM-dd");
+                        if (local.Hour >= 6 && local.Hour < 22)
+                            foreach (var hit in Planner.ThresholdHits(f, local, thr, 12))
+                            {
+                                if (next.ThrSent.TryGetValue(hit.Key, out var d) && d == today) continue;
+                                msgs.Add(("thr-" + hit.Key, pfx + hit.Label, f.Place.Length > 0 ? "Forecast for " + f.Place : "From the hourly forecast", false));
+                                next.ThrSent[hit.Key] = today;
+                            }
+                    }
+                }
+
+                foreach (var m in msgs)
+                    foreach (var dev in devices)
+                    {
+                        var ok = await _push.SendAsync(dev, new { title = m.Title, body = m.Body, tag = m.Tag + ":" + site.Id, level = s.Level, lat = site.Lat, lon = site.Lon, site = site.Name, siteId = site.Id, at = now }, m.Tag, m.Urgent, ct);
+                        if (!ok) _spots.RecordFailure(dev.Id, gone: true); else n++;
+                    }
+                _sites.SetState(site.Id, JsonSerializer.Serialize(next));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "site {Id} evaluation failed", site.Id); }
+        }
+        return n;
     }
 
     private static Dictionary<string, double> Parse(string json)
