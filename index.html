@@ -105,6 +105,7 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 #pickHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:850;background:var(--accent);padding:6px 8px 6px 16px;border-radius:12px;font-size:17px;font-weight:750;display:flex;gap:12px;align-items:center;white-space:nowrap}
 #pickHint button{background:rgba(0,0,0,.25);min-height:40px}
 #soundChip{position:absolute;left:12px;bottom:74px;z-index:850;background:#6a2fb0;border-color:#b48cff;font-weight:700}
+#updateChip{position:absolute;left:12px;bottom:118px;z-index:850;background:#1e6b3a;border-color:#6fd39a;font-weight:700}
 #voiceChip{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:900;background:#c62828;color:#fff;padding:10px 18px;border-radius:999px;font-size:18px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{box-shadow:0 0 0 10px rgba(198,40,40,.25)}}
 #micBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);padding:0 12px}
@@ -270,6 +271,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <div id="legend" hidden></div>
   <div id="pickHint" hidden><span id="pickText">Tap the map to set your camp location</span><button id="pickCancel">Cancel</button></div>
   <button id="soundChip" hidden>Tap to enable sound</button>
+  <button id="updateChip" hidden>Update ready — tap to restart</button>
   <div id="voiceChip" hidden>Listening…</div>
 </main>
 
@@ -653,6 +655,30 @@ function pingBackend(opened) {
 }
 let pinged = false;
 setInterval(() => pingBackend(false), 10 * 60000);
+
+/* ---- self-update: a page left open for days (the tablet) never reloads on its own. Every 20 minutes the app fetches
+   its own HTML straight from the server and compares it with what it started with; when they differ it offers a
+   restart, and takes it by itself once the device has been idle for a while with nothing important on screen. ---- */
+const upd = { startHash: null, pending: false, lastActivity: Date.now() };
+async function hashText(t) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return Array.from(new Uint8Array(b)).slice(0, 8).map(x => x.toString(16).padStart(2, '0')).join(''); }
+async function checkForUpdate(force) {
+  try {
+    const url = location.pathname.replace(/[^/]*$/, '') + 'index.html';
+    if (!upd.startHash) { upd.startHash = await hashText(await (await fetch(url, { cache: 'force-cache' })).text()); if (!force) return; }
+    const live = await hashText(await (await fetch(url, { cache: 'no-store' })).text());
+    if (live !== upd.startHash) { upd.pending = true; $('#updateChip').hidden = false; }
+  } catch (e) {}
+}
+function applyUpdate() { try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then(r => r && r.update()); } catch (e) {} location.reload(); }
+['pointerdown', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => { upd.lastActivity = Date.now(); }, { passive: true }));
+$('#updateChip').addEventListener('click', applyUpdate);
+setTimeout(() => checkForUpdate(false), 8000);
+setInterval(() => checkForUpdate(true), 20 * 60000);
+setInterval(() => {   // quiet auto-restart: idle 10 min, no sheet open, not speaking or listening, no active warning
+  if (!upd.pending) return;
+  const quiet = Date.now() - upd.lastActivity > 10 * 60000 && $('#modal').hidden && !speech.speaking && !voice.listening && $('#warnbar').hidden && !/imminent|atyou/.test((typeof computeStatus === 'function' && st.loc ? computeStatus().level : '') || '');
+  if (quiet) applyUpdate();
+}, 60000);
 
 /* ---- account / Pro ---- */
 const PRO_LAYERS = ['tropical', 'trails', 'topo'];
