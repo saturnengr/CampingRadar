@@ -639,6 +639,19 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
+const APP_VERSION = '2026.11.06';
+/* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
+   platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
+function pingBackend(opened) {
+  if (!BE() || !st.loc) return;
+  if (!S.deviceId) { S.deviceId = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); save(); }
+  const ua = navigator.userAgent, platform = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iOS' : /Windows/i.test(ua) ? 'Windows' : /Mac/i.test(ua) ? 'Mac' : 'other';
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone ? ' app' : ' web';
+  fetch(BE() + '/app/ping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ id: S.deviceId, lat: +st.loc.lat.toFixed(1), lon: +st.loc.lon.toFixed(1), activity: S.activity, lang: lang(), platform: platform + standalone, version: APP_VERSION, push: !!S.pushId, opened: !!opened }) }).catch(() => {});
+}
+let pinged = false;
+setInterval(() => pingBackend(false), 10 * 60000);
 
 /* ----------------------------- helpers ----------------------------- */
 const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
@@ -837,6 +850,7 @@ if (window.ResizeObserver) new ResizeObserver(checkMapSize).observe($('#map'));
 setInterval(checkMapSize, 1500);   // ResizeObserver callbacks are skipped while a page is in the background; the poll catches up
 function fitRange() {
   if (!st.loc) return;
+  if (!pinged) { pinged = true; setTimeout(() => pingBackend(true), 1500); }
   map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true, ...mapPadding() });
   document.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('on', +b.dataset.range === S.range));
 }

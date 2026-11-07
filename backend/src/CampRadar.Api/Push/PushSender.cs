@@ -28,6 +28,11 @@ public sealed class PushSender
     }
 
     /// <summary>Returns false if the subscription is gone (404/410) and should be deleted.</summary>
+    private readonly Queue<long> _sent = new();
+    /// <summary>Notifications sent in the last 24 hours (for the admin page).</summary>
+    public int SentLast24h { get { lock (_sent) { long cut = DateTimeOffset.UtcNow.AddHours(-24).ToUnixTimeMilliseconds(); while (_sent.Count > 0 && _sent.Peek() < cut) _sent.Dequeue(); return _sent.Count; } } }
+    private void NoteSent() { lock (_sent) { _sent.Enqueue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); if (_sent.Count > 100000) _sent.Dequeue(); } }
+
     public async Task<bool> SendAsync(Spot spot, object payload, string tag, bool urgent, CancellationToken ct)
     {
         if (_vapid is null) return true;
@@ -36,7 +41,7 @@ public sealed class PushSender
         // Urgency and Topic are Web Push headers (RFC 8030); the WebPush library only knows vapidDetails, TTL, headers and gcmAPIKey.
         var headers = new Dictionary<string, object> { ["Urgency"] = urgent ? "high" : "normal", ["Topic"] = tag };
         var opts = new Dictionary<string, object> { ["vapidDetails"] = _vapid, ["TTL"] = urgent ? 600 : 1800, ["headers"] = headers };
-        try { await _client.SendNotificationAsync(sub, json, opts, ct); return true; }
+        try { await _client.SendNotificationAsync(sub, json, opts, ct); NoteSent(); return true; }
         catch (WebPushException ex) when (ex.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
         { _log.LogInformation("subscription gone: {Id}", spot.Id); return false; }
         catch (Exception ex) when (ex is not OperationCanceledException)

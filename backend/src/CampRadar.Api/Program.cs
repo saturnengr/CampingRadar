@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CampRadar.Api.Admin;
 using CampRadar.Api.Alerts;
 using CampRadar.Api.Lightning;
 using CampRadar.Api.Nws;
@@ -24,6 +25,7 @@ builder.Services.AddSingleton<LightningStore>();
 builder.Services.AddSingleton<GlmIngestor>();
 builder.Services.AddSingleton<NwsClient>();
 builder.Services.AddSingleton<SpotStore>();
+builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
@@ -120,7 +122,43 @@ app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, 
     }
 });
 
+// ---------- anonymous usage ping (the app calls this on open and every 10 minutes while open) ----------
+app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
+{
+    if (string.IsNullOrWhiteSpace(r.Id) || r.Id.Length > 40 || r.Lat is < -90 or > 90 || r.Lon is < -180 or > 180) return Results.BadRequest();
+    string Clip(string? x, int n) => (x ?? "").Length > n ? x![..n] : (x ?? "");
+    d.Ping(r.Id, r.Lat, r.Lon, Clip(r.Activity, 16), Clip(r.Lang, 8), Clip(r.Platform, 24), Clip(r.Version, 16), r.Push, r.Opened);
+    return Results.Ok();
+});
+
 // ---------- admin ----------
+app.MapGet("/admin", () => Results.Content(AdminPage.Html, "text/html"));
+app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsClient m, LightningStore l, AlertWorker w, PushSender p) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    d.Prune(90);
+    var devices = d.Recent(30);
+    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var week = devices.Where(x => now - x.LastMs < 7 * 86400000L).ToList();
+    return Results.Ok(new
+    {
+        activeNow = devices.Count(x => now - x.LastMs < 600000),
+        today = devices.Count(x => now - x.LastMs < 86400000L),
+        week = week.Count,
+        pushSpots = s.All().Count,
+        alerts24 = p.SentLast24h,
+        activities = week.GroupBy(x => x.Activity).ToDictionary(g => g.Key, g => g.Count()),
+        devices = devices.Select(x => new { x.Id, x.Lat, x.Lon, x.Activity, x.Lang, x.Platform, x.Version, x.Push, x.FirstMs, x.LastMs, x.Opens }),
+        health = new
+        {
+            radar = new { scans = m.Times.Count, latest = m.Latest > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.Latest) : (DateTimeOffset?)null },
+            lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null },
+            worker = new { lastCycle = w.LastCycle },
+            push = new { enabled = p.Enabled },
+            briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled }
+        }
+    });
+});
 app.MapGet("/admin/vapid/new", (HttpRequest r) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
@@ -137,3 +175,4 @@ public sealed record PushKeys(string P256dh, string Auth);
 public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
 public sealed record BriefRequest(JsonElement Facts, string? Fallback);
+public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);
