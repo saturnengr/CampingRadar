@@ -715,7 +715,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07o';
+const APP_VERSION = '2026.11.07p';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1022,7 +1022,8 @@ function applyBottomGap() {
   const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;bottom:0;height:env(safe-area-inset-bottom,0px);visibility:hidden'; document.body.appendChild(probe);
   const inset = probe.getBoundingClientRect().height; probe.remove();
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, android = /Android/i.test(navigator.userAgent);
-  let px = S.bottomGap === 'auto' || S.bottomGap == null ? (inset > 0 ? inset : (standalone && android ? 48 : 0)) : +S.bottomGap;
+  if (S.bottomGap == null || (S.bottomGap !== 'auto' && isNaN(+S.bottomGap))) S.bottomGap = 'auto'; else if (S.bottomGap !== 'auto') S.bottomGap = String(+S.bottomGap);
+  let px = S.bottomGap === 'auto' ? (inset > 0 ? inset : (standalone && android ? 48 : 0)) : +S.bottomGap;
   document.documentElement.style.setProperty('--navpad', px + 'px');
   setTimeout(checkMapSize, 50);
 }
@@ -3026,7 +3027,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
-    ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], [0, 'None'], [24, 'Gesture bar'], [48, '3-button bar']]],
+    ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], ['0', 'None'], ['24', 'Gesture bar'], ['48', '3-button bar']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
