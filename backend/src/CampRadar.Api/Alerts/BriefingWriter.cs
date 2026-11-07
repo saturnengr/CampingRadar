@@ -66,7 +66,8 @@ public sealed class BriefingWriter
                 if (!string.IsNullOrEmpty(text)) return (text, p);
                 _log.LogWarning("briefing provider {Provider} returned no text", p); errors?.Add(p + ": returned no text");
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "briefing provider {Provider} failed; trying the next", p); errors?.Add(p + ": " + ex.Message); }
+            catch (Exception ex) when (!ct.IsCancellationRequested)   // a provider timeout is an ordinary failure; only the caller going away stops the loop
+            { var msg = ex is TaskCanceledException ? "timed out" : ex.Message; _log.LogWarning(ex, "briefing provider {Provider} failed; trying the next", p); errors?.Add(p + ": " + msg); }
         }
         return (null, null);
     }

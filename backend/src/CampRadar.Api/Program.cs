@@ -19,8 +19,22 @@ builder.Services.AddHttpClient("noaa", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd(builder.Configuration["UserAgent"] ?? "CampRadar/1.0 (+https://github.com/saturnengr/CampingRadar)");
     c.DefaultRequestHeaders.Accept.ParseAdd("application/geo+json, application/json, image/png, */*");
 });
-builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(40));
-builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30));
+// AI providers and Graph: connect over IPv4 only. Shared Windows hosts often have no IPv6 route, and a dual-stack
+// hostname (googleapis.com) then hangs on the IPv6 attempt until the timeout instead of falling back.
+static SocketsHttpHandler IPv4Handler() => new()
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+    ConnectCallback = async (ctx, ct) =>
+    {
+        var addrs = await System.Net.Dns.GetHostAddressesAsync(ctx.DnsEndPoint.Host, System.Net.Sockets.AddressFamily.InterNetwork, ct);
+        if (addrs.Length == 0) throw new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound);
+        var sock = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
+        try { await sock.ConnectAsync(addrs, ctx.DnsEndPoint.Port, ct); return new System.Net.Sockets.NetworkStream(sock, ownsSocket: true); }
+        catch { sock.Dispose(); throw; }
+    }
+};
+builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(25)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
+builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
