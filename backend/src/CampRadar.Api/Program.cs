@@ -238,6 +238,21 @@ app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, Cancell
     var (text, provider) = await w.WriteAsync(facts, null, ct, errors);
     return Results.Ok(new { ok = text is not null, provider, providers = w.Active, text, errors });
 });
+// Which outside services can this host actually reach? (shared hosts block or black-hole some destinations)
+app.MapGet("/admin/net/test", async (HttpRequest r, IHttpClientFactory f, CancellationToken ct) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    var targets = new[] { "https://api.weather.gov/", "https://generativelanguage.googleapis.com/", "https://api.anthropic.com/", "https://api.groq.com/", "https://openrouter.ai/api/v1/models", "https://api.openai.com/", "https://api.mistral.ai/", "https://gateway.ai.cloudflare.com/", "https://graph.microsoft.com/" };
+    var client = f.CreateClient("llm");
+    var results = new List<object>();
+    foreach (var t in targets)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try { using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct); cts.CancelAfter(8000); using var resp = await client.GetAsync(t, HttpCompletionOption.ResponseHeadersRead, cts.Token); results.Add(new { url = t, reachable = true, status = (int)resp.StatusCode, ms = sw.ElapsedMilliseconds }); }
+        catch (Exception ex) { results.Add(new { url = t, reachable = false, error = ex is OperationCanceledException ? "timed out (8 s)" : ex.GetBaseException().Message, ms = sw.ElapsedMilliseconds }); }
+    }
+    return Results.Ok(results);
+});
 app.MapGet("/admin/entitlements", (HttpRequest r, EntitlementStore ent) => IsAdmin(r) ? Results.Ok(ent.All().Select(x => new { x.E.Email, x.E.Plan, x.E.ExpiresMs, x.E.Source, x.E.Note, x.E.UpdatedMs, active = x.E.Active, devices = x.Devices })) : Results.Unauthorized());
 app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) =>
 {
