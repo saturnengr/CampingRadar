@@ -59,15 +59,16 @@ public sealed class BriefingWriter
         var user = "Facts:\n" + facts.GetRawText() + (fallback is null ? "" : "\n\nA plain template version, for reference only:\n" + fallback);
         foreach (var p in Providers)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var text = p switch { "gemini" => await GeminiAsync(user, ct), "anthropic" => await AnthropicAsync(user, ct), "openai" => await OpenAiAsync(user, ct), _ => null };
                 text = text?.Trim();
-                if (!string.IsNullOrEmpty(text)) return (text, p);
+                if (!string.IsNullOrEmpty(text)) { _log.LogInformation("briefing written by {Provider} in {Ms} ms", p, sw.ElapsedMilliseconds); return (text, p); }
                 _log.LogWarning("briefing provider {Provider} returned no text", p); errors?.Add(p + ": returned no text");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)   // a provider timeout is an ordinary failure; only the caller going away stops the loop
-            { var msg = ex is TaskCanceledException ? "timed out" : ex.Message; _log.LogWarning(ex, "briefing provider {Provider} failed; trying the next", p); errors?.Add(p + ": " + msg); }
+            { var msg = ex is TaskCanceledException ? "timed out after " + sw.ElapsedMilliseconds / 1000 + " s" : ex.Message; _log.LogWarning("briefing provider {Provider} failed after {Ms} ms: {Error}", p, sw.ElapsedMilliseconds, msg); errors?.Add(p + ": " + msg); }
         }
         return (null, null);
     }
@@ -77,12 +78,13 @@ public sealed class BriefingWriter
     // ---- Google Gemini: POST generateContent with a system instruction ----
     private async Task<string?> GeminiAsync(string user, CancellationToken ct)
     {
-        var model = _cfg["Gemini:Model"] ?? "gemini-flash-latest";
+        var model = _cfg["Gemini:Model"] ?? "gemini-2.5-flash-lite";
         var body = new
         {
             system_instruction = new { parts = new[] { new { text = System } } },
             contents = new[] { new { role = "user", parts = new[] { new { text = user } } } },
-            generationConfig = new { maxOutputTokens = 500, temperature = 0.6 }
+            // thinkingBudget 0 = answer straight away; the newer Flash models otherwise reason silently for many seconds first
+            generationConfig = new { maxOutputTokens = 600, temperature = 0.6, thinkingConfig = new { thinkingBudget = 0 } }
         };
         using var req = new HttpRequestMessage(HttpMethod.Post, $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
         req.Headers.Add("x-goog-api-key", _cfg["Gemini:ApiKey"]);
