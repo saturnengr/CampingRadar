@@ -59,7 +59,7 @@ public sealed class BriefingWriter
         var user = "Facts:\n" + facts.GetRawText() + (fallback is null ? "" : "\n\nA plain template version, for reference only:\n" + fallback);
         foreach (var p in Providers)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var sw = global::System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var text = p switch { "gemini" => await GeminiAsync(user, ct), "anthropic" => await AnthropicAsync(user, ct), "openai" => await OpenAiAsync(user, ct), _ => null };
