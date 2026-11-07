@@ -81,7 +81,7 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
 {
     ok = true, utc = DateTimeOffset.UtcNow,
     radar = new { scans = m.Times.Count, latest = m.Latest > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.Latest) : (DateTimeOffset?)null, refreshed = m.TimesRefreshedAt },
-    lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null, newestFlash = l.NewestFlashMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.NewestFlashMs) : (DateTimeOffset?)null },
+    lightning = new { enabled = app.Services.GetRequiredService<GlmIngestor>().Enabled, flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null, newestFlash = l.NewestFlashMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.NewestFlashMs) : (DateTimeOffset?)null },
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
     push = new { enabled = p.Enabled, spots = s.All().Count },
     briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled, providers = app.Services.GetRequiredService<BriefingWriter>().Active },

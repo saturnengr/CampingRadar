@@ -17,11 +17,13 @@ public sealed class GlmIngestor
     private readonly string[] _buckets;
     private readonly (double MinLat, double MaxLat, double MinLon, double MaxLon) _box;
     private bool _backfilled;
+    public bool Enabled { get; }
 
     public GlmIngestor(HttpClient http, LightningStore store, IConfiguration cfg, ILogger<GlmIngestor> log)
     {
         _http = http; _store = store; _log = log;
         // GOES-19 is GOES-East (covers all of CONUS). Add "noaa-goes18" (GOES-West) for better far-west coverage.
+        Enabled = cfg.GetValue("Glm:Enabled", true); store.Paused = !Enabled;
         _buckets = (cfg["Glm:Buckets"] ?? "noaa-goes19").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         _box = (cfg.GetValue("Glm:MinLat", 18.0), cfg.GetValue("Glm:MaxLat", 55.0), cfg.GetValue("Glm:MinLon", -130.0), cfg.GetValue("Glm:MaxLon", -60.0));
     }
@@ -29,6 +31,7 @@ public sealed class GlmIngestor
     /// <summary>Ingest anything new. First call also backfills the last 30 minutes.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
+        if (!Enabled) return;   // Glm:Enabled=false pauses the feed (it is the bulk of the server's inbound data)
         var now = DateTimeOffset.UtcNow;
         var hours = new List<DateTimeOffset> { now };
         if (!_backfilled || now.Minute < 3) hours.Add(now.AddHours(-1));

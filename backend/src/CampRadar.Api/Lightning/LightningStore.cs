@@ -15,6 +15,8 @@ public sealed class LightningStore
     private readonly List<Flash> _flashes = new();
     private readonly HashSet<string> _seenFiles = new();
     public long LastIngestMs { get; private set; }
+    /// <summary>Set when the GLM feed is switched off in configuration: summaries then report no strikes and no staleness.</summary>
+    public bool Paused { get; set; }
     public long NewestFlashMs { get; private set; }
     public int Count { get { lock (_lock) return _flashes.Count; } }
 
@@ -78,7 +80,7 @@ public sealed class LightningStore
             else if (double.IsFinite(recentMin)) trend = "steady";
             else trend = "receding";
         }
-        bool fresh = lastIngest > 0 && nowMs - lastIngest < 5 * 60000L;
+        bool fresh = Paused || (lastIngest > 0 && nowMs - lastIngest < 5 * 60000L);
         return new LightningSummary(n10, n20, n30, nearest, nearestBearing,
             newest > 0 ? (nowMs - newest) / 60000.0 : null, trend, windowMin, nowMs, fresh);
     }
