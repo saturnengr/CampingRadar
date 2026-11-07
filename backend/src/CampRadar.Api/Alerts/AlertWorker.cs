@@ -17,6 +17,7 @@ public sealed class AlertWorker : BackgroundService
     private readonly GlmIngestor _glm;
     private readonly StatusService _status;
     private readonly SpotStore _spots;
+    private readonly EntitlementStore _ent;
     private readonly PushSender _push;
     private readonly ILogger<AlertWorker> _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -24,8 +25,8 @@ public sealed class AlertWorker : BackgroundService
     public DateTimeOffset LastCycle { get; private set; }
     public string LastCycleNote { get; private set; } = "not yet";
 
-    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, PushSender push, ILogger<AlertWorker> log)
-    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _push = push; _log = log; }
+    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, ILogger<AlertWorker> log)
+    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _log = log; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -58,6 +59,11 @@ public sealed class AlertWorker : BackgroundService
 
     private sealed class SentState { public string Rain { get; set; } = "none"; public string Lightning { get; set; } = "none"; public List<string> Warnings { get; set; } = new(); public long RainSentMs { get; set; } public long LightningSentMs { get; set; } }
 
+    private static string ExtractEmail(string prefsJson)
+    {
+        try { using var d = JsonDocument.Parse(prefsJson); return d.RootElement.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : ""; } catch { return ""; }
+    }
+
     private async Task<int> EvaluateSpotsAsync(CancellationToken ct)
     {
         var spots = _spots.All();
@@ -73,6 +79,10 @@ public sealed class AlertWorker : BackgroundService
                 var prev = JsonSerializer.Deserialize<SentState>(spot.LastState) ?? new SentState();
                 var next = new SentState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs };
                 bool snoozed = now < spot.SnoozeUntil;
+                // Pro lapsed (or never set): critical NWS warnings still go out; rain and lightning alerts do not.
+                string email = ExtractEmail(spot.Prefs);
+                bool pro = email.Length > 0 && (_ent.Get(email)?.Active ?? false);
+                if (!pro) snoozed = true;
                 var msgs = new List<(string Tag, string Title, string Body, bool Urgent)>();
 
                 // NWS critical warnings: always, once per alert id, never snoozed.
@@ -94,7 +104,7 @@ public sealed class AlertWorker : BackgroundService
 
                 // Lightning: notify when strikes first appear within the alarm radius; re-notify after 30 quiet minutes. Not snoozed.
                 int LRank(string l) => l switch { "alarm" => 2, "near20" => 1, _ => 0 };
-                if (LRank(s.LightningLevel) == 2 && LRank(prev.Lightning) < 2 && now - prev.LightningSentMs > 30 * 60000L)
+                if (pro && LRank(s.LightningLevel) == 2 && LRank(prev.Lightning) < 2 && now - prev.LightningSentMs > 30 * 60000L)
                 { msgs.Add(("lightning", "Lightning within 10 miles", s.Main, true)); next.LightningSentMs = now; }
                 next.Lightning = s.LightningLevel;
 

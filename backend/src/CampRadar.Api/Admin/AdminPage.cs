@@ -40,6 +40,11 @@ public static class AdminPage
   <div id="map"></div>
   <div class="card half"><h2>Activities (7 days)</h2><table id="acts"></table></div>
   <div class="card half"><h2>Server</h2><table id="health"></table></div>
+  <div class="card wide"><h2>Pro access</h2>
+    <p class="sub">Grant Pro to an email and hand the person the activation code (Settings → Account in the app). Months add to any time they already have; 0 months removes Pro and signs their devices out.</p>
+    <p><input id="gEmail" type="email" placeholder="email" style="width:260px"> <input id="gMonths" type="number" value="12" min="0" max="120" style="width:80px"> months <input id="gNote" placeholder="note (optional)" style="width:200px"> <button id="grant">Grant Pro</button> <span id="gOut" class="sub"></span></p>
+    <div style="overflow:auto;max-height:320px"><table id="ents"><thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Expires</th><th>Devices</th><th>Source</th><th>Note</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
   <div class="card wide"><h2>Devices (30 days)</h2><div style="overflow:auto;max-height:420px"><table id="devs"><thead><tr><th>Last seen</th><th>First seen</th><th>Opens</th><th>Activity</th><th>Lang</th><th>Platform</th><th>Version</th><th>Alerts</th><th>Near</th></tr></thead><tbody></tbody></table></div></div>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -51,7 +56,7 @@ async function load(){
   const r=await fetch('/admin/overview',{headers:{'X-Admin-Key':key}});
   if(r.status===401){sessionStorage.removeItem('adminKey');$('#err').textContent='Wrong key.';$('#login').hidden=false;$('#main').hidden=true;return}
   const o=await r.json(); sessionStorage.setItem('adminKey',key);
-  $('#login').hidden=true;$('#main').hidden=false;$('#refresh').hidden=false;$('#logout').hidden=false;
+  $('#login').hidden=true;$('#main').hidden=false;$('#refresh').hidden=false;$('#logout').hidden=false; loadEnts();
   $('#when').textContent='as of '+new Date().toLocaleTimeString();
   $('#now').textContent=o.activeNow;$('#today').textContent=o.today;$('#week').textContent=o.week;$('#push').textContent=o.pushSpots;
   $('#acts').innerHTML=Object.entries(o.activities).sort((a,b)=>b[1]-a[1]).map(([k,v])=>'<tr><td>'+(k||'—')+'</td><td>'+v+'</td></tr>').join('')||'<tr><td class="sub">none yet</td></tr>';
@@ -70,6 +75,10 @@ async function load(){
     L.circleMarker([d.lat,d.lon],{radius:age<600000?8:6,color:col,fillColor:col,fillOpacity:.7,weight:1}).bindTooltip((d.activity||'—')+' · '+d.platform+' · '+ago(d.lastMs)+(d.push?' · alerts on':'')).addTo(layer)}
   $('#devs tbody').innerHTML=o.devices.map(d=>'<tr><td>'+ago(d.lastMs)+'</td><td>'+new Date(d.firstMs).toLocaleDateString()+'</td><td>'+d.opens+'</td><td>'+(d.activity||'—')+'</td><td>'+d.lang+'</td><td>'+d.platform+'</td><td>'+d.version+'</td><td>'+(d.push?'yes':'')+'</td><td>'+d.lat.toFixed(1)+', '+d.lon.toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="9" class="sub">No devices have reported yet.</td></tr>';
 }
+async function loadEnts(){const r=await fetch('/admin/entitlements',{headers:{'X-Admin-Key':key}});if(!r.ok)return;const l=await r.json();
+  $('#ents tbody').innerHTML=l.map(e=>'<tr><td>'+e.email+'</td><td>'+e.plan+'</td><td>'+(e.active?'<span class="ok">active</span>':'<span class="warn">inactive</span>')+'</td><td>'+(e.expiresMs?new Date(e.expiresMs).toLocaleDateString():'—')+'</td><td>'+e.devices+'</td><td>'+e.source+'</td><td>'+(e.note||'')+'</td><td>'+(e.active?'<button data-code="'+e.email+'" style="padding:4px 10px;font-size:12px">New code</button>':'')+'</td></tr>').join('')||'<tr><td colspan="8" class="sub">No one has Pro yet.</td></tr>'}
+$('#grant').onclick=async()=>{const body={email:$('#gEmail').value.trim(),months:+$('#gMonths').value,note:$('#gNote').value.trim()};const r=await fetch('/admin/grant',{method:'POST',headers:{'X-Admin-Key':key,'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();$('#gOut').innerHTML=r.ok?(j.code?'Code for '+j.email+': <b style="color:var(--accent);font-size:18px">'+j.code+'</b> (valid 14 days, single use)':'Pro removed for '+j.email):(j.error||'failed');loadEnts()};
+$('#ents').addEventListener('click',async e=>{const b=e.target.closest('[data-code]');if(!b)return;const r=await fetch('/admin/code',{method:'POST',headers:{'X-Admin-Key':key,'Content-Type':'application/json'},body:JSON.stringify({email:b.dataset.code,months:0})});const j=await r.json();$('#gOut').innerHTML=r.ok?'Code for '+b.dataset.code+': <b style="color:var(--accent);font-size:18px">'+j.code+'</b>':(j.error||'failed')});
 $('#go').onclick=()=>{key=$('#key').value.trim();load()};$('#key').addEventListener('keydown',e=>{if(e.key==='Enter')$('#go').click()});
 $('#refresh').onclick=load;$('#logout').onclick=()=>{sessionStorage.removeItem('adminKey');location.reload()};
 if(key)load();

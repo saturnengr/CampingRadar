@@ -26,6 +26,7 @@ builder.Services.AddSingleton<GlmIngestor>();
 builder.Services.AddSingleton<NwsClient>();
 builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<DeviceStore>();
+builder.Services.AddSingleton<EntitlementStore>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
@@ -42,6 +43,9 @@ var app = builder.Build();
 app.UseCors();
 string adminKey = app.Configuration["AdminKey"] ?? "";
 bool IsAdmin(HttpRequest r) => adminKey.Length > 0 && r.Headers["X-Admin-Key"] == adminKey;
+string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : null; }
+// Pro gate: 402 with a short reason the app shows next to the feature.
+IResult? RequirePro(HttpRequest r, EntitlementStore ent) => ent.Check(Bearer(r)).Pro ? null : Results.Json(new { error = "pro", message = "This needs LeadTime Pro. Sign in or enter an activation code in Settings → Account." }, statusCode: 402);
 
 // ---------- health / heartbeat ----------
 app.MapGet("/", () => Results.Text("Camp Radar API. See /health", "text/plain"));
@@ -71,9 +75,10 @@ app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", async (long t, in
 });
 
 // ---------- lightning ----------
-app.MapGet("/lightning", (double lat, double lon, LightningStore l, int minutes = 30) => l.Summarize(lat, lon, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Math.Clamp(minutes, 5, 60)));
-app.MapGet("/lightning/recent", (double minLat, double minLon, double maxLat, double maxLon, LightningStore l, int minutes = 30) =>
+app.MapGet("/lightning", (HttpRequest req, EntitlementStore ent, double lat, double lon, LightningStore l, int minutes = 30) => RequirePro(req, ent) ?? Results.Ok(l.Summarize(lat, lon, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Math.Clamp(minutes, 5, 60))));
+app.MapGet("/lightning/recent", (HttpRequest req, EntitlementStore ent, double minLat, double minLon, double maxLat, double maxLon, LightningStore l, int minutes = 30) =>
 {
+    if (RequirePro(req, ent) is { } gate) return gate;
     if (maxLat - minLat > 12 || maxLon - minLon > 16) return Results.BadRequest("box too large");
     long since = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - Math.Clamp(minutes, 5, 60) * 60000L;
     return Results.Ok(l.Recent(minLat, minLon, maxLat, maxLon, since).Select(f => new { t = f.TimeMs, lat = f.Lat, lon = f.Lon }));
@@ -87,8 +92,9 @@ app.MapGet("/status", async (double lat, double lon, StatusService s, Cancellati
 });
 
 // ---------- spoken briefing text ----------
-app.MapPost("/brief", async ([FromBody] BriefRequest req, BriefingWriter w, CancellationToken ct) =>
+app.MapPost("/brief", async (HttpRequest http, EntitlementStore ent, [FromBody] BriefRequest req, BriefingWriter w, CancellationToken ct) =>
 {
+    if (RequirePro(http, ent) is { } gate) return gate;
     if (!w.Enabled) return Results.StatusCode(503);
     if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
     var text = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct);
@@ -97,12 +103,16 @@ app.MapPost("/brief", async ([FromBody] BriefRequest req, BriefingWriter w, Canc
 
 // ---------- push subscriptions ----------
 app.MapGet("/push/vapid-public-key", (PushSender p) => p.Enabled ? Results.Text(p.PublicKey!, "text/plain") : Results.StatusCode(503));
-app.MapPost("/push/subscribe", ([FromBody] SubscribeRequest req, SpotStore store, PushSender p) =>
+app.MapPost("/push/subscribe", (HttpRequest http, EntitlementStore ent, [FromBody] SubscribeRequest req, SpotStore store, PushSender p) =>
 {
+    if (RequirePro(http, ent) is { } gate) return gate;
     if (!p.Enabled) return Results.StatusCode(503);
     if (req.Subscription?.Endpoint is null || req.Subscription.Keys is null) return Results.BadRequest("subscription required");
     if (req.Lat is < 15 or > 72 || req.Lon is < -170 or > -50) return Results.BadRequest("US coverage only");
-    var id = store.Upsert(req.Subscription.Endpoint, req.Subscription.Keys.P256dh, req.Subscription.Keys.Auth, req.Lat, req.Lon, req.Prefs?.GetRawText() ?? "{}");
+    var who = ent.Check(Bearer(http));
+    var prefs = JsonSerializer.Deserialize<Dictionary<string, object?>>(req.Prefs?.GetRawText() ?? "{}") ?? new();
+    prefs["email"] = who.T!.Email;
+    var id = store.Upsert(req.Subscription.Endpoint, req.Subscription.Keys.P256dh, req.Subscription.Keys.Auth, req.Lat, req.Lon, JsonSerializer.Serialize(prefs));
     return Results.Ok(new { id });
 });
 app.MapPost("/push/{id}/location", (string id, [FromBody] LocationRequest r, SpotStore store) => { if (store.Get(id) is null) return Results.NotFound(); store.SetLocation(id, r.Lat, r.Lon); return Results.Ok(); });
@@ -131,8 +141,35 @@ app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
     return Results.Ok();
 });
 
+// ---------- account: activation codes → device tokens ----------
+app.MapPost("/auth/redeem", ([FromBody] RedeemRequest r, EntitlementStore ent) =>
+{
+    if (string.IsNullOrWhiteSpace(r.Code) || string.IsNullOrWhiteSpace(r.DeviceId)) return Results.BadRequest(new { error = "code and deviceId required" });
+    var t = ent.Redeem(r.Code, r.DeviceId);
+    if (t is null) return Results.Json(new { error = "That code is not valid, was already used, or has expired." }, statusCode: 400);
+    var e = ent.Get(t.Email);
+    return Results.Ok(new { token = t.Token, email = t.Email, plan = e?.Plan ?? "free", expiresMs = e?.ExpiresMs ?? 0, pro = e?.Active == true });
+});
+app.MapGet("/auth/me", (HttpRequest r, EntitlementStore ent) =>
+{
+    var (pro, e, t) = ent.Check(Bearer(r));
+    return t is null ? Results.Unauthorized() : Results.Ok(new { email = t.Email, plan = e?.Plan ?? "free", expiresMs = e?.ExpiresMs ?? 0, pro });
+});
+app.MapPost("/auth/signout", (HttpRequest r, EntitlementStore ent) => { var b = Bearer(r); if (b is not null) ent.Revoke(b); return Results.Ok(); });
+
 // ---------- admin ----------
 app.MapGet("/admin", () => Results.Content(AdminPage.Html, "text/html"));
+app.MapGet("/admin/entitlements", (HttpRequest r, EntitlementStore ent) => IsAdmin(r) ? Results.Ok(ent.All().Select(x => new { x.E.Email, x.E.Plan, x.E.ExpiresMs, x.E.Source, x.E.Note, x.E.UpdatedMs, active = x.E.Active, devices = x.Devices })) : Results.Unauthorized());
+app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(g.Email) || !g.Email.Contains('@')) return Results.BadRequest(new { error = "email required" });
+    var e = ent.Grant(g.Email, g.Months <= 0 ? "free" : (g.Plan ?? "pro"), g.Months, "admin", g.Note ?? "");
+    if (g.Months <= 0) ent.RevokeAll(g.Email);
+    var code = g.Months > 0 ? ent.NewCode(g.Email) : null;
+    return Results.Ok(new { e.Email, e.Plan, e.ExpiresMs, active = e.Active, code });
+});
+app.MapPost("/admin/code", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) => IsAdmin(r) ? (ent.Get(g.Email) is { Active: true } ? Results.Ok(new { code = ent.NewCode(g.Email) }) : Results.BadRequest(new { error = "no active entitlement for that email" })) : Results.Unauthorized());
 app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsClient m, LightningStore l, AlertWorker w, PushSender p) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
@@ -175,4 +212,6 @@ public sealed record PushKeys(string P256dh, string Auth);
 public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
 public sealed record BriefRequest(JsonElement Facts, string? Fallback);
+public sealed record RedeemRequest(string Code, string DeviceId);
+public sealed record GrantRequest(string Email, int Months, string? Plan, string? Note);
 public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);
