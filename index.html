@@ -821,10 +821,14 @@ function mapPadding() {
 }
 // The banner changes height after the forecast loads (on phones the day strip wraps to its own row), which shrinks the
 // map underneath it. Leaflet only watches the window, so tell it, and re-fit unless the user has just been panning.
-if (window.ResizeObserver) {
-  let last = 0;
-  new ResizeObserver(() => { const h = $('#map').clientHeight; if (!h || h === last) return; last = h; map.invalidateSize({ pan: false }); if (st.loc && Date.now() - (st.lastTouch || 0) > 5000) fitRange(); }).observe($('#map'));
+function checkMapSize() {
+  const el = $('#map'), h = el.clientHeight, w = el.clientWidth, sz = map.getSize();
+  if (!h || (h === sz.y && w === sz.x)) return;
+  map.invalidateSize({ pan: false });
+  if (st.loc && Date.now() - (st.lastTouch || 0) > 5000) fitRange();
 }
+if (window.ResizeObserver) new ResizeObserver(checkMapSize).observe($('#map'));
+setInterval(checkMapSize, 1500);   // ResizeObserver callbacks are skipped while a page is in the background; the poll catches up
 function fitRange() {
   if (!st.loc) return;
   map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true, ...mapPadding() });
