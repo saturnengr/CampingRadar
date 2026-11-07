@@ -218,6 +218,24 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #statusbar{min-height:44px}
 }
 
+/* ---- tablet sidebar layout: forecast and status beside a near-square map (Settings → General → Layout) ---- */
+#side{display:contents}
+body.side{flex-direction:row}
+body.side.side-right{flex-direction:row-reverse}
+body.side #side{display:flex;flex-direction:column;flex:none;width:clamp(300px,34vw,420px);overflow:hidden auto;border-right:1px solid var(--line);background:var(--chrome)}
+body.side.side-right #side{border-right:0;border-left:1px solid var(--line)}
+body.side #statusbar{order:0;flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px;min-height:0}
+body.side #statusMain{font-size:24px}body.side #statusSub{font-size:16px}
+body.side #rings{display:flex;flex-wrap:wrap}
+body.side #statusbar #micBtn,body.side #statusbar #snoozeBtn{align-self:flex-start}
+body.side #warnbar{order:1;flex-wrap:wrap}
+body.side #banner{order:2;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:10px;padding:12px 14px;border-bottom:0;border-top:1px solid var(--line)}
+body.side #now{flex:none}
+body.side #nowTemp{font-size:56px}
+body.side #days{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+body.side .day{width:auto;flex:none}
+body.side #side::after{content:"";flex:1;order:9}
+
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
 body.night #banner,body.night #statusbar,body.night #warnbar,body.night #controls,body.night #frameInfo{filter:brightness(.8)}
@@ -225,6 +243,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
 </head>
 <body>
 
+<div id="side">
 <header id="banner">
   <div id="now">
     <div id="nowTemp">--°</div>
@@ -253,6 +272,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   </div>
   <button id="micBtn" title="Tap to talk" hidden><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg></button>
   <button id="snoozeBtn">Snooze</button>
+</div>
 </div>
 
 <main id="mapwrap">
@@ -630,7 +650,7 @@ const BEACH_EVENTS = /Rip Current|High Surf|Beach Hazards|Coastal Flood|Small Cr
 const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar loop
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
-const DEFAULTS = { rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
+const DEFAULTS = { layout: 'top', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
@@ -660,7 +680,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07b';
+const APP_VERSION = '2026.11.07c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -961,6 +981,14 @@ function mapPadding() {
 }
 // The banner changes height after the forecast loads (on phones the day strip wraps to its own row), which shrinks the
 // map underneath it. Leaflet only watches the window, so tell it, and re-fit unless the user has just been panning.
+// Sidebar layout only when the window is wide enough; the phone CSS (≤600 px) always stacks.
+function applyLayout() {
+  const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
+  document.body.classList.toggle('side', side);
+  document.body.classList.toggle('side-right', side && S.layout === 'right');
+  setTimeout(checkMapSize, 50);
+}
+window.addEventListener('resize', applyLayout);
 function checkMapSize() {
   const el = $('#map'), h = el.clientHeight, w = el.clientWidth, sz = map.getSize();
   if (!h || (h === sz.y && w === sz.x)) return;
@@ -976,6 +1004,7 @@ function fitRange() {
   document.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('on', +b.dataset.range === S.range));
 }
 renderRangeButtons();
+applyLayout();
 document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { S.range = +b.dataset.range; save(); drawRings(); fitRange(); }));
 $('#btnCenter').addEventListener('click', fitRange);
 function manualZoom(dir) {
@@ -2692,6 +2721,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
+    ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
@@ -3128,6 +3158,7 @@ $('#sheet').addEventListener('click', e => {
   S[k] = v; save();
   b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   if (k === 'night') applyNight();
+  if (k === 'layout') applyLayout();
   if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
