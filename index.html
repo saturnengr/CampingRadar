@@ -1089,7 +1089,7 @@ function startGps() {
   navigator.geolocation.watchPosition(p => {
     st.gpsErr = null; st.gpsAcc = p.coords.accuracy;
     lastGps = { lat: p.coords.latitude, lon: p.coords.longitude };
-    if (S.locMode === 'gps') setLocation(lastGps.lat, lastGps.lon, 'gps');
+    if (S.locMode === 'gps') { setLocation(lastGps.lat, lastGps.lon, 'gps'); if (S.activity === 'sentinel') applySentinel(); }
     afterGpsAnswer();
   }, err => { st.gpsErr = err.code === 1 ? 'blocked' : (err.message || 'GPS error'); updatePickHint(); afterGpsAnswer(); },
   { enableHighAccuracy: true, maximumAge: 60000, timeout: 60000 });
@@ -1816,7 +1816,7 @@ $('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); 
 document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') && e.target.id !== 'snoozeBtn') $('#snoozeMenu').hidden = true; });
 
 /* ------------------------------ day view --------------------------- */
-const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing' };
+const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing', sentinel: 'Sentinel (fixed display watching one spot)' };
 $('#days').addEventListener('click', e => { const d = e.target.closest('.day'); if (d && d.dataset.date) openDay(d.dataset.date); });
 
 // NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
@@ -1945,6 +1945,7 @@ async function openDay(dateStr) {
     trail: [rainTile, thunderTile, exertTile, lastLight, windTile, tempTile],
     beach: [tideTile, ripTile, uvTile, wtTile, waveTile, windTile, thunderTile, sunTile],
     skiing: [groundTile, snowTile, chillTile, visTile, liftTile, snowLevelTile, tempTile, sunTile],
+    sentinel: [rainTile, thunderTile, windTile, tempTile, overnight, sunTile],
   };
   // winter extras for everyone when snow or dangerous cold is in the forecast
   if (act !== 'skiing') { if (snowTotal >= 0.5) tilesByActivity[act].unshift(snowTile); if (groundVal >= 1) tilesByActivity[act].unshift(groundTile); if (chillLo <= 0) tilesByActivity[act].push(chillTile); }
@@ -2154,7 +2155,7 @@ function briefingFacts() {
 const deg = t => t == null ? '' : Math.round(t) + '';
 function leadSentences(f) {
   const out = [];
-  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail', beach: 'beach', skiing: 'ski' }[f.activity] || 'camp';
+  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail', beach: 'beach', skiing: 'ski', sentinel: 'weather' }[f.activity] || 'camp';
   out.push(`Here's your ${name} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Right now it's ${f.now.temp.replace('°', ' degrees')}${f.now.cond ? ' and ' + f.now.cond.toLowerCase() : ''}${f.now.wind ? ', ' + f.now.wind.toLowerCase().replace('wind ', 'wind from the ') : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
@@ -2199,6 +2200,17 @@ function skiingBody(f) {
 // `when` is the period in words; `subject` is how to refer to it at the start of a sentence (e.g. "The next few hours look", "It looks")
 const rainSentence = (s, when, subject) => !s ? '' : s.rainFrom ? `Rain ${s.allRain ? 'most of ' + when : 'around ' + s.rainFrom + (s.rainTo !== s.rainFrom ? ' to ' + s.rainTo : '')}, up to ${s.maxPop} percent.` : s.maxPop >= 20 ? `A small chance of rain ${when}, ${s.maxPop} percent at most.` : `${subject || (when[0].toUpperCase() + when.slice(1) + ' looks')} dry.`;
 const thunderSentence = s => s && s.thunderFrom ? `Thunderstorms are possible around ${s.thunderFrom}${s.thunderTo !== s.thunderFrom ? ' to ' + s.thunderTo : ''}.` : '';
+function sentinelBody(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
+  if (s.topGust >= 30) out.push(`Wind is the thing to watch: gusts to ${s.topGust} around ${s.gustAt}.`);
+  else if (s.topGust >= 20) out.push(`Gusts to about ${s.topGust} around ${s.gustAt}.`);
+  else out.push('Winds stay light.');
+  out.push(`Temperatures ${deg(s.lo)} to ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' overnight' : ''}.`);
+  if (f.sun) out.push(`Sunset is at ${f.sun.set}.`);
+  return out;
+}
 function campingBody(f) {
   const s = f.nextStats, out = [];
   if (f.snowGround && ((f.snowGround.site && f.snowGround.site.depthIn >= 1) || f.snowGround.modelDepthIn >= 1)) out.push(`There's ${inchWord(f.snowGround.site ? f.snowGround.site.depthIn : f.snowGround.modelDepthIn)} of snow on the ground.`);
@@ -2278,7 +2290,7 @@ function outlookSentences(f) {
   return out;
 }
 function composeBriefingEN(f) {
-  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody, beach: beachBody, skiing: skiingBody }[f.activity] || campingBody;
+  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody, beach: beachBody, skiing: skiingBody, sentinel: sentinelBody }[f.activity] || campingBody;
   return precipify([...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
 }
 
@@ -2343,7 +2355,7 @@ function awningSentenceES(s, when) {
 }
 function leadSentencesES(f) {
   const out = [], pt = f.precipType, lluvia = PRECIP_ES[pt] || 'lluvia';
-  const name = { camping: 'de campamento', rv: 'para la casa rodante', hunting: 'de caza', trail: 'de sendero', beach: 'de playa', skiing: 'de esquí' }[f.activity] || 'de campamento';
+  const name = { camping: 'de campamento', rv: 'para la casa rodante', hunting: 'de caza', trail: 'de sendero', beach: 'de playa', skiing: 'de esquí', sentinel: 'del tiempo' }[f.activity] || 'de campamento';
   out.push(`Este es tu informe ${name}${f.place ? ' cerca de ' + f.place : ''} a las ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Ahora mismo hay ${f.now.temp.replace('°', ' grados')}${f.now.cond ? ', ' + wxES(f.now.cond) : ''}${f.now.wind ? ', viento del ' + dirES((f.now.wind.match(/wind\s+(\w+)/i) || [])[1]) + ' a ' + ((f.now.wind.match(/(\d+)\s*mph/i) || [])[1] || '') + ' millas por hora' : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Atención: hay ${/^(Vigilancia|Advertencia|Declaración|Emergencia)/.test(eventES(a.event)) ? 'una' : 'un'} ${eventES(a.event).toLowerCase()} en vigor${a.ends ? ' hasta las ' + a.ends : ''}. Tómalo en serio.`);
@@ -2383,6 +2395,17 @@ function skiingBodyES(f) {
   out.push(s.topGust >= 40 ? `Ráfagas de ${s.topGust} alrededor de las ${s.gustAt}; espera cierres por viento en los remontes expuestos.` : s.topGust >= 25 ? `Ráfagas de ${s.topGust} alrededor de las ${s.gustAt}; los remontes altos pueden ir lentos o cerrar.` : 'Vientos suaves, así que los remontes deberían funcionar con normalidad.');
   if (s.visMin != null && s.visMin < 1) out.push(`La visibilidad baja a ${s.visMin <= 0.3 ? 'un cuarto de milla o menos' : s.visMin + ' millas'} por momentos; posible luz plana y condiciones de visibilidad nula.`);
   out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}.`);
+  if (f.sun) out.push(`El sol se pone a las ${f.sun.set}.`);
+  return out;
+}
+function sentinelBodyES(f) {
+  const s = f.nextStats, out = [];
+  if (!s) return out;
+  out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
+  if (s.topGust >= 30) out.push(`El viento es lo importante: ráfagas de ${s.topGust} alrededor de las ${s.gustAt}.`);
+  else if (s.topGust >= 20) out.push(`Ráfagas de unas ${s.topGust} alrededor de las ${s.gustAt}.`);
+  else out.push('El viento se mantiene suave.');
+  out.push(`Temperaturas de ${deg(s.lo)} a ${deg(s.hi)}${f.today.night && f.today.night.lo != null ? ', ' + deg(f.today.night.lo) + ' por la noche' : ''}.`);
   if (f.sun) out.push(`El sol se pone a las ${f.sun.set}.`);
   return out;
 }
@@ -2457,7 +2480,7 @@ function outlookSentencesES(f) {
   return out;
 }
 function composeBriefingES(f) {
-  const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES }[f.activity] || campingBodyES;
+  const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES, sentinel: sentinelBodyES }[f.activity] || campingBodyES;
   return precipifyES([...leadSentencesES(f), ...body(f), ...outlookSentencesES(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'), f.precipType);
 }
 function composeBriefing(f) { return lang() === 'es' ? composeBriefingES(f) : composeBriefingEN(f); }
@@ -2635,7 +2658,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
-    ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing']]],
+    ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
@@ -2651,9 +2674,10 @@ const SETTINGS = {
 };
 const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['voice', 'Voice'], ['layers', 'Map layers'], ['account', 'Account'], ['data', 'Data & backend'], ['about', 'Status']];
 let settingsTab = 'general';
-const segRows = key => SETTINGS[key].map(([k, label, opts]) => '<div class="row"><label>' + label + '</label><div class="seg">' +
-  opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div></div>').join('');
 const inputStyle = 'style="width:100%;box-sizing:border-box;min-height:46px;font:inherit;font-size:16px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#0b1117;color:var(--text)"';
+const segRows = key => SETTINGS[key].map(([k, label, opts, kind]) => '<div class="row"><label>' + label + '</label>' + (kind === 'select'
+  ? '<select data-ksel="' + k + '" ' + inputStyle + '>' + opts.map(([v, t]) => '<option value="' + v + '"' + (S[k] === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>'
+  : '<div class="seg">' + opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>') + '</div>').join('');
 function openSettings(tab) {
   if (tab) settingsTab = tab;
   const sh = $('#sheet');
@@ -2790,7 +2814,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
@@ -2800,6 +2824,17 @@ $('#sheet').addEventListener('input', e => {
 });
 
 /* ------------------------------ wake lock -------------------------- */
+/* Sentinel: a display that watches one spot. The location is pinned (a GPS fix is taken once, then held, so a tablet
+   near a window does not wander), the screen is kept awake, and the rings re-fit after any pan once things go quiet. */
+function applySentinel() {
+  document.body.classList.toggle('sentinel', S.activity === 'sentinel');
+  if (S.activity === 'sentinel') {
+    if (S.locMode === 'gps' && lastGps) { S.manual = { lat: lastGps.lat, lon: lastGps.lon }; S.locMode = 'manual'; S.sentinelPinned = true; save(); setLocation(lastGps.lat, lastGps.lon, 'manual'); updatePickHint(); }
+    keepAwake();
+  } else if (S.sentinelPinned) {   // leaving Sentinel: go back to following the GPS
+    S.sentinelPinned = false; S.locMode = 'gps'; save(); if (lastGps) setLocation(lastGps.lat, lastGps.lon, 'gps'); updatePickHint();
+  }
+}
 async function keepAwake() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen'); } catch (e) {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); runNowcast(); refreshAlerts(); } });
 
@@ -2813,6 +2848,7 @@ if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
 refreshAccount();
+applySentinel();
 updatePickHint();
 renderStatus();
 keepAwake();
