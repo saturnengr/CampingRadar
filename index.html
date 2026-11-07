@@ -715,7 +715,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07p';
+const APP_VERSION = '2026.11.07q';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2024,12 +2024,31 @@ async function pushEnable() {
   if (!r.ok) throw new Error('Backend refused: ' + r.status);
   S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
 }
+// Browsers rotate or drop push subscriptions (Chrome key rotation, Android revoking unused permissions, a reinstall), and the server
+// forgets a subscription the push service rejects. Re-register quietly whenever alerts are supposed to be on.
+async function ensurePushSubscription(force) {
+  if (!S.pushId || !BE() || !pushSupported() || Notification.permission !== 'granted' || !st.loc || !isPro()) return false;
+  try {
+    const reg = await swReg(); await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !force) { const chk = await fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: '{}' }, 10000).catch(() => null); if (chk && chk.ok) return true; }
+    if (sub && force) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }
+    if (!sub) { const key = (await (await fetchT(BE() + '/push/vapid-public-key', {}, 10000)).text()).trim(); sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) }); }
+    const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
+    if (!r.ok) return false;
+    S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
+    return true;
+  } catch (e) { console.warn('push re-register', e); return false; }
+}
+navigator.serviceWorker && navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'resubscribe') ensurePushSubscription(true); });
 async function pushDisable() {
   try { if (S.pushId && BE()) await fetchT(BE() + '/push/' + S.pushId, { method: 'DELETE' }, 10000); } catch (e) {}
   try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) {}
   S.pushId = null; save();
 }
-async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); const r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); if (!r.ok) { let d = ''; try { d = (await r.json()).error || ''; } catch (e) {} throw new Error('Test failed (' + r.status + ')' + (d ? ': ' + d : '')); } }
+async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); let r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000);
+  if (r.status === 404 || r.status === 410) { await ensurePushSubscription(true); r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); }
+  if (!r.ok) { let d = ''; try { d = (await r.json()).error || ''; } catch (e) {} throw new Error('Test failed (' + r.status + ')' + (d ? ': ' + d : '')); } }
 function pushUpdateLocation() { if (S.pushId && BE() && st.loc) fetchT(BE() + '/push/' + S.pushId + '/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon }) }, 10000).catch(() => {}); }
 // Morning briefing (Pro, push): the server needs the time, days, the device's UTC offset, language and activity.
 function pushUpdateBriefPrefs() {
@@ -3511,7 +3530,7 @@ fitRange();
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
-refreshAccount().then(() => { refreshFamily(); refreshSites(); if (S.pushId && signedIn()) pushUpdateBriefPrefs(); });
+refreshAccount().then(() => { refreshFamily(); refreshSites(); if (S.pushId && signedIn()) setTimeout(() => ensurePushSubscription(false), 3000); });
 applySentinel();
 // Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });

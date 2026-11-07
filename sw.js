@@ -32,3 +32,8 @@ self.addEventListener('notificationclick', e => {
     if (w && isBrief) setTimeout(() => { try { w.postMessage({ type: 'brief', text: d.brief, lang: d.lang }); } catch (err) {} }, 3500);
   }));
 });
+
+// The browser replaced our push subscription: ask the app to register the new one (it does so on its next open if it isn't running).
+self.addEventListener('pushsubscriptionchange', e => {
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => { for (const c of list) c.postMessage({ type: 'resubscribe' }); }));
+});
