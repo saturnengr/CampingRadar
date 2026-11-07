@@ -810,9 +810,18 @@ function drawRings() {
   if (!meMarker) meMarker = L.marker([st.loc.lat, st.loc.lon], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map);
   else meMarker.setLatLng([st.loc.lat, st.loc.lon]);
 }
+// Pixels of map hidden under overlays: on phones the control toolbar sits along the bottom, so the rings are fitted
+// into the part of the map you can actually see, keeping your spot in the visual centre.
+function mapPadding() {
+  const mapEl = $('#map'), ctl = $('#controls'), mh = mapEl.clientHeight;
+  const cs = getComputedStyle(ctl), bottomBar = cs.flexDirection === 'row' && cs.bottom !== 'auto';
+  const bottom = bottomBar ? Math.max(0, mh - ctl.offsetTop + 6) : 0;
+  const top = bottomBar ? 10 : 0;
+  return { paddingTopLeft: [0, top], paddingBottomRight: [0, bottom] };
+}
 function fitRange() {
   if (!st.loc) return;
-  map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true });
+  map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true, ...mapPadding() });
   document.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('on', +b.dataset.range === S.range));
 }
 document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { S.range = +b.dataset.range; save(); drawRings(); fitRange(); }));
