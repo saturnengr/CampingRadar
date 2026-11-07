@@ -611,7 +611,7 @@ const BEACH_EVENTS = /Rip Current|High Surf|Beach Hazards|Coastal Flood|Small Cr
 const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar loop
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
-const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
+const DEFAULTS = { rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
   brief: { lang: 'en', speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
@@ -798,12 +798,18 @@ const radarLag = () => st.latestRadar ? Math.max(0, (Date.now() - st.latestRadar
 const alertLayer = L.layerGroup().addTo(map);
 let meMarker = null, ringLayer = L.layerGroup().addTo(map);
 
+const RANGE_SETS = { '10-30-50': [10, 30, 50], '5-10-30': [5, 10, 30], '2-5-10': [2, 5, 10] };
+const ranges = () => RANGE_SETS[S.rangeSet] || RANGE_SETS['10-30-50'];
+function renderRangeButtons() {
+  const rs = ranges(); if (!rs.includes(S.range)) S.range = rs[1];
+  document.querySelectorAll('[data-range]').forEach((b, i) => { b.dataset.range = rs[i]; b.innerHTML = rs[i] + '<small>mi</small>'; b.classList.toggle('on', rs[i] === S.range); });
+}
 function drawRings() {
   ringLayer.clearLayers();
   if (!st.loc) return;
   const night = document.body.classList.contains('night');
   const col = night ? '#e8eef3' : '#17324b';
-  for (const r of [10, 30, 50]) {
+  for (const r of ranges()) {
     L.circle([st.loc.lat, st.loc.lon], { radius: r * MI, color: col, weight: r === S.range ? 2.5 : 1.5, opacity: 0.75, dashArray: '6 7', fill: false, interactive: false }).addTo(ringLayer);
     L.marker([st.loc.lat + (r * MI) / 111320, st.loc.lon], { interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl">' + r + ' mi</span>', iconSize: [0, 0] }) }).addTo(ringLayer);
   }
@@ -834,6 +840,7 @@ function fitRange() {
   map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true, ...mapPadding() });
   document.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('on', +b.dataset.range === S.range));
 }
+renderRangeButtons();
 document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { S.range = +b.dataset.range; save(); drawRings(); fitRange(); }));
 $('#btnCenter').addEventListener('click', fitRange);
 function manualZoom(dir) {
@@ -2473,9 +2480,9 @@ function listenForCommand() {
   r.onend = () => { clearTimeout(timer); if (!finalDone) finish(); };
   try { r.start(); } catch (e) { finish(); }
 }
-const SAY_ES = { 'Here is your briefing.': 'Aquí está tu informe.', 'Zooming in.': 'Acercando.', 'Zooming out.': 'Alejando.', 'Centered.': 'Centrado.', 'Ten miles.': 'Diez millas.', 'Thirty miles.': 'Treinta millas.', 'Fifty miles.': 'Cincuenta millas.', 'Night mode.': 'Modo nocturno.', 'Day mode.': 'Modo diurno.', 'Automatic.': 'Automático.', "I didn't catch that.": 'No te entendí.', "Sorry, I didn't understand that. Say help for the list of commands.": 'Perdón, no entendí. Di ayuda para la lista de comandos.', 'Voice commands are not supported in this browser.': 'Este navegador no admite comandos de voz.' };
+const SAY_ES = { 'Here is your briefing.': 'Aquí está tu informe.', 'Zooming in.': 'Acercando.', 'Zooming out.': 'Alejando.', 'Centered.': 'Centrado.', 'Night mode.': 'Modo nocturno.', 'Day mode.': 'Modo diurno.', 'Automatic.': 'Automático.', "I didn't catch that.": 'No te entendí.', "Sorry, I didn't understand that. Say help for the list of commands.": 'Perdón, no entendí. Di ayuda para la lista de comandos.', 'Voice commands are not supported in this browser.': 'Este navegador no admite comandos de voz.' };
 const say = t => { if (S.voice.confirm) speak(lang() === 'es' ? (SAY_ES[t] || t) : t); };
-const COMMANDS_HELP_ES = 'Di la palabra de activación y luego: informe, acercar, alejar, posponer (una, dos, cuatro u ocho horas), alto, centrar, diez, treinta o cincuenta millas, modo nocturno, modo diurno, estado o ayuda.';
+const COMMANDS_HELP_ES = 'Di la palabra de activación y luego: informe, acercar, alejar, posponer (una, dos, cuatro u ocho horas), alto, centrar, un alcance como cinco o treinta millas, modo nocturno, modo diurno, estado o ayuda.';
 function handleCommand(alts) {
   const text = alts.join(' | ').toLowerCase();
   const has = re => re.test(text);
@@ -2491,9 +2498,9 @@ function handleCommand(alts) {
     return;
   }
   if (has(/center|centre|recenter|go home|my location|centrar|centro|mi ubicación|mi ubicacion/)) { fitRange(); say('Centered.'); return; }
-  if (has(/\b(ten|diez|10)\b/)) { S.range = 10; save(); drawRings(); fitRange(); say('Ten miles.'); return; }
-  if (has(/\b(thirty|treinta|30)\b/)) { S.range = 30; save(); drawRings(); fitRange(); say('Thirty miles.'); return; }
-  if (has(/\b(fifty|cincuenta|50)\b/)) { S.range = 50; save(); drawRings(); fitRange(); say('Fifty miles.'); return; }
+  const NUMS = { two: 2, dos: 2, '2': 2, five: 5, cinco: 5, '5': 5, ten: 10, diez: 10, '10': 10, thirty: 30, treinta: 30, '30': 30, fifty: 50, cincuenta: 50, '50': 50 };
+  const nm = text.match(/\b(two|dos|five|cinco|ten|diez|thirty|treinta|fifty|cincuenta|2|5|10|30|50)\b\s*(mi|mile|miles|milla|millas)?/);
+  if (nm && !has(/snooze|posponer|hour|hora/)) { const r = NUMS[nm[1]]; if (ranges().includes(r)) { S.range = r; save(); drawRings(); fitRange(); say(lang() === 'es' ? r + ' millas.' : r + ' miles.'); return; } }
   if (has(/night mode|dark mode|modo nocturno|modo noche/)) { S.night = 'night'; save(); applyNight(); say('Night mode.'); return; }
   if (has(/day mode|light mode|modo diurno|modo día|modo dia/)) { S.night = 'day'; save(); applyNight(); say('Day mode.'); return; }
   if (has(/auto mode|automatic|automático|automatico/)) { S.night = 'auto'; save(); applyNight(); say('Automatic.'); return; }
@@ -2508,6 +2515,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing']]],
+    ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
   ],
@@ -2636,6 +2644,7 @@ $('#sheet').addEventListener('click', e => {
   S[k] = v; save();
   b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   if (k === 'night') applyNight();
+  if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
