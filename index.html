@@ -2679,6 +2679,7 @@ const segRows = key => SETTINGS[key].map(([k, label, opts, kind]) => '<div class
   ? '<select data-ksel="' + k + '" ' + inputStyle + '>' + opts.map(([v, t]) => '<option value="' + v + '"' + (S[k] === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>'
   : '<div class="seg">' + opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>') + '</div>').join('');
 function openSettings(tab) {
+  if (tab === 'account' && S.account && S.account.token && Date.now() - (S.account.checkedAt || 0) > 60000) { const was = isPro(); refreshAccount().then(() => { if (isPro() !== was && $('#modal') && !$('#modal').hidden) openSettings('account'); }); }
   if (tab) settingsTab = tab;
   const sh = $('#sheet');
   const pane = (id, html) => '<div class="tabpane" data-pane="' + id + '"' + (settingsTab === id ? '' : ' hidden') + '>' + html + '</div>';
@@ -2836,7 +2837,7 @@ function applySentinel() {
   }
 }
 async function keepAwake() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen'); } catch (e) {} }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); runNowcast(); refreshAlerts(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); runNowcast(); refreshAlerts(); if (S.account && Date.now() - (S.account.checkedAt || 0) > 60000) refreshAccount(); } });
 
 /* -------------------------------- start ---------------------------- */
 $('#soundChip').addEventListener('click', () => { const a = audio(); if (a) a.resume().then(updateSoundChip); });
