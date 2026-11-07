@@ -4,6 +4,7 @@ using CampRadar.Api.Alerts;
 using CampRadar.Api.Lightning;
 using CampRadar.Api.Mail;
 using CampRadar.Api.Nws;
+using CampRadar.Api.Obs;
 using CampRadar.Api.Push;
 using CampRadar.Api.Radar;
 using CampRadar.Api.Spots;
@@ -35,6 +36,7 @@ static SocketsHttpHandler IPv4Handler() => new()
 };
 builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(25)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
+builder.Services.AddHttpClient("obs", c => c.Timeout = TimeSpan.FromSeconds(20)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
@@ -47,6 +49,7 @@ builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
 builder.Services.AddSingleton<GroupStore>();
 builder.Services.AddSingleton<SiteStore>();
+builder.Services.AddSingleton<StationObsClient>();
 builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
@@ -79,7 +82,8 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
     push = new { enabled = p.Enabled, spots = s.All().Count },
     briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled, providers = app.Services.GetRequiredService<BriefingWriter>().Active },
-    email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport }
+    email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport },
+    observations = new { enabled = app.Services.GetRequiredService<StationObsClient>().Enabled }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
@@ -101,6 +105,19 @@ app.MapGet("/mrms/times", (MrmsClient m) => RadarTimes(m));
 app.MapGet("/mrms/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
 app.MapGet("/radar/times", (MrmsClient m) => RadarTimes(m));
 app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
+
+// ---------- nearby surface observations (free; Synoptic token on the server) ----------
+app.MapGet("/obs/nearby", async (double lat, double lon, StationObsClient obs, HttpResponse res, CancellationToken ct) =>
+{
+    if (!obs.Enabled) return Results.Json(new { enabled = false, stations = Array.Empty<object>() });
+    try
+    {
+        var r = await obs.NearbyAsync(lat, lon, ct);
+        res.Headers.CacheControl = "public, max-age=120";
+        return Results.Ok(new { enabled = true, at = r!.At, stations = r.Stations, best = r.Best, trend = r.Trend });
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { return Results.Json(new { enabled = true, error = ex.Message, stations = Array.Empty<object>() }, statusCode: 502); }
+});
 
 // ---------- lightning ----------
 app.MapGet("/lightning", (HttpRequest req, EntitlementStore ent, double lat, double lon, LightningStore l, int minutes = 30) => RequirePro(req, ent) ?? Results.Ok(l.Summarize(lat, lon, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Math.Clamp(minutes, 5, 60))));
