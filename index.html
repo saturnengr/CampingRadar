@@ -106,6 +106,10 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 #pickHint button{background:rgba(0,0,0,.25);min-height:40px}
 #soundChip{position:absolute;left:12px;bottom:74px;z-index:850;background:#6a2fb0;border-color:#b48cff;font-weight:700}
 #updateChip{position:absolute;left:12px;bottom:118px;z-index:850;background:#1e6b3a;border-color:#6fd39a;font-weight:700}
+#msgChip{position:absolute;left:12px;right:12px;bottom:162px;z-index:850;background:#4a2f8a;border-color:#b48cff;text-align:left;font-weight:500;max-width:560px}#msgChip .x{float:right;opacity:.7;margin-left:10px}
+.person{width:34px;height:34px;border-radius:50%;background:#ffb74d;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);display:grid;place-items:center;font-weight:800;color:#1a1200;font-size:15px}.person.stale{background:#9fb3c2}
+.mini{min-height:30px;padding:4px 10px;font-size:13px;border-radius:8px}
+table.fam{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}table.fam td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:middle}table.fam small{color:var(--muted)}
 #voiceChip{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:900;background:#c62828;color:#fff;padding:10px 18px;border-radius:999px;font-size:18px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{box-shadow:0 0 0 10px rgba(198,40,40,.25)}}
 #micBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);padding:0 12px}
@@ -272,6 +276,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <div id="pickHint" hidden><span id="pickText">Tap the map to set your camp location</span><button id="pickCancel">Cancel</button></div>
   <button id="soundChip" hidden>Tap to enable sound</button>
   <button id="updateChip" hidden>Update ready — tap to restart</button>
+  <button id="msgChip" hidden></button>
   <div id="voiceChip" hidden>Listening…</div>
 </main>
 
@@ -616,7 +621,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
+  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -738,7 +743,7 @@ async function verifySignIn(email, code) {
   const r = await fetchT(BE() + '/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, code, deviceId: S.deviceId }) }, 15000);
   const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || ('Could not sign in (' + r.status + ')'));
   S.account = { token: j.token, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; S.syncedAt = 0; save();
-  const pulled = await pullSettings(true); applyProState(); return { ...j, pulled };
+  const pulled = await pullSettings(true); applyProState(); refreshFamily(); return { ...j, pulled };
 }
 async function deleteAccount() {
   if (!BE() || !S.account || !S.account.token) return;
@@ -747,7 +752,7 @@ async function deleteAccount() {
 }
 async function signOut() {
   try { if (BE() && S.account && S.account.token) await fetchT(BE() + '/auth/signout', { method: 'POST', headers: authHeaders() }, 8000); } catch (e) {}
-  S.account = null; save(); applyProState();
+  S.account = null; save(); applyProState(); fam.info = null; fam.positions = []; drawPeople();
 }
 // Turn Pro-only things off when Pro is not active; refresh data that depends on it.
 function applyProState() {
@@ -1090,6 +1095,7 @@ function startGps() {
     st.gpsErr = null; st.gpsAcc = p.coords.accuracy;
     lastGps = { lat: p.coords.latitude, lon: p.coords.longitude };
     if (S.locMode === 'gps') { setLocation(lastGps.lat, lastGps.lon, 'gps'); if (S.activity === 'sentinel') applySentinel(); }
+    if (typeof reportPosition === 'function') reportPosition(false);
     afterGpsAnswer();
   }, err => { st.gpsErr = err.code === 1 ? 'blocked' : (err.message || 'GPS error'); updatePickHint(); afterGpsAnswer(); },
   { enableHighAccuracy: true, maximumAge: 60000, timeout: 60000 });
@@ -1441,6 +1447,7 @@ const LAYER_INFO = {
   smoke: ['Smoke', "NOAA's surface smoke forecast for the current hour"],
   wind: ['Wind', 'Current wind arrows across the map: speed, gusts and direction'],
   clouds: ['Clouds (satellite)', 'Live GOES imagery: visible by day, infrared at night'],
+  people: ['People in your group', 'Family and friends who are sharing their location, with their trail for the day'],
   topo: ['Topographic map', 'Swap the street map for a topo map: contour lines, shaded relief, trails and huts (OpenTopoMap)'],
   trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
@@ -1504,6 +1511,7 @@ function applyLayers() {
   set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   set(trailsLayer, L_.trails);
+  if (typeof drawPeople === 'function') drawPeople();
   if (L_.topo && !map.hasLayer(topoBase)) { map.removeLayer(osmBase); topoBase.addTo(map); } else if (!L_.topo && !map.hasLayer(osmBase)) { map.removeLayer(topoBase); osmBase.addTo(map); }
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
@@ -1773,7 +1781,7 @@ async function pushEnable() {
     body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
   if (r.status === 402) throw new Error('Alerts with the screen off are a Pro feature — Settings → Account.');
   if (!r.ok) throw new Error('Backend refused: ' + r.status);
-  S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs();
+  S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
 }
 async function pushDisable() {
   try { if (S.pushId && BE()) await fetchT(BE() + '/push/' + S.pushId, { method: 'DELETE' }, 10000); } catch (e) {}
@@ -2680,13 +2688,162 @@ const SETTINGS = {
     ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ],
 };
-const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['voice', 'Voice'], ['layers', 'Map layers'], ['account', 'Account'], ['data', 'Data & backend'], ['about', 'Status']];
+/* ------------------------------ family & friends: household, location sharing, people on the map, quick messages ------------------- */
+const fam = { info: null, positions: [], lastMsgMs: 0, seen: new Set(), lastPosSent: 0, lastPos: null, timer: null };
+const peopleLayer = L.layerGroup().addTo(map);
+const QUICK_MESSAGES = {
+  en: ['Dinner in 10', 'Come back to camp', 'On my way', 'Running late', 'Need a hand', 'All good here'],
+  es: ['Cena en 10', 'Vuelvan al campamento', 'Voy en camino', 'Llego tarde', 'Necesito ayuda', 'Todo bien aquí']
+};
+const REPLY_CHIPS = { en: ['OK', '5 min', "Can't"], es: ['OK', '5 min', 'No puedo'] };
+const signedIn = () => !!(S.account && S.account.token && BE());
+const famApi = async (path, opts) => { const r = await fetchT(BE() + path, Object.assign({ headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()) }, opts || {}), 12000); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.message || j.error || ('Request failed (' + r.status + ')')); return j; };
+async function refreshFamily() {
+  if (!signedIn()) { fam.info = null; fam.positions = []; drawPeople(); return null; }
+  try { fam.info = await famApi('/group'); } catch (e) { return fam.info; }
+  if (fam.info && fam.info.group) { try { fam.positions = await famApi('/group/positions'); } catch (e) {} drawPeople(); pollMessages(); }
+  else { fam.positions = []; drawPeople(); }
+  return fam.info;
+}
+const sharing = () => !!(fam.info && fam.info.group && fam.info.group.me && fam.info.group.me.shareLocation && fam.info.group.me.shareUntilMs > Date.now());
+// Position reports: only while sharing, only from a real GPS fix, when moved 50 m or every 3 minutes.
+function reportPosition(force) {
+  if (!sharing() || !lastGps) return;
+  const movedM = fam.lastPos ? distMi(fam.lastPos, lastGps) * 1609 : 1e9;
+  if (!force && movedM < 50 && Date.now() - fam.lastPosSent < 3 * 60000) return;
+  fam.lastPos = { lat: lastGps.lat, lon: lastGps.lon }; fam.lastPosSent = Date.now();
+  famApi('/me/position', { method: 'POST', body: JSON.stringify({ lat: lastGps.lat, lon: lastGps.lon, accM: st.gpsAcc || 0 }) }).catch(() => {});
+}
+setInterval(() => { reportPosition(false); if (fam.info && fam.info.group && document.visibilityState === 'visible') { famApi('/group/positions').then(p => { fam.positions = p; drawPeople(); }).catch(() => {}); pollMessages(); } }, 60000);
+const agoWord = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? (lang() === 'es' ? 'ahora' : 'just now') : m < 60 ? m + ' min' : Math.round(m / 60) + ' h'; };
+function drawPeople() {
+  peopleLayer.clearLayers();
+  if (!S.layers.people && S.layers.people !== undefined) return;
+  const me = fam.info && fam.info.group && fam.info.group.me ? fam.info.group.me.email : null;
+  for (const p of fam.positions) {
+    if (p.email === me) continue;
+    const stale = Date.now() - p.ms > 30 * 60000;
+    if (p.trail && p.trail.length > 1) L.polyline(p.trail.map(t => [t[0], t[1]]), { color: '#ffb74d', weight: 3, opacity: stale ? 0.3 : 0.6, dashArray: '2 6' }).addTo(peopleLayer);
+    const initial = (p.name || '?').trim()[0].toUpperCase();
+    const icon = L.divIcon({ className: '', html: '<div class="person' + (stale ? ' stale' : '') + '"><span>' + initial + '</span></div>', iconSize: [34, 34], iconAnchor: [17, 17] });
+    const dMi = st.loc ? distMi(st.loc, { lat: p.lat, lon: p.lon }) : null;
+    const brg = st.loc ? compass(bearingDeg(st.loc.lat, st.loc.lon, p.lat, p.lon)) : '';
+    L.marker([p.lat, p.lon], { icon, zIndexOffset: 900 }).bindPopup('<b>' + escapeHtml(p.name) + '</b><br>' + (lang() === 'es' ? 'hace ' : '') + agoWord(p.ms) + (lang() === 'es' ? '' : ' ago') + (dMi != null ? ' · ' + (dMi < 1 ? Math.round(dMi * 5280) + ' ft' : dMi.toFixed(1) + ' mi') + ' ' + brg : '') + '<br><button class="mini" data-person-weather="' + p.lat + ',' + p.lon + '">' + (lang() === 'es' ? 'Tiempo allí' : 'Weather there') + '</button>').addTo(peopleLayer);
+  }
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function bearingDeg(lat1, lon1, lat2, lon2) { const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180, Δλ = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(Δλ) * Math.cos(φ2), x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-person-weather]'); if (!b || !BE()) return;
+  const [lat, lon] = b.dataset.personWeather.split(',').map(Number); b.textContent = '…';
+  try { const r = await fetchT(BE() + '/status?lat=' + lat + '&lon=' + lon, {}, 10000); const j = await r.json(); b.outerHTML = '<div style="margin-top:4px">' + escapeHtml(localizeSpoken(j.main + (j.sub ? ' · ' + j.sub : ''))) + '</div>'; } catch (err) { b.textContent = 'n/a'; }
+});
+// Messages: poll while open; speak new ones; show the last one as a chip
+async function pollMessages() {
+  if (!fam.info || !fam.info.group) return;
+  let list; try { list = await famApi('/group/messages?since=' + fam.lastMsgMs); } catch (e) { return; }
+  for (const m of list) {
+    fam.lastMsgMs = Math.max(fam.lastMsgMs, m.ms);
+    if (fam.seen.has(m.id)) continue; fam.seen.add(m.id);
+    if (m.mine || Date.now() - m.ms > 20 * 60000) continue;
+    showMessage(m);
+  }
+}
+function showMessage(m) {
+  const chip = $('#msgChip'); chip.hidden = false; chip.innerHTML = '<b>' + escapeHtml(m.fromName) + ':</b> ' + escapeHtml(m.text) + ' <span class="x">✕</span>'; chip.dataset.msgId = m.id;
+  tone(660, 0, 0.12, 'sine', 0.5); tone(990, 0.14, 0.18, 'sine', 0.5);
+  if (S.brief.speakAlerts) speak((lang() === 'es' ? m.fromName + ' dice: ' : m.fromName + ' says: ') + m.text, { queue: true });
+  clearTimeout(fam.chipTimer); fam.chipTimer = setTimeout(() => { chip.hidden = true; }, 5 * 60000);
+}
+async function sendMessage(text, kind, data) {
+  const j = await famApi('/group/message', { method: 'POST', body: JSON.stringify({ text, kind: kind || 'text', data: data || null }) });
+  fam.seen.add(j.id); return j;
+}
+// "Weather turning — head back": the current status rides along so it reads as a warning, not nagging
+function weatherMessageText() { const main = $('#statusMain').textContent; return (lang() === 'es' ? 'El tiempo cambia, vuelvan: ' : 'Weather turning — head back: ') + localizeSpoken(main); }
+$('#msgChip').addEventListener('click', e => { if (e.target.classList.contains('x')) { $('#msgChip').hidden = true; return; } openSettings('family'); });
+async function storeBackendForSw() { try { if (!BE() || !window.caches) return; const c = await caches.open('campradar-meta'); await c.put('backend', new Response(BE())); } catch (e) {} }
+storeBackendForSw();
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'reply' && d.replyToken && S.account && S.account.email && BE()) { fetchT(BE() + '/group/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replyToken: d.replyToken, fromEmail: S.account.email, text: d.text }) }, 10000).catch(() => {}); return; } if (d.type === 'msg') { fam.seen.add(d.msgId); showMessage({ fromName: d.title, text: d.body, id: d.msgId }); openSettings('family'); } });
+function familyPane() {
+  const g = fam.info && fam.info.group, es = lang() === 'es';
+  if (!signedIn()) return '<div class="row"><div class="tl">' + (es ? 'Familia y amigos' : 'Family & friends') + '</div><div class="td">' + (es ? 'Inicia sesión primero (pestaña Cuenta). Con un grupo compartes alertas, puedes compartir tu ubicación por unas horas y enviar mensajes cortos como "cena en 10".' : 'Sign in first (Account tab). A group shares weather alerts, lets each person share their location for a few hours at a time, and sends short messages like "dinner in 10".') + '</div><div class="btns"><button data-act="go-account">' + (es ? 'Ir a Cuenta' : 'Go to Account') + '</button></div></div>';
+  let h = '';
+  if (!g) {
+    h += '<div class="row"><div class="tl">' + (es ? 'Crear un grupo' : 'Start a group') + (isPro() ? '' : ' <span class="pro">PRO</span>') + '</div><div class="td">' + (es ? 'Invita a familia y amigos por correo o con un código. Ellos obtienen las funciones Pro a través de ti mientras tu Pro esté activo.' : 'Invite family and friends by email or with a code. They get Pro features through you while your Pro is active.') + '</div>' +
+      '<label>' + (es ? 'Tu nombre (como lo verán los demás)' : 'Your name (as others will see it)') + '</label><input id="famName" value="' + escapeHtml((S.account.name || '')) + '" placeholder="' + (es ? 'p. ej. Jeff' : 'e.g. Jeff') + '" ' + inputStyle + '>' +
+      '<label style="margin-top:8px">' + (es ? 'Correo de la persona (opcional; si lo dejas vacío te damos un código para compartir)' : "Their email (optional; leave blank to get a code you can share any way you like)") + '</label><input id="famInviteEmail" type="email" placeholder="friend@example.com" ' + inputStyle + '>' +
+      '<div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar' : 'Invite') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
+      '<div class="row"><div class="tl">' + (es ? '¿Te invitaron?' : 'Were you invited?') + '</div><label>' + (es ? 'Código de invitación' : 'Invite code') + '</label><input id="famJoinCode" autocapitalize="characters" placeholder="XXXXXX" ' + inputStyle + '><label style="margin-top:8px">' + (es ? 'Tu nombre' : 'Your name') + '</label><input id="famJoinName" placeholder="' + (es ? 'p. ej. Ana' : 'e.g. Ana') + '" ' + inputStyle + '>' +
+      '<div class="btns"><button data-act="fam-join">' + (es ? 'Unirme' : 'Join') + '</button></div><div id="famJoinMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>';
+    return h;
+  }
+  const me = g.me || {}, until = me.shareUntilMs ? new Date(me.shareUntilMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  h += '<div class="row"><div class="tl">' + (g.isOwner ? (es ? 'Tu grupo' : 'Your group') : (es ? 'Grupo de ' : 'Group of ') + escapeHtml(g.ownerName)) + (g.ownerPro ? '' : ' <span class="pro" style="background:#ef5350;color:#fff">' + (es ? 'SIN PRO' : 'NO PRO') + '</span>') + '</div>' +
+    '<table class="fam"><tbody>' + g.members.map(m => '<tr><td><b>' + escapeHtml(m.name) + '</b>' + (m.role === 'owner' ? ' <small>' + (es ? 'dueño' : 'owner') + '</small>' : '') + (m.email === me.email ? ' <small>(' + (es ? 'tú' : 'you') + ')</small>' : '') + '</td><td class="muted">' + (m.shareLocation ? (es ? 'compartiendo hasta ' : 'sharing until ') + new Date(m.shareUntilMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : (es ? 'no comparte' : 'not sharing')) + '</td><td>' + (g.isOwner && m.role !== 'owner' ? '<button class="mini" data-fam-remove="' + escapeHtml(m.email) + '">' + (es ? 'Quitar' : 'Remove') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table>' +
+    (g.isOwner ? '<div style="margin-top:10px"><input id="famInviteEmail" type="email" placeholder="' + (es ? 'correo de la persona (opcional)' : "their email (optional)") + '" ' + inputStyle + '><div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar a alguien' : 'Invite someone') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' : '') + '</div>';
+  h += '<div class="row"><div class="toggle"><div><div class="tl">' + (es ? 'Compartir mi ubicación con el grupo' : 'Share my location with the group') + '</div><div class="td">' + (sharing() ? (es ? 'Compartiendo hasta las ' + until + '. ' : 'Sharing until ' + until + '. ') : '') + (es ? 'Solo mientras la app está en pantalla, se apaga sola a la hora elegida, y las posiciones se borran a las 24 horas. Los demás te ven en su mapa con tu nombre.' : 'Only while the app is on screen; turns itself off at the chosen time; positions are deleted after 24 hours. Others see you on their map with your name.') + '</div></div><button class="sw ' + (sharing() ? 'on' : '') + '" data-act="fam-share" role="switch"></button></div>' +
+    '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px"><label style="margin:0">' + (es ? 'Durante' : 'For') + '</label><select id="famHours" ' + inputStyle.replace('width:100%', 'width:auto') + '>' + [2, 4, 8, 12, 24].map(hh => '<option value="' + hh + '"' + ((S.famHours || 8) === hh ? ' selected' : '') + '>' + hh + ' h</option>').join('') + '</select><input id="famName" value="' + escapeHtml(me.name || '') + '" placeholder="' + (es ? 'tu nombre' : 'your name') + '" ' + inputStyle.replace('width:100%', 'width:160px') + '></div></div>';
+  const qm = QUICK_MESSAGES[lang()] || QUICK_MESSAGES.en;
+  h += '<div class="row"><div class="tl">' + (es ? 'Mensaje rápido al grupo' : 'Quick message to the group') + (fam.info.pro ? '' : ' <span class="pro">PRO</span>') + '</div><div class="btns" style="flex-wrap:wrap">' + qm.map(t => '<button data-fam-quick="' + escapeHtml(t) + '">' + escapeHtml(t) + '</button>').join('') + '<button data-act="fam-weather" style="border-color:#ffb74d">' + (es ? '⚠ El tiempo cambia, vuelvan' : '⚠ Weather turning — head back') + '</button></div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px"><input id="famText" maxlength="160" placeholder="' + (es ? 'o escribe algo corto…' : 'or type something short…') + '" ' + inputStyle + '><button data-act="fam-send" style="min-width:90px">' + (es ? 'Enviar' : 'Send') + '</button></div><div id="famSendMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div>' +
+    '<div id="famLog" style="margin-top:10px;max-height:220px;overflow:auto;font-size:14px"></div></div>';
+  h += '<div class="row" style="color:var(--muted);font-size:14px"><button class="mini" data-act="fam-leave">' + (g.isOwner ? (es ? 'Disolver el grupo' : 'Disband the group') : (es ? 'Salir del grupo' : 'Leave the group')) + '</button> ' + (es ? 'Los mensajes y las posiciones se borran a las 24 horas; nadie fuera del grupo los ve.' : 'Messages and positions are deleted after 24 hours; nobody outside the group can see them.') + '</div>';
+  return h;
+}
+async function renderFamLog() {
+  const el = $('#famLog'); if (!el || !fam.info || !fam.info.group) return;
+  let list = []; try { list = await famApi('/group/messages?since=0'); } catch (e) {}
+  el.innerHTML = list.slice(-30).reverse().map(m => '<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">' + new Date(m.ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</span> <b>' + escapeHtml(m.fromName) + '</b> ' + escapeHtml(m.text) + (m.mine ? '' : ' ' + (REPLY_CHIPS[lang()] || REPLY_CHIPS.en).map(c => '<button class="mini" data-fam-reply="' + m.id + '" data-text="' + escapeHtml(c) + '">' + escapeHtml(c) + '</button>').join(' ')) + '</div>').join('') || '<span class="muted">' + (lang() === 'es' ? 'Sin mensajes en las últimas 24 horas.' : 'No messages in the last 24 hours.') + '</span>';
+}
+async function familyAction(b) {
+  const act = b.dataset.act, es = lang() === 'es';
+  const say_ = (id, t) => { const m = $(id); if (m) m.textContent = t; };
+  try {
+    if (act === 'go-account') { openSettings('account'); return true; }
+    if (act === 'fam-invite') {
+      if (!isPro()) { openSettings('account'); return true; }
+      const name = ($('#famName') && $('#famName').value.trim()) || S.account.name || ''; if (name) { S.account.name = name; save(); }
+      say_('#famMsg', es ? 'Invitando…' : 'Inviting…');
+      const j = await famApi('/group/invite', { method: 'POST', body: JSON.stringify({ email: ($('#famInviteEmail').value || '').trim(), myName: name }) });
+      await refreshFamily(); openSettings('family');
+      setTimeout(() => say_('#famMsg', (j.emailed ? (es ? 'Invitación enviada por correo. ' : 'Invitation emailed. ') : '') + (es ? 'Código de invitación: ' : 'Invite code: ') + j.code + (es ? ' (7 días). La persona lo escribe en Ajustes → Familia después de iniciar sesión.' : ' (7 days). They enter it under Settings → Family after signing in.')), 50);
+      return true;
+    }
+    if (act === 'fam-join') {
+      const name = ($('#famJoinName').value || '').trim(); if (name) { S.account.name = name; save(); }
+      say_('#famJoinMsg', es ? 'Uniéndote…' : 'Joining…');
+      await famApi('/group/join', { method: 'POST', body: JSON.stringify({ code: $('#famJoinCode').value, myName: name }) });
+      await refreshFamily(); refreshAccount(); openSettings('family'); return true;
+    }
+    if (act === 'fam-share') {
+      const on = !sharing(); const hours = +($('#famHours') && $('#famHours').value) || 8; S.famHours = hours;
+      const name = ($('#famName') && $('#famName').value.trim()) || null; if (name) { S.account.name = name; } save();
+      if (on && !confirm(es ? 'Compartir tu ubicación con el grupo durante ' + hours + ' horas? Los demás te verán en su mapa. Se apaga sola después.' : 'Share your location with the group for ' + hours + ' hours? Others in the group will see you on their map. It switches off by itself afterwards.')) return true;
+      fam.info = await famApi('/group/share', { method: 'POST', body: JSON.stringify({ on, hours, myName: name }) });
+      if (on) { fam.lastPos = null; reportPosition(true); if (S.locMode !== 'gps') alert(es ? 'Nota: este dispositivo usa una ubicación fijada a mano; lo que se comparte es la posición GPS real cuando la hay.' : 'Note: this device uses a hand-set location; what is shared is the real GPS position when there is one.'); }
+      openSettings('family'); return true;
+    }
+    if (act === 'fam-weather') { say_('#famSendMsg', '…'); await sendMessage(weatherMessageText(), 'weather', { main: $('#statusMain').textContent, sub: $('#statusSub').textContent, lat: st.loc && st.loc.lat, lon: st.loc && st.loc.lon }); say_('#famSendMsg', es ? 'Enviado.' : 'Sent.'); renderFamLog(); return true; }
+    if (act === 'fam-send') { const t = ($('#famText').value || '').trim(); if (!t) return true; say_('#famSendMsg', '…'); await sendMessage(t, 'text'); $('#famText').value = ''; say_('#famSendMsg', es ? 'Enviado.' : 'Sent.'); renderFamLog(); return true; }
+    if (act === 'fam-leave') { if (!confirm(es ? '¿Seguro?' : 'Are you sure?')) return true; await famApi('/group/leave', { method: 'POST' }); await refreshFamily(); refreshAccount(); openSettings('family'); return true; }
+  } catch (e) { alert(e.message); return true; }
+  return false;
+}
+$('#sheet').addEventListener('click', async e => {
+  const q = e.target.closest('[data-fam-quick]'); if (q) { try { $('#famSendMsg').textContent = '…'; await sendMessage(q.dataset.famQuick, 'preset'); $('#famSendMsg').textContent = lang() === 'es' ? 'Enviado.' : 'Sent.'; renderFamLog(); } catch (err) { alert(err.message); } return; }
+  const rp = e.target.closest('[data-fam-reply]'); if (rp) { try { await famApi('/group/message', { method: 'POST', body: JSON.stringify({ text: rp.dataset.text, kind: 'preset', replyTo: +rp.dataset.famReply }) }); renderFamLog(); } catch (err) { alert(err.message); } return; }
+  const rm = e.target.closest('[data-fam-remove]'); if (rm) { if (!confirm((lang() === 'es' ? 'Quitar a ' : 'Remove ') + rm.dataset.famRemove + '?')) return; try { await famApi('/group/member/' + encodeURIComponent(rm.dataset.famRemove), { method: 'DELETE' }); await refreshFamily(); openSettings('family'); } catch (err) { alert(err.message); } return; }
+});
+
+const TABS = [['general', 'General'], ['alerts', 'Alerts'], ['brief', 'Briefing'], ['voice', 'Voice'], ['layers', 'Map layers'], ['account', 'Account'], ['family', 'Family'], ['data', 'Data & backend'], ['about', 'Status']];
 let settingsTab = 'general';
 const inputStyle = 'style="width:100%;box-sizing:border-box;min-height:46px;font:inherit;font-size:16px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#0b1117;color:var(--text)"';
 const segRows = key => SETTINGS[key].map(([k, label, opts, kind]) => '<div class="row"><label>' + label + '</label>' + (kind === 'select'
   ? '<select data-ksel="' + k + '" ' + inputStyle + '>' + opts.map(([v, t]) => '<option value="' + v + '"' + (S[k] === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>'
   : '<div class="seg">' + opts.map(([v, t]) => '<button data-k="' + k + '" data-v="' + v + '" class="' + (S[k] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>') + '</div>').join('');
 function openSettings(tab) {
+  if (tab === 'family' && signedIn() && !openSettings._famBusy) { openSettings._famBusy = true; const before = JSON.stringify(fam.info); refreshFamily().then(() => { openSettings._famBusy = false; if (JSON.stringify(fam.info) !== before && $('#modal') && !$('#modal').hidden) openSettings('family'); else renderFamLog(); }).catch(() => { openSettings._famBusy = false; }); } else if (tab === 'family') setTimeout(renderFamLog, 0);
   if (tab === 'account' && S.account && S.account.token && Date.now() - (S.account.checkedAt || 0) > 60000) { const was = isPro(); refreshAccount().then(() => { if (isPro() !== was && $('#modal') && !$('#modal').hidden) openSettings('account'); }); }
   if (tab) settingsTab = tab;
   const sh = $('#sheet');
@@ -2731,6 +2888,7 @@ function openSettings(tab) {
       '<div class="row"><label>Backend address (optional — adds lightning, shared radar cache and alerts with the screen off)</label>' +
       '<input id="beUrl" type="url" placeholder="https://radar.tieroneehs.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>') +
+    pane('family', familyPane()) +
     pane('account', (S.account && S.account.email
       ? '<div class="row"><div class="tl">' + (isPro() ? '<span class="pro">PRO</span> LeadTime Pro is active' : 'Signed in — free version') + '</div><div class="td">' + S.account.email + (isPro() && S.account.expiresMs ? ' · Pro until ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div>' +
         '<div class="td" style="margin-top:4px">Settings sync across your signed-in devices' + (S.syncedAt ? ' · last synced ' + new Date(S.syncedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '') + '.</div>' +
@@ -2784,6 +2942,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'warn') return playWarning();
   if (b.dataset.tab) { settingsTab = b.dataset.tab; $('#sheet').querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); $('#sheet').querySelectorAll('.tabpane').forEach(p => p.hidden = p.dataset.pane !== settingsTab); return; }
   if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
+  if (b.dataset.act && (b.dataset.act.startsWith('fam-') || b.dataset.act === 'go-account')) { familyAction(b); return; }
   if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
@@ -2864,7 +3023,7 @@ fitRange();
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
-refreshAccount();
+refreshAccount().then(() => refreshFamily());
 applySentinel();
 // Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });

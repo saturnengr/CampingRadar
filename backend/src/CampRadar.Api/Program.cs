@@ -309,7 +309,7 @@ async Task<int> FanOutMessage(GroupStore groups, SpotStore spots, PushSender pus
     {
         string email = ""; try { using var d = JsonDocument.Parse(spot.Prefs); email = d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { }
         if (!memberEmails.Contains(email)) continue;
-        var ok = await push.SendAsync(spot, new { title = m.FromName, body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
+        var ok = await push.SendAsync(spot, new { title = m.FromName, body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, toEmail = email, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
         if (ok) sent++; else spots.RecordFailure(spot.Id, gone: true);
     }
     return sent;
