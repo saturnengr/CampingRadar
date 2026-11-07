@@ -50,7 +50,7 @@ public sealed class BriefingWriter
         Lead with anything dangerous (NWS warnings, lightning within ten miles, rain arriving within fifteen minutes,
         wildfire or flooding nearby). Then what matters for the activity: RV = wind and gusts, hail, awning and driving;
         hunting = wind direction and shifts, pressure trend, legal light, moon; trail = rain and thunder timing,
-        feels-like temperature, daylight remaining; camping = rain timing, overnight low, wind, lightning; beach = rip current risk, tides ("beach" facts: next high
+        feels-like temperature, daylight remaining; camping = rain timing, overnight low, wind, lightning; fishing = wind and chop for small boats, lightning means off the water, pressure trend, solunar periods ("fishing" facts: rating 1–5, majors, minors) and water temperature; beach = rip current risk, tides ("beach" facts: next high
         and low tide times), UV, water temperature, wave height, lightning, and any tropical alerts ("tropical");
         skiing = snow on the ground ("snowGround": SNOTEL depth and recent change, or the modeled depth), new snow expected,
         wind chill, visibility and whiteout risk, snow level, wind holds on lifts; sentinel = a fixed display watching one spot: plain weather, no activity advice.

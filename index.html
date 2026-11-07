@@ -537,6 +537,19 @@ function nearestEcho(grid, cellKm, cx, cy, thresh, maxRing) {
   }
   return best;
 }
+// Hail-capable cores: cells at or above thresh dBZ within maxRing miles, merged within ~3 mi, with the peak dBZ and a lat/lon.
+function hailCores(grid, cellKm, cx, cy, thresh, maxRing, loc) {
+  const cellMi = cellKm * 0.621371, cores = [];
+  for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
+    const d = grid.d[y * grid.w + x]; if (d < thresh) continue;
+    const e = (x + 0.5 - cx) * cellMi, n = -(y + 0.5 - cy) * cellMi, dist = Math.hypot(e, n); if (dist > maxRing) continue;
+    let hit = null; for (const c of cores) if (Math.hypot(c.e - e, c.n - n) < 3) { hit = c; break; }
+    if (hit) { hit.cells++; if (d > hit.dbz) { hit.dbz = d; hit.e = e; hit.n = n; hit.distMi = dist; hit.bearing = bearingDeg(e, n); } }
+    else cores.push({ e, n, dbz: d, cells: 1, distMi: dist, bearing: bearingDeg(e, n) });
+  }
+  for (const c of cores) { c.lat = loc.lat + c.n * MI / 111320; c.lon = loc.lon + c.e * MI / (111320 * Math.cos(loc.lat * Math.PI / 180)); }
+  return cores.filter(c => c.cells >= 2).sort((a, b) => a.distMi - b.distMi);
+}
 function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
@@ -674,7 +687,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
-  layers: { storms: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
+  layers: { storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -702,7 +715,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07m';
+const APP_VERSION = '2026.11.07n';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1448,6 +1461,7 @@ async function runNowcast() {
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
       { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
+    res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
     if (res.hit) {
       // the trend of the storm that arrives first; if several storms will hit, the biggest contributor wins the wording
       let tr = trends.get(res.hit.blob) || null;
@@ -1460,6 +1474,7 @@ async function runNowcast() {
     }
     if (res.nearestBlob) res.nearestTrend = trends.get(res.nearestBlob) || null;
     st.nc = { res, motion, trends: [...trends.values()] }; st.ncAt = Date.now(); st.ncErr = null;
+    drawHail();
   } catch (e) { st.ncErr = e.message; console.warn('nowcast', e); }
   finally { st.ncBusy = false; }
   const s = renderStatus();
@@ -1521,6 +1536,7 @@ map.createPane('imagery'); map.getPane('imagery').style.zIndex = 340;
 map.createPane('clouds'); map.getPane('clouds').style.zIndex = 345;
 const LAYER_INFO = {
   storms: ['Watches & warnings', 'NWS tornado, severe thunderstorm, winter storm, blizzard, ice storm, high wind and dust storm watches and warnings, shaded over the affected area. Solid = warning (happening or imminent), dashed = watch (conditions favourable)'],
+  hail: ['Hail', 'Hail-capable storm cores (58 dBZ and up on the latest scan) and the hail size NWS gives in severe thunderstorm and tornado warnings'],
   flood: ['Flood alerts', 'NWS flood and flash-flood warnings, watches and advisories, drawn where they apply'],
   gauges: ['River gauges', 'NOAA gauges; colour shows action / minor / moderate / major flood stage'],
   fire: ['Wildfires', 'Active fire perimeters and incident points from the national interagency feed (NIFC)'],
@@ -1535,7 +1551,7 @@ const LAYER_INFO = {
   trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
 };
-const stormLayer = L.layerGroup(), floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
+const stormLayer = L.layerGroup(), hailLayer = L.layerGroup(), floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
 const WFIGS = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/';
 const GAUGES = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0/query';
 const SMOKE = 'https://mapservices.weather.noaa.gov/raster/rest/services/air_quality/ndgd_smoke_sfc_1hr_avg_time/ImageServer';
@@ -1591,7 +1607,7 @@ function cloudWmsLayer() { return new CloudLayer({ pane: 'clouds', opacity: 0.9,
 function applyLayers() {
   const L_ = S.layers;
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
-  set(stormLayer, L_.storms); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
+  set(stormLayer, L_.storms); set(hailLayer, L_.hail); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   set(trailsLayer, L_.trails);
   if (typeof drawPeople === 'function') drawPeople();
@@ -1606,6 +1622,7 @@ function applyLayers() {
 function renderLegend() {
   const L_ = S.layers, items = [];
   if (L_.storms) { const seen = new Set((st.hz.storms || []).map(a => a.event)); for (const ev of Object.keys(STORM_COLORS)) if (seen.has(ev)) items.push('<span><i style="background:' + STORM_COLORS[ev] + (/Warning/.test(ev) ? '' : ';opacity:.6;border:1px dashed #fff') + '"></i>' + ev + '</span>'); if (!seen.size) items.push('<span><i style="background:#ff9100;opacity:.5"></i>Watches &amp; warnings (none in view)</span>'); }
+  if (L_.hail) items.push('<span><i style="background:#e1f5fe;border:2px solid #0277bd;border-radius:50%"></i>Hail-capable core / NWS hail size</span>');
   if (L_.flood) items.push('<span><i style="background:#1e88e5"></i>Flood alert</span>');
   if (L_.gauges) items.push('<span><i style="background:#ff8f00;border-radius:50%"></i>River gauge (colour = flood stage)</span>');
   if (L_.fire) items.push('<span><i style="background:#ff3d00"></i>Wildfire</span>');
@@ -1629,7 +1646,7 @@ async function refreshHazards() {
   if (L_.gauges) tasks.push(loadGauges(bb)); if (L_.fire || L_.rx) tasks.push(loadFires(bb, b)); if (L_.storms || L_.flood || L_.firewx) tasks.push(loadHazardAlerts(b));
   try { await Promise.all(tasks); st.hz.err = null; } catch (e) { st.hz.err = e.message; }
   st.hz.at = Date.now();
-  summarizeHazards(); renderLegend(); renderWwPills(); renderHeadsUp();
+  summarizeHazards(); renderLegend(); drawHail(); renderWwPills(); renderHeadsUp();
   const s = renderStatus(); handleHazardEvents();
 }
 async function loadGauges(bb) {
@@ -1717,6 +1734,22 @@ async function loadHazardAlerts(b) {
   }
 }
 // Pills under the forecast: every watch/warning drawn in view (storms, floods, fire weather) plus any alert for your spot. Tap for the full text.
+// Hail layer: radar cores from the nowcast grid, plus hail sizes from NWS severe-weather warning parameters.
+function drawHail() {
+  hailLayer.clearLayers(); if (!S.layers.hail) return;
+  const cores = (st.nc && st.nc.res && st.nc.res.cores) || [];
+  for (const c of cores) {
+    const size = c.dbz >= 65 ? 'golf ball or larger' : c.dbz >= 60 ? 'quarter-size' : 'small hail';
+    L.circleMarker([c.lat, c.lon], { pane: 'hazards', radius: c.dbz >= 65 ? 11 : 8, color: '#0277bd', weight: 2, fillColor: '#e1f5fe', fillOpacity: 0.9 })
+      .bindPopup('<b>Hail-capable core</b><br>' + Math.round(c.dbz) + ' dBZ · likely ' + size + '<br>' + Math.max(1, Math.round(c.distMi)) + ' mi ' + compass(c.bearing) + ' of you').addTo(hailLayer);
+  }
+  for (const a of (st.hz.storms || [])) {
+    const prm = (a.props && a.props.parameters) || {}, hs = prm.maxHailSize && parseFloat(prm.maxHailSize[0]);
+    if (!hs || hs < 0.75 || !a.bounds) continue;
+    const label = L.divIcon({ className: '', html: '<div style="background:#e1f5fe;color:#01579b;border:2px solid #0277bd;border-radius:10px;padding:2px 7px;font-weight:800;font-size:13px;white-space:nowrap">Hail to ' + hs + ' in' + (prm.hailThreat && prm.hailThreat[0] ? ' · ' + prm.hailThreat[0].toLowerCase() : '') + '</div>', iconSize: null });
+    L.marker(a.bounds.getCenter(), { icon: label, pane: 'hazards', interactive: true }).bindPopup('<b>' + esc(a.event) + '</b><br>' + esc(a.headline || '') + '<br>NWS: hail to ' + hs + ' in' + (prm.maxWindGust && prm.maxWindGust[0] ? ', wind to ' + esc(prm.maxWindGust[0]) : '')).addTo(hailLayer);
+  }
+}
 function renderWwPills() {
   const row = $('#wwRow'); if (!row) return;
   const list = [].concat(st.hz.storms || [], st.hz.floodAlerts || [], st.hz.firewx || []);
@@ -1745,19 +1778,19 @@ $('#wwRow').addEventListener('click', e => {
 });
 // ---------- activity heads-up: things the person should know that are not NWS products ----------
 const HU_ADVICE = {
-  gust: { camping: 'Stake the tent and tarp lines now; take down pop-up canopies.', rv: 'Bring the awning in and stow loose items outside.', trail: 'Expect it on ridges and open ground; secure hats and maps.', beach: 'Umbrellas and canopies become sails — take them down.', hunting: 'Scent carries far; blinds and stands get rough.', skiing: 'Lifts may slow or close; wind chill bites.', sentinel: 'Secure anything loose outside.' },
-  highwind: { rv: 'High-profile vehicle: avoid driving in crosswinds; park nose into the wind.', camping: 'Move cars away from dead limbs; sleep away from large trees.' },
-  thunder: { camping: 'Plan where to shelter (hard-top vehicle, not the tent) before it starts.', rv: 'Unhook and bring the awning in before the storm; the rig is safe shelter.', trail: 'Be below treeline and off summits before then; turn back if needed.', beach: 'Leave the water and open sand before you hear thunder.', hunting: 'Get out of tree stands and off ridges before it arrives.', skiing: 'Lifts close for lightning; head to the lodge.', sentinel: 'Storms expected; keep an eye on the radar.' },
-  hail: { rv: 'Hail with this storm is possible — cover vents and skylights, park under cover if you can.', camping: 'Hail possible — get people into vehicles, not the tent.', trail: 'Hail possible — find solid cover; trees are not enough.', beach: 'Hail possible — head to the car.', hunting: 'Hail possible — get under solid cover.', skiing: 'Hail possible — get to the lodge.', sentinel: 'Hail possible with this storm.' },
-  rain: { camping: 'Trench nothing; check the fly and ground cloth before it starts.', rv: 'Close vents and the awning; check slide toppers.', trail: 'Trails get slick and creek crossings rise; pack rain gear.', beach: 'Pack up what you want dry before then.', hunting: 'Scent and sound change; pack rain gear.', skiing: 'Rain on snow — expect heavy, slick conditions.', sentinel: 'Rain expected.' },
-  freeze: { camping: 'Water bottles and the stove line can freeze; keep them in the tent. Dress for it in the bag.', rv: 'Protect water lines and the hose; disconnect and drain if not heated.', trail: 'Ice on shaded trail and rock after dawn; bring traction.', beach: 'Freezing overnight.', hunting: 'Freezing overnight — dress in layers for the sit.', skiing: 'Hard, icy surface first thing.', sentinel: 'Freezing overnight.' },
-  heat: { camping: 'Shade and water; avoid midday exertion.', rv: 'Run the AC early; it will not catch up later. Pets stay out of the rig.', trail: 'Start early, carry extra water, turn around before the hottest hours.', beach: 'Shade, water, reapply sunscreen; the sand burns feet.', hunting: 'Hydrate; game moves early and late.', skiing: 'Slushy afternoon snow.', sentinel: 'Heat index is high.' },
-  cold: { camping: 'Wind chill well below freezing — cover skin, limit time outside.', rv: 'Wind chill well below freezing — keep the furnace fuelled.', trail: 'Wind chill well below freezing — frostbite risk on exposed skin.', beach: 'Wind chill well below freezing.', hunting: 'Wind chill well below freezing — frostbite risk; limit the sit.', skiing: 'Wind chill well below freezing — cover all skin; frostbite in minutes.', sentinel: 'Wind chill well below freezing.' },
-  fog: { camping: 'Fog — headlamps and reflective tape on guy lines.', rv: 'Fog — delay the drive if you can.', trail: 'Fog — easy to lose the trail; use the GPS track.', beach: 'Fog — keep swimmers close.', hunting: 'Fog — identify targets with certainty; shots are shorter.', skiing: 'Flat light and fog — stay on marked runs.', sentinel: 'Visibility is poor.' },
-  snow: { camping: 'Snow coming — knock it off the tent through the night.', rv: 'Snow coming — chains may be required on the way out.', trail: 'Snow coming — tracks disappear; turn around earlier.', beach: 'Snow coming.', hunting: 'Fresh snow — great for tracking, hard on the roads.', skiing: 'Fresh snow on the way.', sentinel: 'Snow on the way.' },
-  daylight: { trail: 'Not much daylight left — turn around now to be out before dark, or carry a light.', hunting: 'Legal light ends soon.', camping: 'Set up camp before dark.', rv: 'Set up before dark.', beach: 'Sunset soon.', skiing: 'Last runs.', sentinel: 'Sunset soon.' },
-  lightning: { camping: 'Lightning nearby — into vehicles, away from tall trees and water.', rv: 'Lightning nearby — stay inside the rig; it is safe shelter.', trail: 'Lightning nearby — off ridges, away from lone trees, spread the group out.', beach: 'Lightning nearby — out of the water and off the sand.', hunting: 'Lightning nearby — out of the stand and off the ridge.', skiing: 'Lightning nearby — off the lift and the slopes.', sentinel: 'Lightning nearby.' },
-  uv: { beach: 'Very high UV — sunscreen every two hours, hats, shade at midday.', trail: 'Very high UV — sunscreen, hat, long sleeves.', camping: 'Very high UV.', rv: 'Very high UV.', hunting: 'Very high UV.', skiing: 'Very high UV — snow reflects it; sunscreen and goggles.', sentinel: 'Very high UV.' }
+  gust: { fishing: 'Chop builds fast on open water; small boats stay in protected water or head in.', camping: 'Stake the tent and tarp lines now; take down pop-up canopies.', rv: 'Bring the awning in and stow loose items outside.', trail: 'Expect it on ridges and open ground; secure hats and maps.', beach: 'Umbrellas and canopies become sails — take them down.', hunting: 'Scent carries far; blinds and stands get rough.', skiing: 'Lifts may slow or close; wind chill bites.', sentinel: 'Secure anything loose outside.' },
+  highwind: { fishing: 'Small-craft conditions — stay off open water.', rv: 'High-profile vehicle: avoid driving in crosswinds; park nose into the wind.', camping: 'Move cars away from dead limbs; sleep away from large trees.' },
+  thunder: { fishing: 'Be off the water before it starts; a boat is the tallest thing on a lake.', camping: 'Plan where to shelter (hard-top vehicle, not the tent) before it starts.', rv: 'Unhook and bring the awning in before the storm; the rig is safe shelter.', trail: 'Be below treeline and off summits before then; turn back if needed.', beach: 'Leave the water and open sand before you hear thunder.', hunting: 'Get out of tree stands and off ridges before it arrives.', skiing: 'Lifts close for lightning; head to the lodge.', sentinel: 'Storms expected; keep an eye on the radar.' },
+  hail: { fishing: 'Hail possible — get the boat to the ramp or under cover.', rv: 'Hail with this storm is possible — cover vents and skylights, park under cover if you can.', camping: 'Hail possible — get people into vehicles, not the tent.', trail: 'Hail possible — find solid cover; trees are not enough.', beach: 'Hail possible — head to the car.', hunting: 'Hail possible — get under solid cover.', skiing: 'Hail possible — get to the lodge.', sentinel: 'Hail possible with this storm.' },
+  rain: { fishing: 'Rain itself fishes fine; watch for the wind and lightning that come with it.', camping: 'Trench nothing; check the fly and ground cloth before it starts.', rv: 'Close vents and the awning; check slide toppers.', trail: 'Trails get slick and creek crossings rise; pack rain gear.', beach: 'Pack up what you want dry before then.', hunting: 'Scent and sound change; pack rain gear.', skiing: 'Rain on snow — expect heavy, slick conditions.', sentinel: 'Rain expected.' },
+  freeze: { fishing: 'Freezing overnight — drain the livewell and lines; ice on the ramp and dock.', camping: 'Water bottles and the stove line can freeze; keep them in the tent. Dress for it in the bag.', rv: 'Protect water lines and the hose; disconnect and drain if not heated.', trail: 'Ice on shaded trail and rock after dawn; bring traction.', beach: 'Freezing overnight.', hunting: 'Freezing overnight — dress in layers for the sit.', skiing: 'Hard, icy surface first thing.', sentinel: 'Freezing overnight.' },
+  heat: { fishing: 'Fish early and late; shade and water on the boat.', camping: 'Shade and water; avoid midday exertion.', rv: 'Run the AC early; it will not catch up later. Pets stay out of the rig.', trail: 'Start early, carry extra water, turn around before the hottest hours.', beach: 'Shade, water, reapply sunscreen; the sand burns feet.', hunting: 'Hydrate; game moves early and late.', skiing: 'Slushy afternoon snow.', sentinel: 'Heat index is high.' },
+  cold: { fishing: 'Wind chill well below freezing — a dunking becomes life-threatening in minutes; wear the PFD.', camping: 'Wind chill well below freezing — cover skin, limit time outside.', rv: 'Wind chill well below freezing — keep the furnace fuelled.', trail: 'Wind chill well below freezing — frostbite risk on exposed skin.', beach: 'Wind chill well below freezing.', hunting: 'Wind chill well below freezing — frostbite risk; limit the sit.', skiing: 'Wind chill well below freezing — cover all skin; frostbite in minutes.', sentinel: 'Wind chill well below freezing.' },
+  fog: { fishing: 'Fog on the water — slow down, lights on, sound signals; wait for it to lift if you can.', camping: 'Fog — headlamps and reflective tape on guy lines.', rv: 'Fog — delay the drive if you can.', trail: 'Fog — easy to lose the trail; use the GPS track.', beach: 'Fog — keep swimmers close.', hunting: 'Fog — identify targets with certainty; shots are shorter.', skiing: 'Flat light and fog — stay on marked runs.', sentinel: 'Visibility is poor.' },
+  snow: { fishing: 'Snow coming — ramps get slick.', camping: 'Snow coming — knock it off the tent through the night.', rv: 'Snow coming — chains may be required on the way out.', trail: 'Snow coming — tracks disappear; turn around earlier.', beach: 'Snow coming.', hunting: 'Fresh snow — great for tracking, hard on the roads.', skiing: 'Fresh snow on the way.', sentinel: 'Snow on the way.' },
+  daylight: { fishing: 'Head for the ramp with light to spare; navigation lights after sunset.', trail: 'Not much daylight left — turn around now to be out before dark, or carry a light.', hunting: 'Legal light ends soon.', camping: 'Set up camp before dark.', rv: 'Set up before dark.', beach: 'Sunset soon.', skiing: 'Last runs.', sentinel: 'Sunset soon.' },
+  lightning: { fishing: 'Lightning nearby — off the water now, away from the shoreline and the boat; wait 30 minutes after the last strike.', camping: 'Lightning nearby — into vehicles, away from tall trees and water.', rv: 'Lightning nearby — stay inside the rig; it is safe shelter.', trail: 'Lightning nearby — off ridges, away from lone trees, spread the group out.', beach: 'Lightning nearby — out of the water and off the sand.', hunting: 'Lightning nearby — out of the stand and off the ridge.', skiing: 'Lightning nearby — off the lift and the slopes.', sentinel: 'Lightning nearby.' },
+  uv: { fishing: 'Very high UV — water doubles the exposure; sunscreen, hat, sleeves.', beach: 'Very high UV — sunscreen every two hours, hats, shade at midday.', trail: 'Very high UV — sunscreen, hat, long sleeves.', camping: 'Very high UV.', rv: 'Very high UV.', hunting: 'Very high UV.', skiing: 'Very high UV — snow reflects it; sunscreen and goggles.', sentinel: 'Very high UV.' }
 };
 function computeHeadsUp() {
   const out = [], act = S.activity in ACTIVITIES ? S.activity : 'camping', now = Date.now(), g = st.wx.grid, hp = st.wx.hourly || [];
@@ -1769,14 +1802,19 @@ function computeHeadsUp() {
   const next12 = hp.filter(p => { const t = Date.parse(p.startTime); return t + 3600e3 > now && t < now + 12 * 3600e3; });
   // gusts
   if (g) {
-    const lim = act === 'rv' ? 20 : act === 'beach' ? 20 : 25; let peak = 0, peakT = null;
+    const lim = act === 'rv' ? 20 : act === 'beach' ? 20 : act === 'fishing' ? 15 : 25; let peak = 0, peakT = null;
     for (const t of hours) { const v = val(g.gust, t); if (v != null && v > peak) { peak = v; peakT = t; } }
     const t1 = firstAt(t => (val(g.gust, t) || 0) >= lim);
     if (t1 != null) out.push({ key: 'gust', sev: peak >= 40 ? 'sev' : 'warn', title: 'Gusts to ' + Math.round(peak) + ' mph ' + when(t1), detail: 'Peak gusts ' + Math.round(peak) + ' mph ' + when(peakT) + ' (NWS hourly). ' + (act === 'rv' ? 'Awning limit for most RVs is about 20 mph.' : act === 'camping' ? 'Tents and canopies take damage above 25–30 mph.' : ''), advice: adv(peak >= 40 && HU_ADVICE.highwind[act] ? 'highwind' : 'gust') });
     const th = firstAt(t => (val(g.thunder, t) || 0) >= 30);
     if (th != null) out.push({ key: 'thunder', sev: 'sev', title: 'Thunderstorms ' + when(th), detail: 'Probability of thunder reaches ' + Math.round(Math.max(...hours.map(t => val(g.thunder, t) || 0))) + '% (NWS). Lightning is the risk even when the rain is light.', advice: adv('thunder') });
+    const hereLL = st.loc ? L.latLng(st.loc.lat, st.loc.lon) : null;
+    const nwsHail = (st.hz.storms || []).map(a => ({ a, hs: a.props && a.props.parameters && a.props.parameters.maxHailSize ? parseFloat(a.props.parameters.maxHailSize[0]) : 0 })).filter(x => x.hs >= 0.75 && hereLL && x.a.bounds && x.a.bounds.contains(hereLL)).sort((x, y) => y.hs - x.hs)[0];
+    if (nwsHail) out.push({ key: 'hail', sev: 'sev', title: 'Hail to ' + nwsHail.hs + ' in — NWS', detail: nwsHail.a.event + ' covering your spot; NWS expects hail to ' + nwsHail.hs + ' inches' + (nwsHail.a.props.parameters.hailThreat ? ' (' + nwsHail.a.props.parameters.hailThreat[0].toLowerCase() + ')' : '') + '.', advice: adv('hail') });
+    const cores = (st.nc && st.nc.res && st.nc.res.cores) || [], core = cores.find(c => c.distMi <= 30);
     const hit = st.nc && st.nc.res && st.nc.res.hit;
-    if (hit && hit.maxDbz >= 55) out.push({ key: 'hail', sev: 'sev', title: 'Hail possible with arriving storm', detail: 'Radar shows ' + Math.round(hit.maxDbz) + ' dBZ cores in the storm heading your way — that intensity often carries hail.', advice: adv('hail') });
+    if (!nwsHail && core && (hit || core.distMi <= 10)) out.push({ key: 'hail', sev: 'sev', title: 'Hail-capable storm ' + Math.max(1, Math.round(core.distMi)) + ' mi ' + compass(core.bearing), detail: Math.round(core.dbz) + ' dBZ core on the latest scan' + (hit ? '; rain from that direction is expected here in ' + fmtDur(Math.max(0, hit.etaMin - radarLag())) : '') + '.', advice: adv('hail') });
+    else if (hit && hit.maxDbz >= 55) out.push({ key: 'hail', sev: 'sev', title: 'Hail possible with arriving storm', detail: 'Radar shows ' + Math.round(hit.maxDbz) + ' dBZ cores in the storm heading your way — that intensity often carries hail.', advice: adv('hail') });
     const fz = firstAt(t => { const f = val(g.feels, t); return f != null && f <= -5; });
     if (fz != null) out.push({ key: 'cold', sev: 'sev', title: 'Wind chill ' + Math.round(val(g.feels, fz)) + '° ' + when(fz), detail: 'Apparent temperature from the NWS grid.', advice: adv('cold') });
     const ht = firstAt(t => { const f = val(g.feels, t); return f != null && f >= 100; });
@@ -1794,11 +1832,17 @@ function computeHeadsUp() {
   if (night && night.temperature <= 32) out.push({ key: 'freeze', sev: act === 'rv' || act === 'camping' ? 'sev' : 'warn', title: 'Low of ' + night.temperature + '° ' + night.name.toLowerCase(), detail: 'Freezing ' + night.name.toLowerCase() + ' (' + night.shortForecast.toLowerCase() + ').', advice: adv('freeze') });
   else if (night && night.temperature <= 40 && act === 'camping') out.push({ key: 'freeze', sev: 'info', title: 'Low of ' + night.temperature + '° ' + night.name.toLowerCase(), detail: 'Cold night for most three-season bags.', advice: 'Extra layer in the bag; keep water from freezing in the vestibule.' });
   // lightning (Pro, live)
-  if (st.lightning && st.lightning.within30) out.push({ key: 'lightning', sev: st.lightning.within10 ? 'sev' : 'warn', title: 'Lightning ' + (st.lightning.nearestMi != null ? Math.max(1, Math.round(st.lightning.nearestMi)) + ' mi' : 'within 30 mi') + (st.lightning.trend === 'approaching' ? ', approaching' : ''), detail: st.lightning.within10 + ' strikes within 10 mi, ' + st.lightning.within30 + ' within 30 mi in the last 30 minutes.', advice: adv('lightning') });
+  if (st.lightning && st.lightning.within30) out.push({ key: 'lightning', sev: st.lightning.within10 || act === 'fishing' || act === 'beach' ? 'sev' : 'warn', title: 'Lightning ' + (st.lightning.nearestMi != null ? Math.max(1, Math.round(st.lightning.nearestMi)) + ' mi' : 'within 30 mi') + (st.lightning.trend === 'approaching' ? ', approaching' : ''), detail: st.lightning.within10 + ' strikes within 10 mi, ' + st.lightning.within30 + ' within 30 mi in the last 30 minutes.', advice: adv('lightning') });
   // daylight left
-  if (st.loc && (act === 'trail' || act === 'hunting' || act === 'camping' || act === 'rv')) {
+  if (st.loc && (act === 'trail' || act === 'hunting' || act === 'camping' || act === 'rv' || act === 'fishing')) {
     const sun = sunTimes(st.loc.lat, st.loc.lon, localDate(now));
     if (sun && sun.set && sun.set > now && sun.set - now < 90 * 60000) out.push({ key: 'daylight', sev: 'info', title: fmtDur((sun.set - now) / 60000) + ' of daylight left', detail: 'Sunset ' + clock(sun.set) + (sun.dusk ? ', dark by ' + clock(sun.dusk) : '') + '.', advice: adv('daylight') });
+  }
+  // fishing: a solunar period starting within the hour, and water temperature extremes
+  if (act === 'fishing' && st.loc) {
+    const sol = solunar(st.loc.lat, st.loc.lon, localDate(now)), nx = nextPeriod(sol, now);
+    if (nx && nx.from - now < 3600e3) out.push({ key: 'solunar', sev: 'info', title: (nx.from <= now ? 'In a ' : 'Next ') + nx.kind + ' solunar period ' + periodLabel(nx), detail: 'Solunar tables: majors are about two hours around moon overhead and underfoot, minors about an hour around moonrise and moonset. Today rates ' + sol.rating + ' of 5.', advice: 'Have a line in the water for the whole window.' });
+    if (st.water && st.water.site && (st.water.site.f < 45 || st.water.site.f > 85)) out.push({ key: 'water', sev: 'info', title: 'Water ' + Math.round(st.water.site.f) + '°', detail: st.water.site.name + ', ' + Math.round(st.water.site.distMi) + ' mi away.', advice: waterWord(st.water.site.f) + (st.water.site.f < 50 ? '. Cold-water immersion: wear the PFD.' : '.') });
   }
   // UV (when known)
   if (st.beach && st.beach.uv) { const uvNow = st.beach.uv.hourly.find(x => Math.abs(x.t - now) < 1800e3); if (uvNow && uvNow.v >= 8) out.push({ key: 'uv', sev: 'warn', title: 'UV ' + uvWord(uvNow.v) + ' (' + Math.round(uvNow.v) + ')', detail: 'UV index now.', advice: adv('uv') }); }
@@ -2027,7 +2071,7 @@ $('#snoozeCancel').addEventListener('click', () => { S.snoozeUntil = 0; save(); 
 document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') && e.target.id !== 'snoozeBtn') $('#snoozeMenu').hidden = true; });
 
 /* ------------------------------ day view --------------------------- */
-const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing', sentinel: 'Sentinel (fixed display watching one spot)' };
+const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', fishing: 'Fishing & boating', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing', sentinel: 'Sentinel (fixed display watching one spot)' };
 $('#days').addEventListener('click', e => { const d = e.target.closest('.day'); if (d && d.dataset.date) openDay(d.dataset.date); });
 
 // NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
@@ -2098,11 +2142,13 @@ async function openDay(dateStr) {
   const sh = $('#sheet'); sh.innerHTML = '<h2>Loading…</h2>'; openModal();
   const hours = dayHours(dateStr);
   if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
+  if (S.activity === 'fishing') { try { await Promise.all([fetchPressure(), fetchWaterTemp()]); } catch (e) {} }
   if (snowy()) { try { await refreshSnow(); } catch (e) {} }
   const dayP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && p.isDaytime), nightP = st.wx.daily.find(p => p.startTime.slice(0, 10) === dateStr && !p.isDaytime);
   const main = dayP || nightP;
   if (!main && !hours.length) { sh.innerHTML = '<h2>No forecast for that day yet</h2><button class="done" data-act="close">Close</button>'; return; }
   const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, dateStr) : null, moon = moonPhase(Date.parse(dateStr + 'T18:00:00'));
+  if (S.activity === 'fishing') { try { await fetchWaterTemp(); } catch (e) {} }
   const title = new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const hi = dayP ? dayP.temperature : (hours.length ? Math.max(...hours.map(h => h.temp)) : null), lo = nightP ? nightP.temperature : (hours.length ? Math.min(...hours.map(h => h.temp)) : null);
   const maxPop = Math.max(0, ...hours.map(h => h.pop)), rainHours = hours.filter(h => h.pop >= 40), maxWind = Math.max(0, ...hours.map(h => h.wind)), maxGust = Math.max(0, ...hours.map(h => h.gust || 0));
@@ -2119,6 +2165,10 @@ async function openDay(dateStr) {
   const sunTile = sun && sun.rise ? tile('Sun', '<small>↑</small>' + clock(sun.rise) + ' <small>↓</small>' + clock(sun.set), 'Daylight ' + fmtDur((sun.set - sun.rise) / 60000, true), '') : '';
   const legalTile = sun && sun.rise ? tile('Shooting light', clock(sun.rise - 30 * 60000) + '<small> – </small>' + clock(sun.set + 30 * 60000), '½ h before sunrise to ½ h after sunset (check your state)', '') : '';
   const moonTile = tile('Moon', moon.ill + '<small>%</small>', moon.name, '');
+  const sol = st.loc ? solunar(st.loc.lat, st.loc.lon, dateStr) : null, nxp = sol ? (nextPeriod(sol, Date.now()) || sol.all[0]) : null;
+  const solunarTile = sol ? tile('Solunar', '★'.repeat(sol.rating) + '<small>' + '☆'.repeat(5 - sol.rating) + '</small>', (sol.majors.length ? 'Major ' + sol.majors.map(periodLabel).join(', ') : '') + (sol.minors.length ? (sol.majors.length ? ' · ' : '') + 'Minor ' + sol.minors.map(periodLabel).join(', ') : ''), sol.rating >= 4 ? 'good' : '') : '';
+  const wt = st.water && st.water.site, waterTile = tile('Water temp', wt ? Math.round(wt.f) + '°' : '—', wt ? wt.name + ' (' + Math.round(wt.distMi) + ' mi) · ' + waterWord(wt.f) : 'No gauge reporting water temperature within 35 mi', wt && wt.f >= 50 && wt.f < 75 ? 'good' : '');
+  const boatTile = tile('Boating wind', Math.round(Math.max(maxWind, maxGust)) + '<small> mph</small>', Math.max(maxWind, maxGust) >= 25 ? 'Rough for small boats — protected water only' : Math.max(maxWind, maxGust) >= 15 ? 'Chop on open water' : 'Calm enough for small boats', Math.max(maxWind, maxGust) >= 25 ? 'bad' : Math.max(maxWind, maxGust) >= 15 ? 'warn' : 'good');
   const pressTile = pressure ? tile('Pressure', pressure.inHg.toFixed(2) + '<small> inHg</small>', (pressure.change3h >= 0 ? '+' : '') + pressure.change3h.toFixed(2) + ' in 3 h · ' + pressure.word + (pressure.fast ? ' fast' : ''), pressure.fast && pressure.change3h < 0 ? 'warn' : '') : tile('Pressure', '—', 'Needs a recent station report', '');
   const feelsHot = Math.max(...hours.map(h => h.feels), -99), feelsCold = Math.min(...hours.map(h => h.feels), 999);
   const exertTile = tile('Feels like', (feelsCold < 999 ? feelsCold + '°' : '—') + ' <small>to</small> ' + (feelsHot > -99 ? feelsHot + '°' : '—'), feelsHot >= 95 ? 'Heat index high — go early' : feelsCold <= 20 ? 'Wind chill — cover skin' : 'Comfortable for exertion', feelsHot >= 100 || feelsCold <= 10 ? 'bad' : feelsHot >= 90 || feelsCold <= 25 ? 'warn' : 'good');
@@ -2153,6 +2203,7 @@ async function openDay(dateStr) {
     camping: [rainTile, thunderTile, windTile, overnight, sunTile, tempTile],
     rv: [windTile, awning, hailNote, rainTile, thunderTile, tempTile],
     hunting: [windTile, pressTile, legalTile, moonTile, tempTile, rainTile],
+    fishing: [solunarTile, pressTile, waterTile, boatTile, thunderTile, rainTile, tempTile, sunTile],
     trail: [rainTile, thunderTile, exertTile, lastLight, windTile, tempTile],
     beach: [tideTile, ripTile, uvTile, wtTile, waveTile, windTile, thunderTile, sunTile],
     skiing: [groundTile, snowTile, chillTile, visTile, liftTile, snowLevelTile, tempTile, sunTile],
@@ -2353,6 +2404,7 @@ function briefingFacts() {
     sun: sun && sun.rise ? { rise: sayTime(sun.rise), set: sayTime(sun.set), dusk: sayTime(sun.dusk), minsToSunset: Math.round((sun.set - now) / 60000) } : null,
     moon: moonPhase(now),
     pressure: st.wx.pressure ? { inHg: +st.wx.pressure.inHg.toFixed(2), word: st.wx.pressure.word, fast: st.wx.pressure.fast } : null,
+    fishing: S.activity === 'fishing' && st.loc ? (() => { const sol = solunar(st.loc.lat, st.loc.lon, localDate(now)), nx = nextPeriod(sol, now); return { rating: sol.rating, next: nx ? { kind: nx.kind, from: sayTime(nx.from), to: sayTime(nx.to) } : null, majors: sol.majors.map(p => sayTime(p.from) + ' to ' + sayTime(p.to)), minors: sol.minors.map(p => sayTime(p.from) + ' to ' + sayTime(p.to)), waterF: st.water && st.water.site ? Math.round(st.water.site.f) : null, waterSite: st.water && st.water.site ? st.water.site.name : null, sunriseWindow: !!(sun && sun.rise && sol.all.some(p => p.from < sun.rise + 3600e3 && p.to > sun.rise - 3600e3)) }; })() : null,
     precipType: precipType(), visibilityMi: st.wx.visMi != null ? +st.wx.visMi.toFixed(1) : null,
     beach: S.activity === 'beach' && st.beach ? { station: st.beach.station && st.beach.station.name, tides: nextTides(now).map(x => ({ type: x.type === 'H' ? 'high' : 'low', at: sayTime(x.t), ft: x.ft })), waterF: st.beach.wtemp && Math.round(st.beach.wtemp.f),
       uvMaxToday: st.beach.uv && st.beach.uv.max[0] != null ? Math.round(st.beach.uv.max[0]) : null, uvMaxTomorrow: st.beach.uv && st.beach.uv.max[1] != null ? Math.round(st.beach.uv.max[1]) : null, rip: ripRisk(), alerts: beachAlerts().map(a => a.event) } : null,
@@ -2362,11 +2414,111 @@ function briefingFacts() {
   };
 }
 
+
+/* ------------------------------ fishing & boating: solunar periods, water temperature ------------------------------ */
+// Low-precision lunar position (Meeus-style truncated series, ~0.3° — fine for rise/set/transit to a few minutes).
+function moonAltitude(ms, lat, lon) {
+  const rad = Math.PI / 180, T = (ms / 864e5 + 2440587.5 - 2451545.0) / 36525;
+  const Lp = (218.3164477 + 481267.88123421 * T) % 360, D = (297.8501921 + 445267.1114034 * T) % 360, M = (357.5291092 + 35999.0502909 * T) % 360, Mp = (134.9633964 + 477198.8675055 * T) % 360, F = (93.2720950 + 483202.0175233 * T) % 360;
+  const lonM = Lp + 6.289 * Math.sin(Mp * rad) + 1.274 * Math.sin((2 * D - Mp) * rad) + 0.658 * Math.sin(2 * D * rad) + 0.214 * Math.sin(2 * Mp * rad) - 0.186 * Math.sin(M * rad) - 0.114 * Math.sin(2 * F * rad) + 0.059 * Math.sin((2 * D - 2 * Mp) * rad) + 0.057 * Math.sin((2 * D - M - Mp) * rad) + 0.053 * Math.sin((2 * D + Mp) * rad) + 0.046 * Math.sin((2 * D - M) * rad) - 0.041 * Math.sin((M - Mp) * rad) - 0.035 * Math.sin(D * rad) - 0.031 * Math.sin((M + Mp) * rad);
+  const latM = 5.128 * Math.sin(F * rad) + 0.281 * Math.sin((Mp + F) * rad) + 0.278 * Math.sin((Mp - F) * rad) + 0.173 * Math.sin((2 * D - F) * rad) + 0.055 * Math.sin((2 * D - Mp + F) * rad) + 0.046 * Math.sin((2 * D - Mp - F) * rad) + 0.033 * Math.sin((2 * D + F) * rad);
+  const eps = (23.439291 - 0.0130042 * T) * rad, l = lonM * rad, b = latM * rad;
+  const ra = Math.atan2(Math.sin(l) * Math.cos(eps) - Math.tan(b) * Math.sin(eps), Math.cos(l)), dec = Math.asin(Math.sin(b) * Math.cos(eps) + Math.cos(b) * Math.sin(eps) * Math.sin(l));
+  const gmst = (280.46061837 + 360.98564736629 * (ms / 864e5 + 2440587.5 - 2451545.0)) % 360;
+  const H = ((gmst + lon) * rad - ra), phi = lat * rad;
+  return Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H)) / rad;
+}
+// Rise, set, transit (overhead) and underfoot for the local calendar day, by scanning the day in 4-minute steps.
+function moonEvents(lat, lon, dateStr) {
+  const start = new Date(dateStr + 'T00:00:00').getTime(), end = start + 86400e3, step = 4 * 60000;
+  const ev = { rise: null, set: null, transit: null, under: null };
+  let prev = moonAltitude(start, lat, lon), maxA = -99, minA = 99;
+  for (let t = start + step; t <= end; t += step) {
+    const a = moonAltitude(t, lat, lon);
+    if (prev < 0.125 && a >= 0.125 && !ev.rise) ev.rise = t - step / 2;
+    if (prev >= 0.125 && a < 0.125 && !ev.set) ev.set = t - step / 2;
+    if (a > maxA) { maxA = a; ev.transit = t; } if (a < minA) { minA = a; ev.under = t; }
+    prev = a;
+  }
+  // a transit at the very edge of the day means the real one is on a neighbouring day
+  if (ev.transit <= start + step || ev.transit >= end - step) ev.transit = null;
+  if (ev.under <= start + step || ev.under >= end - step) ev.under = null;
+  return ev;
+}
+// Solunar periods: majors ±1 h around moon overhead/underfoot, minors ±30 min around moonrise/set. Rating 1–5 from moon phase and sun/moon overlap.
+function solunar(lat, lon, dateStr) {
+  const m = moonEvents(lat, lon, dateStr), sun = sunTimes(lat, lon, dateStr), phase = moonPhase(new Date(dateStr + 'T12:00:00').getTime());
+  const majors = [m.transit, m.under].filter(Boolean).map(t => ({ from: t - 3600e3, to: t + 3600e3, kind: 'major' }));
+  const minors = [m.rise, m.set].filter(Boolean).map(t => ({ from: t - 1800e3, to: t + 1800e3, kind: 'minor' }));
+  let rating = 2;
+  const ph = (phase.ill <= 10 || phase.ill >= 90) ? 2 : (phase.ill <= 25 || phase.ill >= 75) ? 1 : 0; rating += ph;
+  if (sun && sun.rise) for (const p of majors.concat(minors)) if ((p.from < sun.rise + 3600e3 && p.to > sun.rise - 3600e3) || (p.from < sun.set + 3600e3 && p.to > sun.set - 3600e3)) { rating += 1; break; }
+  rating = Math.min(5, rating);
+  return { moon: m, majors, minors, rating, phase, all: majors.concat(minors).sort((a, b) => a.from - b.from) };
+}
+const periodLabel = p => clock(p.from) + '–' + clock(p.to);
+function nextPeriod(sol, now) { return sol.all.find(p => p.to > now) || null; }
+// Water temperature: nearest USGS gauge reporting 00010 within ~35 mi (inland lakes and rivers), else the CO-OPS station from the beach data.
+async function fetchWaterTemp() {
+  if (!st.loc) return null;
+  if (st.water && Date.now() - st.water.at < 30 * 60000 && distMi(st.water.loc, st.loc) < 2) return st.water;
+  const w = { at: Date.now(), loc: { ...st.loc }, site: null };
+  try {
+    const d = 0.5, bb = [st.loc.lon - d, st.loc.lat - d, st.loc.lon + d, st.loc.lat + d].map(v => v.toFixed(4)).join(',');
+    const r = await fetchT('https://waterservices.usgs.gov/nwis/iv/?format=json&bBox=' + bb + '&parameterCd=00010&siteStatus=active&period=PT4H', {}, 15000);
+    const j = await r.json(); let best = null;
+    for (const ts of (j.value && j.value.timeSeries) || []) {
+      const vals = (ts.values[0] && ts.values[0].value) || []; const v = vals.length ? vals[vals.length - 1] : null; if (!v || v.value == null || +v.value <= -99) continue;
+      const g = ts.sourceInfo.geoLocation.geogLocation, loc = { lat: +g.latitude, lon: +g.longitude }, dMi = distMi(st.loc, loc);
+      if (dMi > 35) continue;
+      const site = { name: ts.sourceInfo.siteName, distMi: dMi, f: +v.value * 9 / 5 + 32, at: Date.parse(v.dateTime), lat: loc.lat, lon: loc.lon, src: 'USGS' };
+      if (!best || dMi < best.distMi) best = site;
+    }
+    w.site = best;
+  } catch (e) { w.err = e.message; }
+  if (!w.site && st.beach && st.beach.wtemp && st.beach.station) w.site = { name: st.beach.station.name, distMi: st.beach.station.distMi, f: st.beach.wtemp.f, at: st.beach.wtemp.at, src: 'NOAA' };
+  st.water = w; return w;
+}
+const waterWord = f => f == null ? '' : f < 40 ? 'very cold — slow, deep presentations' : f < 50 ? 'cold — fish are sluggish, slow it down' : f < 60 ? 'cool — pre-spawn patterns, moderate pace' : f < 75 ? 'prime range for most species' : f < 85 ? 'warm — early, late and deeper water' : 'hot — low oxygen, fish deep or at night';
+function fishingBody(f) {
+  const s = f.nextStats, o = f.fishing, out = [];
+  if (f.lightning && f.lightning.within30) out.push('Lightning is within thirty miles — be off the water and away from the shoreline until it has been clear for thirty minutes.');
+  if (s) {
+    const w = Math.max(s.windNow || 0, s.topGust || 0);
+    out.push(`Wind ${s.windDir ? 'from the ' + s.windDir + ' ' : ''}at ${s.windNow || 0}${s.topGust >= (s.windNow || 0) + 5 ? ', gusting to ' + s.topGust + ' around ' + s.gustAt : ''}${w >= 25 ? ' — rough for small boats; stay in protected water or stay in' : w >= 15 ? ' — expect chop on open water' : ' — calm enough for small boats'}.`);
+    out.push(rainSentence(s, 'the next few hours', 'The next few hours look'), thunderSentence(s));
+  }
+  if (f.pressure) out.push(`Pressure is ${f.pressure.inHg} and ${f.pressure.word}${f.pressure.fast ? ' fast' : ''}${f.pressure.word === 'falling' ? ' — fish often feed ahead of a front, then shut down behind it' : f.pressure.word === 'rising' && f.pressure.fast ? ' — a post-front bluebird day; expect a slow bite' : ''}.`);
+  if (o) {
+    if (o.waterF != null) out.push(`Water temperature ${Math.round(o.waterF)} degrees${o.waterSite ? ' at ' + o.waterSite : ''}, ${waterWord(o.waterF)}.`);
+    if (o.next) out.push(`Next ${o.next.kind} solunar period ${o.next.from} to ${o.next.to}${o.rating >= 4 ? '; a strong day on the solunar tables' : o.rating <= 2 ? '; a quieter day on the tables' : ''}.`);
+    if (o.sunriseWindow) out.push(`First light is ${f.sun.rise}; the dawn bite overlaps a solunar period today.`);
+  }
+  if (s) out.push(`Air temperatures ${deg(s.lo)} to ${deg(s.hi)}.`);
+  return out;
+}
+function fishingBodyES(f) {
+  const s = f.nextStats, o = f.fishing, out = [];
+  if (f.lightning && f.lightning.within30) out.push('Hay rayos a menos de treinta millas: salgan del agua y aléjense de la orilla hasta que pasen treinta minutos sin rayos.');
+  if (s) {
+    const w = Math.max(s.windNow || 0, s.topGust || 0);
+    out.push(`Viento ${s.windDir ? 'del ' + dirES(s.windDir) + ' ' : ''}a ${s.windNow || 0}${s.topGust >= (s.windNow || 0) + 5 ? ', con ráfagas de ' + s.topGust + ' alrededor de las ' + s.gustAt : ''}${w >= 25 ? '; demasiado para lanchas pequeñas, quédense en aguas protegidas o en tierra' : w >= 15 ? '; habrá oleaje en aguas abiertas' : '; bastante calmo para lanchas pequeñas'}.`);
+    out.push(rainSentenceES(s, 'en las próximas horas', 'Las próximas horas se ven secas'), thunderSentenceES(s));
+  }
+  if (f.pressure) out.push(`La presión está en ${f.pressure.inHg} y ${f.pressure.word === 'falling' ? 'bajando' : f.pressure.word === 'rising' ? 'subiendo' : 'estable'}${f.pressure.fast ? ' rápido' : ''}${f.pressure.word === 'falling' ? '; los peces suelen comer antes de un frente y parar después' : ''}.`);
+  if (o) {
+    if (o.waterF != null) out.push(`Temperatura del agua ${Math.round(o.waterF)} grados${o.waterSite ? ' en ' + o.waterSite : ''}.`);
+    if (o.next) out.push(`Próximo periodo solunar ${o.next.kind === 'major' ? 'mayor' : 'menor'} de ${o.next.from} a ${o.next.to}${o.rating >= 4 ? '; día fuerte según las tablas solunares' : ''}.`);
+  }
+  if (s) out.push(`Temperatura del aire de ${deg(s.lo)} a ${deg(s.hi)}.`);
+  return out;
+}
+
 /* ---- device-written briefings: a shared safety lead, then one writer per activity, then the outlook ---- */
 const deg = t => t == null ? '' : Math.round(t) + '';
 function leadSentences(f) {
   const out = [];
-  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', trail: 'trail', beach: 'beach', skiing: 'ski', sentinel: 'weather' }[f.activity] || 'camp';
+  const name = { camping: 'camp', rv: 'RV', hunting: 'hunting', fishing: 'fishing', trail: 'trail', beach: 'beach', skiing: 'ski', sentinel: 'weather' }[f.activity] || 'camp';
   out.push(`Here's your ${name} briefing${f.place ? ' near ' + f.place : ''} at ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Right now it's ${f.now.temp.replace('°', ' degrees')}${f.now.cond ? ' and ' + f.now.cond.toLowerCase() : ''}${f.now.wind ? ', ' + f.now.wind.toLowerCase().replace('wind ', 'wind from the ') : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Heads up: a ${a.event} is in effect${a.ends ? ' until ' + a.ends : ''}. Take it seriously.`);
@@ -2501,7 +2653,7 @@ function outlookSentences(f) {
   return out;
 }
 function composeBriefingEN(f) {
-  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, trail: trailBody, beach: beachBody, skiing: skiingBody, sentinel: sentinelBody }[f.activity] || campingBody;
+  const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, fishing: fishingBody, trail: trailBody, beach: beachBody, skiing: skiingBody, sentinel: sentinelBody }[f.activity] || campingBody;
   return precipify([...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
 }
 
@@ -2566,7 +2718,7 @@ function awningSentenceES(s, when) {
 }
 function leadSentencesES(f) {
   const out = [], pt = f.precipType, lluvia = PRECIP_ES[pt] || 'lluvia';
-  const name = { camping: 'de campamento', rv: 'para la casa rodante', hunting: 'de caza', trail: 'de sendero', beach: 'de playa', skiing: 'de esquí', sentinel: 'del tiempo' }[f.activity] || 'de campamento';
+  const name = { camping: 'de campamento', rv: 'para la casa rodante', hunting: 'de caza', fishing: 'de pesca', trail: 'de sendero', beach: 'de playa', skiing: 'de esquí', sentinel: 'del tiempo' }[f.activity] || 'de campamento';
   out.push(`Este es tu informe ${name}${f.place ? ' cerca de ' + f.place : ''} a las ${f.time}.`);
   if (f.now.temp && f.now.temp !== '--°') out.push(`Ahora mismo hay ${f.now.temp.replace('°', ' grados')}${f.now.cond ? ', ' + wxES(f.now.cond) : ''}${f.now.wind ? ', viento del ' + dirES((f.now.wind.match(/wind\s+(\w+)/i) || [])[1]) + ' a ' + ((f.now.wind.match(/(\d+)\s*mph/i) || [])[1] || '') + ' millas por hora' : ''}.`);
   for (const a of f.alerts.filter(a => a.critical)) out.push(`Atención: hay ${/^(Vigilancia|Advertencia|Declaración|Emergencia)/.test(eventES(a.event)) ? 'una' : 'un'} ${eventES(a.event).toLowerCase()} en vigor${a.ends ? ' hasta las ' + a.ends : ''}. Tómalo en serio.`);
@@ -2691,7 +2843,7 @@ function outlookSentencesES(f) {
   return out;
 }
 function composeBriefingES(f) {
-  const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES, sentinel: sentinelBodyES }[f.activity] || campingBodyES;
+  const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, fishing: fishingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES, sentinel: sentinelBodyES }[f.activity] || campingBodyES;
   return precipifyES([...leadSentencesES(f), ...body(f), ...outlookSentencesES(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'), f.precipType);
 }
 function composeBriefing(f) { return lang() === 'es' ? composeBriefingES(f) : composeBriefingEN(f); }
@@ -2702,6 +2854,7 @@ async function getBriefing() {
   if (st.pushBrief) { const t = st.pushBrief; st.pushBrief = null; return { text: t, source: 'backend', at: Date.now() }; }
   const wantBackend = isPro();
   if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
+  if (S.activity === 'fishing') { try { await Promise.all([fetchPressure(), fetchWaterTemp()]); } catch (e) {} }
   if (snowy()) { try { await refreshSnow(); } catch (e) {} }
   const facts = briefingFacts(); facts.language = LANGS[lang()][1]; facts.languageName = LANG_NAMES_EN[lang()];
   let text = composeBriefing(facts), source = 'device';
@@ -2870,7 +3023,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
-    ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
+    ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], [0, 'None'], [24, 'Gesture bar'], [48, '3-button bar']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
@@ -3052,7 +3205,7 @@ $('#sheet').addEventListener('click', async e => {
 // ---------- saved places: per-site alerts and digest, personal limits, dry windows, leave-by ----------
 const sites = { list: [], max: 12, plan: {}, planKey: null, edit: null, busy: false };
 const sitesLayer = L.layerGroup().addTo(map);
-const SITE_ICON = { camping: '⛺', rv: '🚐', hunting: '🦌', trail: '🥾', beach: '🏖', skiing: '🎿', sentinel: '📍' };
+const SITE_ICON = { camping: '⛺', rv: '🚐', hunting: '🦌', fishing: '🎣', trail: '🥾', beach: '🏖', skiing: '🎿', sentinel: '📍' };
 const THR_FIELDS = [['gustMph', 'Gusts over (mph)', 'Ráfagas de más de (mph)', 30], ['lowF', 'Colder than (°F)', 'Más frío que (°F)', 32], ['highF', 'Feels hotter than (°F)', 'Sensación mayor que (°F)', 95], ['popPct', 'Rain chance over (%)', 'Prob. de lluvia mayor que (%)', 60], ['visMi', 'Visibility under (mi)', 'Visibilidad menor que (mi)', 1]];
 const thrDefaults = () => ({ gustMph: 30, lowF: 32, highF: 95, popPct: 60 });
 async function refreshSites() {

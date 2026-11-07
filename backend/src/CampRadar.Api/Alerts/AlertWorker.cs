@@ -65,7 +65,7 @@ public sealed class AlertWorker : BackgroundService
         finally { _gate.Release(); }
     }
 
-    private sealed class SentState { public string Rain { get; set; } = "none"; public string Lightning { get; set; } = "none"; public List<string> Warnings { get; set; } = new(); public long RainSentMs { get; set; } public long LightningSentMs { get; set; } }
+    private sealed class SentState { public string Rain { get; set; } = "none"; public string Lightning { get; set; } = "none"; public List<string> Warnings { get; set; } = new(); public long RainSentMs { get; set; } public long LightningSentMs { get; set; } public long HailSentMs { get; set; } }
 
     private static string ExtractEmail(string prefsJson)
     {
@@ -85,7 +85,7 @@ public sealed class AlertWorker : BackgroundService
                 var opt = new StatusOptions(prefs.TryGetValue("hitMi", out var h) ? h : 3, prefs.TryGetValue("threshDbz", out var t) ? (float)t : 20);
                 var s = await _status.GetAsync(spot.Lat, spot.Lon, opt, ct);
                 var prev = JsonSerializer.Deserialize<SentState>(spot.LastState) ?? new SentState();
-                var next = new SentState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs };
+                var next = new SentState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs, HailSentMs = prev.HailSentMs };
                 bool snoozed = now < spot.SnoozeUntil;
                 // Pro lapsed (or never set): critical NWS warnings still go out; rain and lightning alerts do not.
                 string email = ExtractEmail(spot.Prefs);
@@ -96,7 +96,7 @@ public sealed class AlertWorker : BackgroundService
                 // NWS critical warnings: always, once per alert id, never snoozed.
                 var crit = s.Alerts.Where(a => a.Critical).ToList();
                 foreach (var a in crit.Where(a => !prev.Warnings.Contains(a.Id)))
-                    msgs.Add(("warning", a.Event.ToUpperInvariant(), a.Headline ?? "Take shelter now. Open the app for details.", true));
+                    msgs.Add(("warning", a.Event.ToUpperInvariant() + (a.MaxHailIn >= 0.75 ? $" · hail to {a.MaxHailIn} in" : ""), (a.MaxHailIn >= 0.75 ? $"Hail to {a.MaxHailIn} in" + (a.MaxWindGust is { } g ? $", wind to {g}" : "") + ". " : "") + (a.Headline ?? "Take shelter now. Open the app for details."), true));
                 next.Warnings = crit.Select(a => a.Id).ToList();
 
                 // Rain: notify on escalation (none/passing → incoming → imminent/atyou), re-arm after clearing; at most one per level per 2 h.
@@ -115,6 +115,10 @@ public sealed class AlertWorker : BackgroundService
                 if (pro && LRank(s.LightningLevel) == 2 && LRank(prev.Lightning) < 2 && now - prev.LightningSentMs > 30 * 60000L)
                 { msgs.Add(("lightning", "Lightning within 10 miles", s.Main, true)); next.LightningSentMs = now; }
                 next.Lightning = s.LightningLevel;
+
+                // Hail: a 58+ dBZ core in rain that is heading here (Pro), at most once an hour.
+                if (pro && s.Rain.Level is "incoming" or "imminent" or "atyou" && (s.Rain.MaxDbz ?? 0) >= 58 && now - prev.HailSentMs > 60 * 60000L)
+                { msgs.Add(("hail", "Hail possible", $"{Math.Round(s.Rain.MaxDbz!.Value)} dBZ core in the storm heading your way" + (s.Rain.EtaMin is { } eta && eta > 1 ? $", about {Math.Round(eta)} min out" : "") + ". Get people and vehicles under cover.", true)); next.HailSentMs = now; }
 
                 foreach (var m in msgs)
                 {

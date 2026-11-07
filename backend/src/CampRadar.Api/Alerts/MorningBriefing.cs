@@ -57,7 +57,8 @@ public sealed class BriefingFactsBuilder
             pressure = (object?)null, precipType = precip, visibilityMi = h0.VisMi.HasValue ? Math.Round(h0.VisMi.Value, 1) : (double?)null,
             beach = (object?)null, tropical = s.Alerts.Where(a => a.Event.Contains("Hurricane") || a.Event.Contains("Tropical") || a.Event.Contains("Storm Surge")).Select(a => new { @event = a.Event, headline = a.Headline }),
             snowGround = (object?)null,
-            sites = siteLines is { Count: > 0 } ? siteLines : null
+            sites = siteLines is { Count: > 0 } ? siteLines : null,
+            fishing = activity == "fishing" ? Moon.Solunar(lat, lon, today, f.Offset, sun) : null
         };
         return JsonSerializer.SerializeToElement(facts);
     }
@@ -128,6 +129,45 @@ public static class Moon
         int ill = (int)Math.Round((1 - Math.Cos(age / 29.530588853 * 2 * Math.PI)) / 2 * 100);
         string name = age < 1.85 ? "New moon" : age < 5.5 ? "Waxing crescent" : age < 9.2 ? "First quarter" : age < 12.9 ? "Waxing gibbous" : age < 16.6 ? "Full moon" : age < 20.3 ? "Waning gibbous" : age < 24 ? "Last quarter" : age < 27.7 ? "Waning crescent" : "New moon";
         return new { ill, name };
+    }
+
+    /// <summary>Moon altitude in degrees (truncated Meeus series, ~0.3°).</summary>
+    public static double Altitude(DateTimeOffset t, double lat, double lon)
+    {
+        double rad = Math.PI / 180, jd = t.ToUnixTimeMilliseconds() / 864e5 + 2440587.5, T = (jd - 2451545.0) / 36525;
+        double Lp = (218.3164477 + 481267.88123421 * T) % 360, D = (297.8501921 + 445267.1114034 * T) % 360, M = (357.5291092 + 35999.0502909 * T) % 360, Mp = (134.9633964 + 477198.8675055 * T) % 360, F = (93.2720950 + 483202.0175233 * T) % 360;
+        double lonM = Lp + 6.289 * Math.Sin(Mp * rad) + 1.274 * Math.Sin((2 * D - Mp) * rad) + 0.658 * Math.Sin(2 * D * rad) + 0.214 * Math.Sin(2 * Mp * rad) - 0.186 * Math.Sin(M * rad) - 0.114 * Math.Sin(2 * F * rad) + 0.059 * Math.Sin((2 * D - 2 * Mp) * rad) + 0.057 * Math.Sin((2 * D - M - Mp) * rad) + 0.053 * Math.Sin((2 * D + Mp) * rad) + 0.046 * Math.Sin((2 * D - M) * rad) - 0.041 * Math.Sin((M - Mp) * rad) - 0.035 * Math.Sin(D * rad) - 0.031 * Math.Sin((M + Mp) * rad);
+        double latM = 5.128 * Math.Sin(F * rad) + 0.281 * Math.Sin((Mp + F) * rad) + 0.278 * Math.Sin((Mp - F) * rad) + 0.173 * Math.Sin((2 * D - F) * rad) + 0.055 * Math.Sin((2 * D - Mp + F) * rad) + 0.046 * Math.Sin((2 * D - Mp - F) * rad) + 0.033 * Math.Sin((2 * D + F) * rad);
+        double eps = (23.439291 - 0.0130042 * T) * rad, l = lonM * rad, b = latM * rad;
+        double ra = Math.Atan2(Math.Sin(l) * Math.Cos(eps) - Math.Tan(b) * Math.Sin(eps), Math.Cos(l)), dec = Math.Asin(Math.Sin(b) * Math.Cos(eps) + Math.Cos(b) * Math.Sin(eps) * Math.Sin(l));
+        double gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360;
+        double H = (gmst + lon) * rad - ra, phi = lat * rad;
+        return Math.Asin(Math.Sin(phi) * Math.Sin(dec) + Math.Cos(phi) * Math.Cos(dec) * Math.Cos(H)) / rad;
+    }
+
+    /// <summary>Solunar periods for a local day: majors ±1 h around overhead/underfoot, minors ±30 min around rise/set; rating 1–5.</summary>
+    public static object Solunar(double lat, double lon, DateTime localDate, TimeSpan offset, Sun.SunTimes? sun)
+    {
+        var start = new DateTimeOffset(localDate, offset); var end = start.AddDays(1); var step = TimeSpan.FromMinutes(4);
+        DateTimeOffset? rise = null, set = null, transit = null, under = null; double maxA = -99, minA = 99, prev = Altitude(start, lat, lon);
+        for (var t = start + step; t <= end; t += step)
+        {
+            double a = Altitude(t, lat, lon);
+            if (prev < 0.125 && a >= 0.125 && rise is null) rise = t - step / 2;
+            if (prev >= 0.125 && a < 0.125 && set is null) set = t - step / 2;
+            if (a > maxA) { maxA = a; transit = t; } if (a < minA) { minA = a; under = t; }
+            prev = a;
+        }
+        if (transit is { } tr && (tr <= start + step || tr >= end - step)) transit = null;
+        if (under is { } un && (un <= start + step || un >= end - step)) under = null;
+        var majors = new[] { transit, under }.Where(x => x.HasValue).Select(x => (From: x!.Value.AddHours(-1), To: x!.Value.AddHours(1))).ToList();
+        var minors = new[] { rise, set }.Where(x => x.HasValue).Select(x => (From: x!.Value.AddMinutes(-30), To: x!.Value.AddMinutes(30))).ToList();
+        var ph = Phase(start.AddHours(12)); int ill = (int)ph.GetType().GetProperty("ill")!.GetValue(ph)!;
+        int rating = 2 + (ill <= 10 || ill >= 90 ? 2 : ill <= 25 || ill >= 75 ? 1 : 0);
+        if (sun is not null && majors.Concat(minors).Any(p => (p.From < sun.Rise.AddHours(1) && p.To > sun.Rise.AddHours(-1)) || (p.From < sun.Set.AddHours(1) && p.To > sun.Set.AddHours(-1)))) rating++;
+        rating = Math.Min(5, rating);
+        string Lbl((DateTimeOffset From, DateTimeOffset To) p) => BriefingFactsBuilder.Say(p.From) + " to " + BriefingFactsBuilder.Say(p.To);
+        return new { rating, majors = majors.Select(Lbl), minors = minors.Select(Lbl) };
     }
 }
 

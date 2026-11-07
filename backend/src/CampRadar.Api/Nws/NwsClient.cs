@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace CampRadar.Api.Nws;
 
-public sealed record NwsAlert(string Id, string Event, string? Headline, string? Ends, bool Critical);
+public sealed record NwsAlert(string Id, string Event, string? Headline, string? Ends, bool Critical, double MaxHailIn = 0, string? HailThreat = null, string? MaxWindGust = null);
 
 /// <summary>Active NWS alerts for a point, cached briefly per rounded location.</summary>
 public sealed class NwsClient
@@ -19,6 +19,8 @@ public sealed class NwsClient
     private readonly ConcurrentDictionary<string, (DateTimeOffset At, List<NwsAlert> Alerts)> _cache = new();
 
     public NwsClient(HttpClient http, ILogger<NwsClient> log) { _http = http; _log = log; }
+    static string? Param(JsonElement p, string name) => p.TryGetProperty("parameters", out var pr) && pr.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() > 0 ? v[0].ToString() : null;
+    static double HailSize(JsonElement p) => double.TryParse(Param(p, "maxHailSize"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
 
     public async Task<List<NwsAlert>> ActiveAlertsAsync(double lat, double lon, CancellationToken ct)
     {
@@ -36,7 +38,7 @@ public sealed class NwsClient
                     p.TryGetProperty("headline", out var h) ? h.GetString() : null,
                     p.TryGetProperty("ends", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() :
                     p.TryGetProperty("expires", out var x) && x.ValueKind == JsonValueKind.String ? x.GetString() : null,
-                    Critical.Contains(ev)));
+                    Critical.Contains(ev), HailSize(p), Param(p, "hailThreat"), Param(p, "maxWindGust")));
             }
             _cache[key] = (DateTimeOffset.UtcNow, list);
             if (_cache.Count > 5000) _cache.Clear();
