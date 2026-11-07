@@ -45,6 +45,7 @@ builder.Services.AddSingleton<BriefingFactsBuilder>();
 builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
+builder.Services.AddSingleton<GroupStore>();
 builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
@@ -60,6 +61,7 @@ builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNam
 
 var app = builder.Build();
 app.UseCors();
+app.Services.GetRequiredService<EntitlementStore>().OwnerResolver = email => app.Services.GetRequiredService<GroupStore>().GroupOf(email)?.OwnerEmail;
 string adminKey = app.Configuration["AdminKey"] ?? "";
 bool IsAdmin(HttpRequest r) => adminKey.Length > 0 && r.Headers["X-Admin-Key"] == adminKey;
 string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : null; }
@@ -210,8 +212,130 @@ app.MapDelete("/me", (HttpRequest r, EntitlementStore ent, SpotStore spots) =>
 {
     var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
     foreach (var sp in spots.All().Where(sp => sp.Prefs.Contains("\"email\":\"" + t.Email + "\""))) spots.Delete(sp.Id);
+    app.Services.GetRequiredService<GroupStore>().DeleteEverythingFor(t.Email);
     ent.DeleteAccount(t.Email);
     return Results.Ok(new { deleted = true });
+});
+
+// ---------- household: invites, members, location sharing, messages ----------
+static string DisplayName(string? name, string email) => string.IsNullOrWhiteSpace(name) ? email.Split('@')[0] : name.Trim();
+object GroupView(GroupStore groups, EntitlementStore ent, string me)
+{
+    var g = groups.GroupOf(me);
+    if (g is null) return new { group = (object?)null, pro = ent.IsPro(me) };
+    var members = groups.Members(g.Id);
+    var mine = members.FirstOrDefault(m => m.Email == EntitlementStore.NormalizeEmail(me));
+    return new
+    {
+        group = new { g.Id, owner = g.OwnerEmail, ownerName = DisplayName(members.FirstOrDefault(m => m.Role == "owner")?.Name, g.OwnerEmail), isOwner = g.OwnerEmail == EntitlementStore.NormalizeEmail(me), ownerPro = ent.Get(g.OwnerEmail)?.Active == true,
+            me = mine is null ? null : new { mine.Email, name = DisplayName(mine.Name, mine.Email), mine.ShareLocation, mine.ShareUntilMs },
+            members = members.Select(m => new { m.Email, name = DisplayName(m.Name, m.Email), m.Role, m.ShareLocation, m.ShareUntilMs, m.JoinedMs }) },
+        pro = ent.IsPro(me)
+    };
+}
+app.MapGet("/group", (HttpRequest r, EntitlementStore ent, GroupStore groups) => { var (_, _, t) = ent.Check(Bearer(r)); return t is null ? Results.Unauthorized() : Results.Ok(GroupView(groups, ent, t.Email)); });
+app.MapPost("/group/invite", async (HttpRequest r, [FromBody] InviteRequest req, EntitlementStore ent, GroupStore groups, Mailer mail, CancellationToken ct) =>
+{
+    var (_, e, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    if (e?.Active != true) return Results.Json(new { error = "pro", message = "Inviting family and friends needs LeadTime Pro on your account." }, statusCode: 402);
+    var existing = groups.GroupOf(t.Email);
+    if (existing is not null && existing.OwnerEmail != t.Email) return Results.BadRequest(new { error = "You are a member of someone else's group. Leave it to start your own." });
+    var g = groups.EnsureOwnerGroup(t.Email, req.MyName ?? "");
+    if (!string.IsNullOrWhiteSpace(req.MyName)) groups.SetSharing(g.Id, t.Email, groups.MemberOf(g.Id, t.Email)?.ShareLocation ?? false, 1, req.MyName);
+    if (groups.Members(g.Id).Count >= 12) return Results.BadRequest(new { error = "A group can have up to 12 people." });
+    var code = groups.NewInvite(g.Id, string.IsNullOrWhiteSpace(req.Email) ? null : req.Email);
+    bool emailed = false;
+    if (!string.IsNullOrWhiteSpace(req.Email) && mail.Enabled)
+    {
+        var owner = DisplayName(req.MyName, t.Email);
+        try { await mail.SendAsync(req.Email.Trim(), $"{owner} invited you to LeadTime", $"{owner} ({t.Email}) invited you to their LeadTime group.\n\nWith the invite you share weather alerts, can choose to share your location with the group for a few hours at a time, and can send each other short messages like \"dinner in 10\".\n\nTo accept: open the app (app.getleadtime.app), sign in with this email under Settings → Account, then Settings → Family → enter the invite code:\n\n    {code}\n\nThe code works for 7 days. If you don't know {owner}, ignore this email.\n\n— {mail.ProductName}", ct); emailed = true; }
+        catch (Exception ex) { app.Logger.LogWarning(ex, "invite mail failed"); }
+    }
+    return Results.Ok(new { code, emailed, expiresDays = 7 });
+});
+app.MapPost("/group/join", (HttpRequest r, [FromBody] JoinRequest req, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var (g, err) = groups.Join(req.Code ?? "", t.Email, req.MyName ?? "");
+    return g is null ? Results.BadRequest(new { error = err }) : Results.Ok(GroupView(groups, ent, t.Email));
+});
+app.MapPost("/group/leave", (HttpRequest r, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var g = groups.GroupOf(t.Email); if (g is null) return Results.Ok();
+    if (g.OwnerEmail == t.Email) groups.DeleteEverythingFor(t.Email); else groups.Remove(g.Id, t.Email);
+    return Results.Ok();
+});
+app.MapDelete("/group/member/{email}", (string email, HttpRequest r, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var g = groups.GroupOf(t.Email); if (g is null || g.OwnerEmail != t.Email) return Results.StatusCode(403);
+    groups.Remove(g.Id, email); return Results.Ok();
+});
+app.MapPost("/group/share", (HttpRequest r, [FromBody] ShareRequest req, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var g = groups.GroupOf(t.Email); if (g is null) return Results.BadRequest(new { error = "not in a group" });
+    groups.SetSharing(g.Id, t.Email, req.On, req.Hours <= 0 ? 8 : req.Hours, req.MyName);
+    return Results.Ok(GroupView(groups, ent, t.Email));
+});
+app.MapPost("/me/position", (HttpRequest r, [FromBody] PositionRequest req, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    if (req.Lat is < -90 or > 90 || req.Lon is < -180 or > 180) return Results.BadRequest();
+    var g = groups.GroupOf(t.Email); var m = g is null ? null : groups.MemberOf(g.Id, t.Email);
+    if (m is null || !m.ShareLocation) return Results.Ok(new { stored = false, reason = "not sharing" });
+    groups.AddPosition(t.Email, t.DeviceId, req.Lat, req.Lon, req.AccM ?? 0);
+    return Results.Ok(new { stored = true, shareUntilMs = m.ShareUntilMs });
+});
+app.MapGet("/group/positions", (HttpRequest r, EntitlementStore ent, GroupStore groups) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var g = groups.GroupOf(t.Email); if (g is null) return Results.Ok(Array.Empty<object>());
+    return Results.Ok(groups.Positions(g.Id));
+});
+app.MapGet("/group/messages", (HttpRequest r, EntitlementStore ent, GroupStore groups, long since = 0) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var g = groups.GroupOf(t.Email); if (g is null) return Results.Ok(Array.Empty<object>());
+    return Results.Ok(groups.Messages(g.Id, since).Select(m => new { m.Id, from = m.FromEmail, fromName = m.FromName, m.Kind, m.Text, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), m.Ms, m.ReplyTo, mine = m.FromEmail == t.Email }));
+});
+// Send a short message to the group: pushed to every member's devices (not the sender's), with reply chips.
+async Task<int> FanOutMessage(GroupStore groups, SpotStore spots, PushSender push, GroupInfo g, Message m, string senderEmail, CancellationToken ct)
+{
+    int sent = 0; var replyToken = groups.ReplyToken(m.Id) ?? "";
+    var memberEmails = groups.Members(g.Id).Select(x => x.Email).Where(x => x != senderEmail).ToHashSet();
+    foreach (var spot in spots.All())
+    {
+        string email = ""; try { using var d = JsonDocument.Parse(spot.Prefs); email = d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { }
+        if (!memberEmails.Contains(email)) continue;
+        var ok = await push.SendAsync(spot, new { title = m.FromName, body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
+        if (ok) sent++; else spots.RecordFailure(spot.Id, gone: true);
+    }
+    return sent;
+}
+app.MapPost("/group/message", async (HttpRequest r, [FromBody] MessageRequest req, EntitlementStore ent, GroupStore groups, SpotStore spots, PushSender push, CancellationToken ct) =>
+{
+    var (pro, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    if (!pro) return Results.Json(new { error = "pro", message = "Messages need LeadTime Pro (yours or your group owner's)." }, statusCode: 402);
+    var g = groups.GroupOf(t.Email); if (g is null) return Results.BadRequest(new { error = "not in a group" });
+    var text = (req.Text ?? "").Trim(); if (text.Length == 0 || text.Length > 160) return Results.BadRequest(new { error = "1 to 160 characters" });
+    if (groups.RecentMessageCount(t.Email, 10) >= 20) return Results.Json(new { error = "Slow down — that's a lot of messages in ten minutes." }, statusCode: 429);
+    var me = groups.MemberOf(g.Id, t.Email);
+    var m = groups.AddMessage(g.Id, t.Email, DisplayName(me?.Name, t.Email), req.Kind is "preset" or "weather" ? req.Kind : "text", text, req.Data is { ValueKind: JsonValueKind.Object } d && d.GetRawText().Length < 2000 ? d.GetRawText() : "{}", req.ReplyTo);
+    var sent = await FanOutMessage(groups, spots, push, g, m, t.Email, ct);
+    return Results.Ok(new { id = m.Id, delivered = sent });
+});
+// Reply from a notification button: no sign-in token in the service worker, so the message's own reply token authorises it.
+app.MapPost("/group/reply", async ([FromBody] ReplyRequest req, GroupStore groups, SpotStore spots, PushSender push, CancellationToken ct) =>
+{
+    var orig = groups.MessageByToken(req.ReplyToken ?? ""); if (orig is null) return Results.BadRequest(new { error = "expired" });
+    var g = groups.GroupOf(orig.FromEmail); if (g is null) return Results.BadRequest();
+    var replier = groups.Members(g.Id).FirstOrDefault(m => m.Email == EntitlementStore.NormalizeEmail(req.FromEmail ?? "")); if (replier is null) return Results.StatusCode(403);
+    var text = (req.Text ?? "").Trim(); if (text.Length == 0 || text.Length > 160) return Results.BadRequest();
+    var m = groups.AddMessage(g.Id, replier.Email, DisplayName(replier.Name, replier.Email), "preset", text, "{}", orig.Id);
+    var sent = await FanOutMessage(groups, spots, push, g, m, replier.Email, ct);
+    return Results.Ok(new { id = m.Id, delivered = sent });
 });
 
 // ---------- activation codes (admin-issued or from a purchase) → device tokens ----------
@@ -321,6 +445,7 @@ app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsCl
         today = devices.Count(x => now - x.LastMs < 86400000L),
         week = week.Count,
         pushSpots = s.All().Count,
+        groups = app.Services.GetRequiredService<GroupStore>().AdminSummary(),
         alerts24 = p.SentLast24h,
         activities = week.GroupBy(x => x.Activity).ToDictionary(g => g.Key, g => g.Count()),
         devices = devices.Select(x => new { x.Id, x.Lat, x.Lon, x.Activity, x.Lang, x.Platform, x.Version, x.Push, x.FirstMs, x.LastMs, x.Opens }),
@@ -352,6 +477,12 @@ public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
 public sealed record BriefRequest(JsonElement Facts, string? Fallback);
 public sealed record RedeemRequest(string Code, string DeviceId);
+public sealed record InviteRequest(string? Email, string? MyName);
+public sealed record JoinRequest(string Code, string? MyName);
+public sealed record ShareRequest(bool On, int Hours, string? MyName);
+public sealed record PositionRequest(double Lat, double Lon, double? AccM);
+public sealed record MessageRequest(string Text, string? Kind, JsonElement? Data, long? ReplyTo);
+public sealed record ReplyRequest(string ReplyToken, string FromEmail, string Text);
 public sealed record StartRequest(string Email);
 public sealed record MailTestRequest(string To);
 public sealed record VerifyRequest(string Email, string Code, string DeviceId);

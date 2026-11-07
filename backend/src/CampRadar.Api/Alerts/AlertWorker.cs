@@ -20,6 +20,7 @@ public sealed class AlertWorker : BackgroundService
     private readonly EntitlementStore _ent;
     private readonly BriefingFactsBuilder _facts;
     private readonly BriefingWriter _writer;
+    private readonly GroupStore _groups;
     private long _lastBriefMs;
     private readonly PushSender _push;
     private readonly ILogger<AlertWorker> _log;
@@ -28,8 +29,8 @@ public sealed class AlertWorker : BackgroundService
     public DateTimeOffset LastCycle { get; private set; }
     public string LastCycleNote { get; private set; } = "not yet";
 
-    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, ILogger<AlertWorker> log)
-    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _log = log; }
+    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, GroupStore groups, ILogger<AlertWorker> log)
+    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _groups = groups; _log = log; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -54,7 +55,7 @@ public sealed class AlertWorker : BackgroundService
             if (now - _lastGlmMs > 60_000) { await _glm.RunAsync(ct); _lastGlmMs = now; notes.Add("glm ok"); }
             if (now - _lastEvalMs > 300_000) { int n = await EvaluateSpotsAsync(ct); _lastEvalMs = now; notes.Add($"evaluated {n} spots"); }
             if (now - _lastBriefMs > 60_000) { int b = await MorningBriefingsAsync(ct); _lastBriefMs = now; if (b > 0) notes.Add($"{b} morning briefings"); }
-            if (now - _lastPruneMs > 3_600_000) { _mrms.PruneCache(TimeSpan.FromHours(5)); _lastPruneMs = now; }
+            if (now - _lastPruneMs > 3_600_000) { _mrms.PruneCache(TimeSpan.FromHours(5)); _groups.Prune(); _lastPruneMs = now; }
             LastCycle = DateTimeOffset.UtcNow; LastCycleNote = string.Join(", ", notes);
             return LastCycleNote;
         }
@@ -85,7 +86,7 @@ public sealed class AlertWorker : BackgroundService
                 bool snoozed = now < spot.SnoozeUntil;
                 // Pro lapsed (or never set): critical NWS warnings still go out; rain and lightning alerts do not.
                 string email = ExtractEmail(spot.Prefs);
-                bool pro = email.Length > 0 && (_ent.Get(email)?.Active ?? false);
+                bool pro = email.Length > 0 && _ent.IsPro(email);
                 if (!pro) snoozed = true;
                 var msgs = new List<(string Tag, string Title, string Body, bool Urgent)>();
 
@@ -157,7 +158,7 @@ public sealed class AlertWorker : BackgroundService
                 if ((days == "weekdays" && weekend) || (days == "weekends" && !weekend)) { _spots.SetLastBrief(spot.Id, today); continue; }
                 if (nowUtc.ToUnixTimeMilliseconds() - spot.UpdatedMs > 30L * 86400000) continue;
                 string email = ExtractEmail(spot.Prefs);
-                if (email.Length == 0 || !(_ent.Get(email)?.Active ?? false)) continue;
+                if (email.Length == 0 || !_ent.IsPro(email)) continue;
                 string lang = b.TryGetProperty("lang", out var l) ? l.GetString() ?? "en" : "en";
                 string activity = b.TryGetProperty("activity", out var a) ? a.GetString() ?? "camping" : "camping";
 

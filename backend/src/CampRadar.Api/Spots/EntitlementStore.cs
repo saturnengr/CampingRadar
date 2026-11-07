@@ -169,12 +169,21 @@ public sealed class EntitlementStore
     public void Revoke(string token) { using var c = Open(); Exec(c, "DELETE FROM tokens WHERE token=$t", ("$t", token)); }
     public void RevokeAll(string email) { using var c = Open(); Exec(c, "DELETE FROM tokens WHERE email=$e", ("$e", NormalizeEmail(email))); }
 
-    /// <summary>Is this bearer token attached to an active Pro entitlement?</summary>
+    /// <summary>Set by Program: the household owner for an email, so members inherit the owner's Pro.</summary>
+    public Func<string, string?>? OwnerResolver { get; set; }
+    /// <summary>Active Pro for this email, directly or through the household owner.</summary>
+    public bool IsPro(string email)
+    {
+        if (Get(email)?.Active == true) return true;
+        var owner = OwnerResolver?.Invoke(email);
+        return owner is not null && owner != NormalizeEmail(email) && Get(owner)?.Active == true;
+    }
+    /// <summary>Is this bearer token attached to an active Pro entitlement (own or household)?</summary>
     public (bool Pro, Entitlement? E, DeviceToken? T) Check(string? bearer)
     {
         var t = Token(bearer ?? "");
         if (t is null) return (false, null, null);
         var e = Get(t.Email);
-        return (e?.Active == true, e, t);
+        return (e?.Active == true || IsPro(t.Email), e, t);
     }
 }
