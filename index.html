@@ -656,7 +656,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
-  layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
+  layers: { storms: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -681,10 +681,10 @@ const st = {
   lastTouch: 0,
   lightning: null, lightningAt: 0, lightningErr: null, ltEvt: { active: false, sentMs: 0 },
   backendOk: null,
-  hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
+  hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07f';
+const APP_VERSION = '2026.11.07g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1486,6 +1486,7 @@ map.createPane('hazards'); map.getPane('hazards').style.zIndex = 355;
 map.createPane('imagery'); map.getPane('imagery').style.zIndex = 340;
 map.createPane('clouds'); map.getPane('clouds').style.zIndex = 345;
 const LAYER_INFO = {
+  storms: ['Watches & warnings', 'NWS tornado, severe thunderstorm, winter storm, blizzard, ice storm, high wind and dust storm watches and warnings, shaded over the affected area. Solid = warning (happening or imminent), dashed = watch (conditions favourable)'],
   flood: ['Flood alerts', 'NWS flood and flash-flood warnings, watches and advisories, drawn where they apply'],
   gauges: ['River gauges', 'NOAA gauges; colour shows action / minor / moderate / major flood stage'],
   fire: ['Wildfires', 'Active fire perimeters and incident points from the national interagency feed (NIFC)'],
@@ -1500,7 +1501,7 @@ const LAYER_INFO = {
   trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
 };
-const floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
+const stormLayer = L.layerGroup(), floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
 const WFIGS = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/';
 const GAUGES = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0/query';
 const SMOKE = 'https://mapservices.weather.noaa.gov/raster/rest/services/air_quality/ndgd_smoke_sfc_1hr_avg_time/ImageServer';
@@ -1556,7 +1557,7 @@ function cloudWmsLayer() { return new CloudLayer({ pane: 'clouds', opacity: 0.9,
 function applyLayers() {
   const L_ = S.layers;
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
-  set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
+  set(stormLayer, L_.storms); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   set(trailsLayer, L_.trails);
   if (typeof drawPeople === 'function') drawPeople();
@@ -1570,6 +1571,7 @@ function applyLayers() {
 }
 function renderLegend() {
   const L_ = S.layers, items = [];
+  if (L_.storms) { const seen = new Set((st.hz.storms || []).map(a => a.event)); for (const ev of Object.keys(STORM_COLORS)) if (seen.has(ev)) items.push('<span><i style="background:' + STORM_COLORS[ev] + (/Warning/.test(ev) ? '' : ';opacity:.6;border:1px dashed #fff') + '"></i>' + ev + '</span>'); if (!seen.size) items.push('<span><i style="background:#ff9100;opacity:.5"></i>Watches &amp; warnings (none in view)</span>'); }
   if (L_.flood) items.push('<span><i style="background:#1e88e5"></i>Flood alert</span>');
   if (L_.gauges) items.push('<span><i style="background:#ff8f00;border-radius:50%"></i>River gauge (colour = flood stage)</span>');
   if (L_.fire) items.push('<span><i style="background:#ff3d00"></i>Wildfire</span>');
@@ -1587,13 +1589,13 @@ function scheduleHazards() { clearTimeout(hzTimer); hzTimer = setTimeout(() => {
 map.on('moveend', scheduleHazards);
 
 async function refreshHazards() {
-  const L_ = S.layers; if (!(L_.flood || L_.gauges || L_.fire || L_.rx || L_.firewx)) return;
+  const L_ = S.layers; if (!(L_.storms || L_.flood || L_.gauges || L_.fire || L_.rx || L_.firewx)) return;
   const b = map.getBounds(), bb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v => v.toFixed(3)).join(',');
   const tasks = [];
-  if (L_.gauges) tasks.push(loadGauges(bb)); if (L_.fire || L_.rx) tasks.push(loadFires(bb, b)); if (L_.flood || L_.firewx) tasks.push(loadHazardAlerts(b));
+  if (L_.gauges) tasks.push(loadGauges(bb)); if (L_.fire || L_.rx) tasks.push(loadFires(bb, b)); if (L_.storms || L_.flood || L_.firewx) tasks.push(loadHazardAlerts(b));
   try { await Promise.all(tasks); st.hz.err = null; } catch (e) { st.hz.err = e.message; }
   st.hz.at = Date.now();
-  summarizeHazards();
+  summarizeHazards(); renderLegend();
   const s = renderStatus(); handleHazardEvents();
 }
 async function loadGauges(bb) {
@@ -1641,21 +1643,26 @@ async function loadFires(bb, b) {
   }
   st.hz.fires = fires;
 }
+// NWS colours for the convective and winter products (watch = dashed, warning = solid)
+const STORM_COLORS = { 'Tornado Warning': '#ff1744', 'Tornado Watch': '#ffee58', 'Severe Thunderstorm Warning': '#ff9100', 'Severe Thunderstorm Watch': '#f06292', 'Extreme Wind Warning': '#ff6d00',
+  'Winter Storm Warning': '#ff4fa3', 'Winter Storm Watch': '#4f8fd6', 'Blizzard Warning': '#ff5722', 'Ice Storm Warning': '#ab47bc', 'Winter Weather Advisory': '#7e57c2',
+  'High Wind Warning': '#d4a017', 'High Wind Watch': '#b8860b', 'Dust Storm Warning': '#c9a27e', 'Severe Weather Statement': '#ff9100' };
 // NWS alerts of the hazard kinds, nationwide (cached), drawn where polygons exist; zone-only alerts get their zone outlines, a few at a time
 const zoneCache = new Map();
 let hzAlertsCache = { at: 0, feats: [] };
 async function loadHazardAlerts(b) {
   if (Date.now() - hzAlertsCache.at > 2 * 60000) {
-    const events = ['Flood Warning', 'Flash Flood Warning', 'Flood Watch', 'Flash Flood Watch', 'Flood Advisory', 'Coastal Flood Warning', 'Red Flag Warning', 'Fire Weather Watch'].join(',');
+    const events = ['Flood Warning', 'Flash Flood Warning', 'Flood Watch', 'Flash Flood Watch', 'Flood Advisory', 'Coastal Flood Warning', 'Red Flag Warning', 'Fire Weather Watch'].concat(Object.keys(STORM_COLORS)).join(',');
     const j = await nws(NWS + '/alerts/active?event=' + encodeURIComponent(events));
     hzAlertsCache = { at: Date.now(), feats: j.features || [] };
   }
-  floodLayer.clearLayers(); firewxLayer.clearLayers();
+  floodLayer.clearLayers(); firewxLayer.clearLayers(); stormLayer.clearLayers();
   const view = b.pad(0.5); let zoneFetches = 0;
-  st.hz.floodAlerts = []; st.hz.firewx = [];
+  st.hz.floodAlerts = []; st.hz.firewx = []; st.hz.storms = [];
   for (const f of hzAlertsCache.feats) {
-    const p = f.properties, isFire = /Red Flag|Fire Weather/.test(p.event);
-    if (isFire ? !S.layers.firewx : !S.layers.flood) continue;
+    const p = f.properties, isFire = /Red Flag|Fire Weather/.test(p.event), isStorm = !!STORM_COLORS[p.event];
+    if (isStorm ? !S.layers.storms : isFire ? !S.layers.firewx : !S.layers.flood) continue;
+    if (isStorm && p.ends && Date.parse(p.ends) < Date.now()) continue;
     let geom = f.geometry;
     if (!geom) {   // zone-based: fetch the first few zone outlines
       const zones = (p.affectedZones || []).slice(0, 3); const parts = [];
@@ -1666,12 +1673,13 @@ async function loadHazardAlerts(b) {
       if (!parts.length) continue;
       geom = parts.length === 1 ? parts[0] : { type: 'GeometryCollection', geometries: parts };
     }
-    const lyr = L.geoJSON(geom, { pane: 'hazards', interactive: true, style: isFire ? { color: '#ff8a65', weight: 1.5, fillColor: '#ff8a65', fillOpacity: 0.12, dashArray: '4 4' } : { color: /Warning/.test(p.event) ? '#1565c0' : '#42a5f5', weight: /Warning/.test(p.event) ? 2.5 : 1.5, fillColor: '#1e88e5', fillOpacity: /Warning/.test(p.event) ? 0.2 : 0.08 } });
+    const warn = /Warning/.test(p.event);
+    const lyr = L.geoJSON(geom, { pane: 'hazards', interactive: true, style: isStorm ? { color: STORM_COLORS[p.event], weight: warn ? 3 : 2, fillColor: STORM_COLORS[p.event], fillOpacity: warn ? 0.2 : 0.1, dashArray: warn ? null : '6 6' } : isFire ? { color: '#ff8a65', weight: 1.5, fillColor: '#ff8a65', fillOpacity: 0.12, dashArray: '4 4' } : { color: /Warning/.test(p.event) ? '#1565c0' : '#42a5f5', weight: /Warning/.test(p.event) ? 2.5 : 1.5, fillColor: '#1e88e5', fillOpacity: /Warning/.test(p.event) ? 0.2 : 0.08 } });
     if (!lyr.getBounds().isValid() || !lyr.getBounds().intersects(view)) continue;
     lyr.bindPopup('<b>' + esc(p.event) + '</b><br>' + esc(p.headline || '') + (p.ends ? '<br><small>Until ' + clock(Date.parse(p.ends)) + ' ' + fmtDate(Date.parse(p.ends)) + '</small>' : ''));
-    lyr.addTo(isFire ? firewxLayer : floodLayer);
+    lyr.addTo(isStorm ? stormLayer : isFire ? firewxLayer : floodLayer);
     const c = lyr.getBounds().getCenter();
-    (isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event) });
+    (isStorm ? st.hz.storms : isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event) });
   }
 }
 function summarizeHazards() {
