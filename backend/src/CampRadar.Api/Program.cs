@@ -208,6 +208,13 @@ app.MapPost("/auth/signout", (HttpRequest r, EntitlementStore ent) => { var b = 
 
 // ---------- admin ----------
 app.MapGet("/admin", () => Results.Content(AdminPage.Html, "text/html"));
+app.MapPost("/admin/mail/test", async (HttpRequest r, [FromBody] MailTestRequest m, Mailer mail, CancellationToken ct) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    if (!mail.Enabled) return Results.Json(new { ok = false, error = "No mail transport configured (Smtp or Graph block in appsettings.Production.json)." });
+    try { await mail.SendAsync(m.To, $"{mail.ProductName} test email", $"This is a test from the {mail.ProductName} server via {mail.Transport}. If you can read this, sign-in codes will arrive.", ct); return Results.Ok(new { ok = true, transport = mail.Transport }); }
+    catch (Exception ex) { return Results.Json(new { ok = false, transport = mail.Transport, error = ex.Message, inner = ex.InnerException?.Message }); }
+});
 app.MapGet("/admin/entitlements", (HttpRequest r, EntitlementStore ent) => IsAdmin(r) ? Results.Ok(ent.All().Select(x => new { x.E.Email, x.E.Plan, x.E.ExpiresMs, x.E.Source, x.E.Note, x.E.UpdatedMs, active = x.E.Active, devices = x.Devices })) : Results.Unauthorized());
 app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) =>
 {
@@ -263,6 +270,7 @@ public sealed record SnoozeRequest(long UntilMs);
 public sealed record BriefRequest(JsonElement Facts, string? Fallback);
 public sealed record RedeemRequest(string Code, string DeviceId);
 public sealed record StartRequest(string Email);
+public sealed record MailTestRequest(string To);
 public sealed record VerifyRequest(string Email, string Code, string DeviceId);
 public sealed record GrantRequest(string Email, int Months, string? Plan, string? Note);
 public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);
