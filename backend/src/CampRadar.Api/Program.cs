@@ -49,6 +49,9 @@ builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
 builder.Services.AddSingleton<GroupStore>();
 builder.Services.AddSingleton<SiteStore>();
+builder.Services.AddSingleton<SynopticProvider>();
+builder.Services.AddSingleton<MadisProvider>();
+builder.Services.AddSingleton<IemProvider>();
 builder.Services.AddSingleton<StationObsClient>();
 builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
@@ -83,7 +86,7 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     push = new { enabled = p.Enabled, spots = s.All().Count },
     briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled, providers = app.Services.GetRequiredService<BriefingWriter>().Active },
     email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport },
-    observations = new { enabled = app.Services.GetRequiredService<StationObsClient>().Enabled }
+    observations = new { source = app.Services.GetRequiredService<StationObsClient>().Source }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
@@ -107,14 +110,15 @@ app.MapGet("/radar/times", (MrmsClient m) => RadarTimes(m));
 app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
 
 // ---------- nearby surface observations (free; Synoptic token on the server) ----------
-app.MapGet("/obs/nearby", async (double lat, double lon, StationObsClient obs, HttpResponse res, CancellationToken ct) =>
+// Free: the best nearby station and the pressure trend (replaces the single NWS airport). Pro: the whole list for the map layer.
+app.MapGet("/obs/nearby", async (HttpRequest http, EntitlementStore ent, double lat, double lon, StationObsClient obs, HttpResponse res, CancellationToken ct) =>
 {
-    if (!obs.Enabled) return Results.Json(new { enabled = false, stations = Array.Empty<object>() });
     try
     {
         var r = await obs.NearbyAsync(lat, lon, ct);
-        res.Headers.CacheControl = "public, max-age=120";
-        return Results.Ok(new { enabled = true, at = r!.At, stations = r.Stations, best = r.Best, trend = r.Trend });
+        bool pro = ent.Check(Bearer(http)).Pro;
+        res.Headers.CacheControl = "private, max-age=120";
+        return Results.Ok(new { enabled = true, source = obs.Source, at = r!.At, best = r.Best, trend = r.Trend, pro, stations = pro ? r.Stations : r.Stations.Take(1).ToList() });
     }
     catch (Exception ex) when (ex is not OperationCanceledException) { return Results.Json(new { enabled = true, error = ex.Message, stations = Array.Empty<object>() }, statusCode: 502); }
 });

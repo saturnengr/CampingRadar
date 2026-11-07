@@ -14,26 +14,23 @@ public sealed record StationOb(string Id, string Name, string Network, double Di
 public sealed record PressureTrend(double InHg, double Change3h, string Word, bool Fast);
 public sealed record NearbyObs(List<StationOb> Stations, StationOb? Best, PressureTrend? Trend, DateTimeOffset At);
 
-public sealed class StationObsClient
+public sealed class SynopticProvider : IStationProvider
 {
+    public string Name => "synoptic";
     public const string Api = "https://api.synopticdata.com/v2/stations";
     private readonly HttpClient _http;
     private readonly string _token;
-    private readonly ILogger<StationObsClient> _log;
-    private readonly ConcurrentDictionary<string, NearbyObs> _cache = new();
+    private readonly ILogger<SynopticProvider> _log;
     public bool Enabled => _token.Length > 0;
     // Synoptic network ids that are professionally sited (preferred when close): 1 = ASOS/AWOS airports, 2 = RAWS. CWOP backyard stations are 65.
     private static readonly HashSet<string> OfficialNets = new() { "1", "2" };
 
-    public StationObsClient(IHttpClientFactory f, IConfiguration cfg, ILogger<StationObsClient> log)
+    public SynopticProvider(IHttpClientFactory f, IConfiguration cfg, ILogger<SynopticProvider> log)
     { _http = f.CreateClient("obs"); _token = cfg["Synoptic:Token"] ?? ""; _log = log; }
 
-    public async Task<NearbyObs?> NearbyAsync(double lat, double lon, CancellationToken ct)
+    public async Task<List<StationOb>> NearbyAsync(double lat, double lon, double radiusMi, CancellationToken ct)
     {
-        if (!Enabled) return null;
-        var key = $"{Math.Round(lat * 20) / 20:F2},{Math.Round(lon * 20) / 20:F2}";
-        if (_cache.TryGetValue(key, out var hit) && DateTimeOffset.UtcNow - hit.At < TimeSpan.FromMinutes(5)) return hit;
-        var url = $"{Api}/latest?token={_token}&radius={lat.ToString("F4", CultureInfo.InvariantCulture)},{lon.ToString("F4", CultureInfo.InvariantCulture)},25&limit=25&within=90&status=active&units=english,speed|mph,pres|inhg,precip|in&qc_checks=basic&qc_remove_data=on" +
+        var url = $"{Api}/latest?token={_token}&radius={lat.ToString("F4", CultureInfo.InvariantCulture)},{lon.ToString("F4", CultureInfo.InvariantCulture)},{(int)radiusMi}&limit=25&within=90&status=active&units=english,speed|mph,pres|inhg,precip|in&qc_checks=basic&qc_remove_data=on" +
                   "&vars=air_temp,relative_humidity,dew_point_temperature,wind_speed,wind_gust,wind_direction,sea_level_pressure,altimeter,precip_accum_one_hour";
         using var doc = JsonDocument.Parse(await _http.GetStringAsync(url, ct));
         var list = new List<StationOb>();
@@ -48,25 +45,17 @@ public sealed class StationObsClient
                 string net = s.TryGetProperty("MNET_ID", out var mn) ? mn.ToString() : "";
                 double dist = s.TryGetProperty("DISTANCE", out var d) && double.TryParse(d.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var dm) ? dm : 99;
                 double P(string n) => double.TryParse(s.TryGetProperty(n, out var e) ? e.ToString() : "", NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : 0;
-                list.Add(new StationOb(s.GetProperty("STID").GetString() ?? "", s.TryGetProperty("NAME", out var nm) ? nm.GetString() ?? "" : "", net, Math.Round(dist, 1), P("LATITUDE"), P("LONGITUDE"), P("ELEVATION"),
+                list.Add(new StationOb(s.GetProperty("STID").GetString() ?? "", s.TryGetProperty("NAME", out var nm) ? nm.GetString() ?? "" : "", net == "1" ? "ASOS" : net == "2" ? "RAWS" : net == "65" ? "CWOP" : "MESONET " + net, Math.Round(dist, 1), P("LATITUDE"), P("LONGITUDE"), P("ELEVATION"),
                     (int)Math.Max(0, (DateTimeOffset.UtcNow - when.Value).TotalMinutes), temp, V("relative_humidity"), V("dew_point_temperature"), V("wind_speed"), V("wind_gust"), V("wind_direction"),
                     V("sea_level_pressure") ?? V("altimeter"), V("precip_accum_one_hour"), OfficialNets.Contains(net)));
             }
-        list = list.OrderBy(x => x.DistMi).ToList();
-        // best = an official station within 8 mi, else the nearest station of any kind that reports temperature
-        var best = list.FirstOrDefault(x => x.Official && x.DistMi <= 8 && x.TempF is not null && x.AgeMin <= 75) ?? list.FirstOrDefault(x => x.TempF is not null && x.AgeMin <= 75);
-        PressureTrend? trend = null;
-        var pstn = list.FirstOrDefault(x => x.PressureInHg is not null && x.AgeMin <= 75 && x.DistMi <= 30);
-        if (pstn is not null) { try { trend = await TrendAsync(pstn.Id, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "pressure trend failed for {Id}", pstn.Id); } }
-        var result = new NearbyObs(list, best, trend, DateTimeOffset.UtcNow);
-        _cache[key] = result; if (_cache.Count > 3000) _cache.Clear();
-        return result;
+        return list.OrderBy(x => x.DistMi).ToList();
     }
 
     /// <summary>Three-hour pressure change at one station from its last six hours.</summary>
-    private async Task<PressureTrend?> TrendAsync(string stid, CancellationToken ct)
+    public async Task<PressureTrend?> TrendAsync(StationOb station, CancellationToken ct)
     {
-        var url = $"{Api}/timeseries?token={_token}&stid={stid}&recent=360&vars=sea_level_pressure,altimeter&units=pres|inhg&qc_checks=basic&qc_remove_data=on";
+        var url = $"{Api}/timeseries?token={_token}&stid={station.Id}&recent=360&vars=sea_level_pressure,altimeter&units=pres|inhg&qc_checks=basic&qc_remove_data=on";
         using var doc = JsonDocument.Parse(await _http.GetStringAsync(url, ct));
         var st = doc.RootElement.TryGetProperty("STATION", out var sts) && sts.GetArrayLength() > 0 ? sts[0] : default;
         if (st.ValueKind != JsonValueKind.Object || !st.TryGetProperty("OBSERVATIONS", out var o)) return null;
@@ -79,5 +68,41 @@ public sealed class StationObsClient
         var ago = pts.MinBy(x => Math.Abs((x.T - target).TotalMinutes));
         double hrs = Math.Max(0.5, (last.T - ago.T).TotalHours), rate = (last.P - ago.P) / hrs * 3;
         return new PressureTrend(Math.Round(last.P, 2), Math.Round(rate, 3), rate > 0.06 ? "rising" : rate < -0.06 ? "falling" : "steady", Math.Abs(rate) > 0.12);
+    }
+}
+
+/// <summary>
+/// Picks the first configured provider (Synoptic → MADIS → IEM), caches per ~3 mi cell for 5 minutes, chooses the "best" station
+/// (an official one within 8 mi, else the nearest reporting temperature) and a pressure trend (provider history, else IEM's airport history).
+/// </summary>
+public sealed class StationObsClient
+{
+    private readonly IStationProvider[] _providers; private readonly IemProvider _iem; private readonly ILogger<StationObsClient> _log;
+    private readonly ConcurrentDictionary<string, NearbyObs> _cache = new();
+    public StationObsClient(SynopticProvider syn, MadisProvider madis, IemProvider iem, ILogger<StationObsClient> log)
+    { _providers = new IStationProvider[] { syn, madis, iem }; _iem = iem; _log = log; }
+    public IStationProvider Active => _providers.First(p => p.Enabled);
+    public bool Enabled => true;
+    public string Source => Active.Name;
+
+    public async Task<NearbyObs?> NearbyAsync(double lat, double lon, CancellationToken ct)
+    {
+        var key = $"{Math.Round(lat * 20) / 20:F2},{Math.Round(lon * 20) / 20:F2}";
+        if (_cache.TryGetValue(key, out var hit) && DateTimeOffset.UtcNow - hit.At < TimeSpan.FromMinutes(5)) return hit;
+        var prov = Active; List<StationOb> list;
+        try { list = await prov.NearbyAsync(lat, lon, 25, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException && prov != _iem) { _log.LogWarning(ex, "{Provider} failed; falling back to IEM", prov.Name); list = await _iem.NearbyAsync(lat, lon, 25, ct); prov = _iem; }
+        var best = list.FirstOrDefault(x => x.Official && x.DistMi <= 8 && x.TempF is not null && x.AgeMin <= 75) ?? list.FirstOrDefault(x => x.TempF is not null && x.AgeMin <= 75);
+        PressureTrend? trend = null;
+        var pstn = list.FirstOrDefault(x => x.PressureInHg is not null && x.AgeMin <= 75 && x.DistMi <= 30);
+        if (pstn is not null) { try { trend = await prov.TrendAsync(pstn, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "trend failed"); } }
+        if (trend is null)
+        {   // airports keep hourly history at IEM
+            var apt = list.FirstOrDefault(x => x.Official && x.PressureInHg is not null && x.DistMi <= 40);
+            if (apt is not null) trend = await _iem.TrendAsync(apt, ct);
+        }
+        var result = new NearbyObs(list, best, trend, DateTimeOffset.UtcNow);
+        _cache[key] = result; if (_cache.Count > 3000) _cache.Clear();
+        return result;
     }
 }
