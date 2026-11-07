@@ -135,7 +135,26 @@ Five phases, nights-and-weekends pace, each one started only when the previous p
 
 ![Roadmap: 5 phases, 4 gates](images/roadmap.png)
 
-Phase 1 is the one that matters: it removes every licensing problem, enables push and lightning, and is what the paid tier is built on. Status: the backend code is written and its tests pass in CI; next is deploying it to SmarterASP.NET, generating the push keys, and a week of live alerts to prove the heartbeat. The paid map provider and geocoder swap is still open. If the phase stalls, the free app still stands on its own.
+Phase 1 is the one that matters: it removes every licensing problem, enables push and lightning, and is what the paid tier is built on. Status (7 Nov 2026): **done and live** — the backend runs at radar.tieroneehs.com (to become api.getleadtime.app) with cached radar, GLM lightning, push alerts, email sign-in, Pro entitlements with admin-issued activation codes, model-written briefings (Gemini first, Claude as fallback), the morning briefing push, and an admin dashboard. The paid map provider and geocoder swap is still open.
+
+### Pro roadmap, agreed 7 Nov 2026
+
+Three foundations, then feature phases that are thin layers on them.
+
+**Foundations**
+1. *Households* — a Pro owner invites family and friends; members inherit Pro; per-member consent for location sharing (always with an end time) and messages. **Built (Phase A below).**
+2. *Saved sites* — named places on the account (home, the lease, the lake) with their own alerts, digest and thresholds; the device's current location stays separate.
+3. *Server-side weather facts* — forecast assembly on the server (done for the morning briefing); add tides, SNOTEL, gauges, fire lines and the MRMS hail product so every feature can be evaluated for any site with no app open.
+
+| Phase | Ships | Depends on | Effort |
+| --- | --- | --- | --- |
+| **A — Household** ✅ | Invites by email or code, consent screens, member list, leave/remove; people on the map with 24-hour trails (opt-in, timed); quick messages with reply chips, read aloud; "Weather turning — head back" with live status | 1 | done 7 Nov |
+| **B — Sites & rules** | Saved sites; per-site alerts and morning digest; user thresholds (gust, low temperature, UV, visibility); dry-window finder; "leave by" | 2, 3 | ~1 week |
+| **C — Hail & fishing** | Hail layer and alerts (MRMS MESH); Fishing activity (solunar, pressure, water temperature, lightning on open water) | 3 | ~1 week |
+| **D — Travel** | Route weather for the drive (OSRM routing + forecast sampling); trip pack (offline forecast, radar, topo); clear-sky tonight; shareable camp card | 2 | ~1 week |
+| **E — Native shell** | Capacitor app, Android first then iOS: background location that follows you, FCM/APNs push, home-screen widget; required for the app stores | A | 2–3 weeks + review |
+
+Stripe is independent of all of this and goes in as soon as getleadtime.app resolves; it turns the Pro gate from admin-granted to self-serve. Supporting work that must exist alongside: privacy and consent copy (done for A), retention jobs (positions and messages 24 h, devices 90 days — done), rate limits on messaging (done), admin visibility of groups (done), and a first household of real testers before polish.
 
 ## Costs and break-even
 
