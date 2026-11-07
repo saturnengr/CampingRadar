@@ -78,13 +78,14 @@ public sealed class BriefingWriter
     // ---- Google Gemini: POST generateContent with a system instruction ----
     private async Task<string?> GeminiAsync(string user, CancellationToken ct)
     {
-        var model = _cfg["Gemini:Model"] ?? "gemini-2.5-flash-lite";
+        var model = _cfg["Gemini:Model"] ?? "gemini-3.5-flash-lite";
+        // thinkingBudget 0 = answer straight away (2.5 family); other models take the plain config
+        object gen = model.Contains("2.5") ? new { maxOutputTokens = 600, temperature = 0.6, thinkingConfig = new { thinkingBudget = 0 } } : new { maxOutputTokens = 600, temperature = 0.6 };
         var body = new
         {
             system_instruction = new { parts = new[] { new { text = System } } },
             contents = new[] { new { role = "user", parts = new[] { new { text = user } } } },
-            // thinkingBudget 0 = answer straight away; the newer Flash models otherwise reason silently for many seconds first
-            generationConfig = new { maxOutputTokens = 600, temperature = 0.6, thinkingConfig = new { thinkingBudget = 0 } }
+            generationConfig = gen
         };
         using var req = new HttpRequestMessage(HttpMethod.Post, $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
         req.Headers.Add("x-goog-api-key", _cfg["Gemini:ApiKey"]);
