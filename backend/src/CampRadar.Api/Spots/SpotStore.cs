@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace CampRadar.Api.Spots;
@@ -17,6 +18,7 @@ public sealed class Spot
     public long CreatedMs { get; set; }
     public long UpdatedMs { get; set; }
     public int Failures { get; set; }
+    public string LastBrief { get; set; } = "";  // local date (yyyy-MM-dd) of the last morning briefing sent
 }
 
 /// <summary>SQLite-backed store of alert subscriptions (one file under App_Data).</summary>
@@ -35,6 +37,7 @@ public sealed class SpotStore
               lat REAL NOT NULL, lon REAL NOT NULL, prefs TEXT NOT NULL DEFAULT '{}', snooze_until INTEGER NOT NULL DEFAULT 0,
               last_state TEXT NOT NULL DEFAULT '{}', created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0)
             """);
+        try { Exec(c, "ALTER TABLE spots ADD COLUMN last_brief TEXT NOT NULL DEFAULT ''"); } catch (SqliteException) { }
     }
 
     private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); return c; }
@@ -69,6 +72,16 @@ public sealed class SpotStore
     public void SetSnooze(string id, long untilMs) { using var c = Open(); Exec(c, "UPDATE spots SET snooze_until=$u WHERE id=$id", ("$u", untilMs), ("$id", id)); }
     public void SetLocation(string id, double lat, double lon) { using var c = Open(); Exec(c, "UPDATE spots SET lat=$lat, lon=$lon, last_state='{}', updated_ms=$now WHERE id=$id", ("$lat", lat), ("$lon", lon), ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("$id", id)); }
     public void SetState(string id, string json) { using var c = Open(); Exec(c, "UPDATE spots SET last_state=$s WHERE id=$id", ("$s", json), ("$id", id)); }
+    public void SetLastBrief(string id, string localDate) { using var c = Open(); Exec(c, "UPDATE spots SET last_brief=$d WHERE id=$id", ("$d", localDate), ("$id", id)); }
+    /// <summary>Merge keys into the prefs JSON (null values remove a key).</summary>
+    public void MergePrefs(string id, Dictionary<string, object?> patch)
+    {
+        var spot = Get(id); if (spot is null) return;
+        var prefs = new Dictionary<string, object?>();
+        try { using var d = JsonDocument.Parse(spot.Prefs); foreach (var p in d.RootElement.EnumerateObject()) prefs[p.Name] = p.Value.Clone(); } catch { }
+        foreach (var (k, v) in patch) { if (v is null) prefs.Remove(k); else prefs[k] = v; }
+        using var c = Open(); Exec(c, "UPDATE spots SET prefs=$p, updated_ms=$n WHERE id=$id", ("$p", JsonSerializer.Serialize(prefs)), ("$n", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("$id", id));
+    }
     public void Delete(string id) { using var c = Open(); Exec(c, "DELETE FROM spots WHERE id=$id", ("$id", id)); }
     public void RecordFailure(string id, bool gone)
     {
@@ -81,12 +94,12 @@ public sealed class SpotStore
     public List<Spot> All()
     {
         using var c = Open(); using var q = c.CreateCommand();
-        q.CommandText = "SELECT id,endpoint,p256dh,auth,lat,lon,prefs,snooze_until,last_state,created_ms,updated_ms,failures FROM spots";
+        q.CommandText = "SELECT id,endpoint,p256dh,auth,lat,lon,prefs,snooze_until,last_state,created_ms,updated_ms,failures,last_brief FROM spots";
         using var r = q.ExecuteReader(); var list = new List<Spot>();
         while (r.Read()) list.Add(new Spot
         {
             Id = r.GetString(0), Endpoint = r.GetString(1), P256dh = r.GetString(2), Auth = r.GetString(3), Lat = r.GetDouble(4), Lon = r.GetDouble(5),
-            Prefs = r.GetString(6), SnoozeUntil = r.GetInt64(7), LastState = r.GetString(8), CreatedMs = r.GetInt64(9), UpdatedMs = r.GetInt64(10), Failures = r.GetInt32(11)
+            Prefs = r.GetString(6), SnoozeUntil = r.GetInt64(7), LastState = r.GetString(8), CreatedMs = r.GetInt64(9), UpdatedMs = r.GetInt64(10), Failures = r.GetInt32(11), LastBrief = r.IsDBNull(12) ? "" : r.GetString(12)
         });
         return list;
     }

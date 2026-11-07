@@ -617,7 +617,7 @@ const KEY = 'campRadar.v1';
 const DEFAULTS = { rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
-  brief: { lang: 'en', speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
+  brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: true, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
@@ -1773,7 +1773,7 @@ async function pushEnable() {
     body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
   if (r.status === 402) throw new Error('Alerts with the screen off are a Pro feature — Settings → Account.');
   if (!r.ok) throw new Error('Backend refused: ' + r.status);
-  S.pushId = (await r.json()).id; save();
+  S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs();
 }
 async function pushDisable() {
   try { if (S.pushId && BE()) await fetchT(BE() + '/push/' + S.pushId, { method: 'DELETE' }, 10000); } catch (e) {}
@@ -1782,6 +1782,13 @@ async function pushDisable() {
 }
 async function pushTest() { if (!S.pushId) throw new Error('Alerts are not enabled on this device'); const r = await fetchT(BE() + '/push/' + S.pushId + '/test', { method: 'POST' }, 15000); if (!r.ok) { let d = ''; try { d = (await r.json()).error || ''; } catch (e) {} throw new Error('Test failed (' + r.status + ')' + (d ? ': ' + d : '')); } }
 function pushUpdateLocation() { if (S.pushId && BE() && st.loc) fetchT(BE() + '/push/' + S.pushId + '/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon }) }, 10000).catch(() => {}); }
+// Morning briefing (Pro, push): the server needs the time, days, the device's UTC offset, language and activity.
+function pushUpdateBriefPrefs() {
+  if (!S.pushId || !BE()) return;
+  const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {});
+  const body = m.on ? { brief: { at: m.at, days: m.days, offsetMin: -new Date().getTimezoneOffset(), tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), lang: lang(), activity: S.activity } } : { brief: null };
+  fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 10000).catch(() => {});
+}
 function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
 async function pushAction(act, btn) {
   const msg = $('#pushMsg'); if (msg) msg.textContent = 'Working…';
@@ -2488,6 +2495,7 @@ function composeBriefing(f) { return lang() === 'es' ? composeBriefingES(f) : co
 function localizeSpoken(text) { return lang() === 'es' ? statusES(text) : text; }
 
 async function getBriefing() {
+  if (st.pushBrief) { const t = st.pushBrief; st.pushBrief = null; return { text: t, source: 'backend', at: Date.now() }; }
   const wantBackend = isPro();
   if (S.activity === 'beach') { try { await refreshBeach(); } catch (e) {} }
   if (snowy()) { try { await refreshSnow(); } catch (e) {} }
@@ -2697,7 +2705,10 @@ function openSettings(tab) {
       '<div class="toggle"><div><div class="tl">Spoken alerts</div><div class="td">Say what the chime is for: rain arriving, lightning, warnings, fire or flooding nearby</div></div><button class="sw ' + (S.brief.speakAlerts ? 'on' : '') + '" data-brief="speakAlerts"></button></div>' +
       '<div class="toggle"><div><div class="tl">Briefing when the screen wakes</div><div class="td">Once per half hour at most</div></div><button class="sw ' + (S.brief.onWake ? 'on' : '') + '" data-brief="onWake"></button></div>' +
       '</div>' +
-      '<div class="row"><label>Scheduled briefing times (24-hour, comma separated, e.g. 06:30, 17:00)</label><input id="briefTimes" type="text" inputmode="numeric" value="' + (S.brief.times || '').replace(/"/g, '') + '" placeholder="06:30, 17:00" ' + inputStyle + '><div class="btns"><button data-act="brief-times">Save times</button></div></div>' +
+      '<div class="row"><div class="toggle"><div><div class="tl">Morning briefing as a notification' + (isPro() ? '' : ' <span class="pro">PRO</span>') + '</div><div class="td">Arrives at the time below even with the app closed; tap it and the briefing is read aloud. Uses this device\'s last location, language and activity.</div></div><button class="sw ' + (S.brief.morning && S.brief.morning.on ? 'on' : '') + '" data-act="morning-toggle" role="switch"></button></div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px"><input id="morningAt" type="time" value="' + ((S.brief.morning && S.brief.morning.at) || '06:30') + '" ' + inputStyle.replace('width:100%', 'width:140px') + '><select id="morningDays" ' + inputStyle.replace('width:100%', 'width:auto') + '>' + [['all', 'Every day'], ['weekdays', 'Weekdays'], ['weekends', 'Weekends']].map(([v, t]) => '<option value="' + v + '"' + ((S.brief.morning && S.brief.morning.days) === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select></div>' +
+      '<div id="morningMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (S.brief.morning && S.brief.morning.on ? (S.pushId ? 'On. ' : '<span style="color:var(--warn,#ffa000)">Turn on alerts for this device (Data & backend) so the notification can be delivered.</span> ') : '') + '</div></div>' +
+      '<div class="row"><label>Scheduled briefing times while the app is open (24-hour, comma separated, e.g. 06:30, 17:00)</label><input id="briefTimes" type="text" inputmode="numeric" value="' + (S.brief.times || '').replace(/"/g, '') + '" placeholder="06:30, 17:00" ' + inputStyle + '><div class="btns"><button data-act="brief-times">Save times</button></div></div>' +
       '<div class="row"><label>Language (briefings, spoken alerts and voice commands)</label><select id="briefLang" ' + inputStyle + '>' + Object.entries(LANGS).map(([k, [name]]) => '<option value="' + k + '"' + (lang() === k ? ' selected' : '') + '>' + name + '</option>').join('') + '</select>' +
       (speech.ok && (loadVoices(), !speech.voices.length) ? '<div style="color:var(--warn,#ffa000);font-size:13px;margin-top:4px">No ' + LANGS[lang()][0] + ' voice is installed on this device; the text will show but cannot be spoken. On Android, install it under Settings → System → Languages → Text-to-speech.</div>' : '') + '</div>' +
       '<div class="row"><label>Voice</label><select id="briefVoice" ' + inputStyle + '>' + ['<option value="">Automatic</option>'].concat((speech.voices.length ? speech.voices : (loadVoices(), speech.voices)).map(v => '<option value="' + v.name.replace(/"/g, '') + '"' + (S.brief.voice === v.name ? ' selected' : '') + '>' + v.name + ' (' + v.lang + ')</option>')).join('') + '</select></div>' +
@@ -2784,6 +2795,11 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'brief-settings') { openSettings('brief'); return; }
   if (b.dataset.act === 'brief-times') { S.brief.times = ($('#briefTimes').value.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || []).map(t => t.padStart(5, '0')).join(', '); $('#briefTimes').value = S.brief.times; save(); return; }
   if (b.dataset.brief) { S.brief[b.dataset.brief] = !S.brief[b.dataset.brief]; save(); b.classList.toggle('on', S.brief[b.dataset.brief]); return; }
+  if (b.dataset.act === 'morning-toggle') {
+    const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {});
+    if (!m.on && !isPro()) { openSettings('account'); return; }
+    m.on = !m.on; m.at = ($('#morningAt') && $('#morningAt').value) || m.at; m.days = ($('#morningDays') && $('#morningDays').value) || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); openSettings('brief'); return;
+  }
   if (b.dataset.voice) { S.voice[b.dataset.voice] = !S.voice[b.dataset.voice]; save(); b.classList.toggle('on', S.voice[b.dataset.voice]); if (b.dataset.voice === 'enabled') { if (S.voice.enabled) startWakeWord(); else stopWakeWord(); } return; }
   if (b.dataset.act === 'voice-start') { S.voice.enabled = true; save(); startWakeWord(); return; }
   if (b.dataset.act === 'voice-stop') { S.voice.enabled = false; save(); stopWakeWord(); return; }
@@ -2815,7 +2831,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
@@ -2850,6 +2866,9 @@ else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
 refreshAccount();
 applySentinel();
+// Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
+if (new URLSearchParams(location.search).get('brief') === '1') setTimeout(() => { if (!st.pushBrief) openBriefing(true); }, 4000);
 updatePickHint();
 renderStatus();
 keepAwake();

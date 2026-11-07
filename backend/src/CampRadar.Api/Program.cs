@@ -40,6 +40,8 @@ builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
 builder.Services.AddSingleton<GlmIngestor>();
 builder.Services.AddSingleton<NwsClient>();
+builder.Services.AddSingleton<NwsForecastClient>();
+builder.Services.AddSingleton<BriefingFactsBuilder>();
 builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
@@ -134,6 +136,14 @@ app.MapPost("/push/subscribe", (HttpRequest http, EntitlementStore ent, [FromBod
     return Results.Ok(new { id });
 });
 app.MapPost("/push/{id}/location", (string id, [FromBody] LocationRequest r, SpotStore store) => { if (store.Get(id) is null) return Results.NotFound(); store.SetLocation(id, r.Lat, r.Lon); return Results.Ok(); });
+app.MapPost("/push/{id}/prefs", (string id, [FromBody] JsonElement body, SpotStore store) =>
+{
+    if (store.Get(id) is null) return Results.NotFound();
+    if (body.ValueKind != JsonValueKind.Object || body.GetRawText().Length > 4000) return Results.BadRequest();
+    var patch = new Dictionary<string, object?>();
+    foreach (var p in body.EnumerateObject()) if (p.Name != "email") patch[p.Name] = p.Value.ValueKind == JsonValueKind.Null ? null : p.Value.Clone();
+    store.MergePrefs(id, patch); return Results.Ok();
+});
 app.MapPost("/push/{id}/snooze", (string id, [FromBody] SnoozeRequest r, SpotStore store) => { if (store.Get(id) is null) return Results.NotFound(); store.SetSnooze(id, r.UntilMs); return Results.Ok(); });
 app.MapDelete("/push/{id}", (string id, SpotStore store) => { store.Delete(id); return Results.Ok(); });
 app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, CancellationToken ct) =>
@@ -253,6 +263,40 @@ app.MapGet("/admin/net/test", async (HttpRequest r, IHttpClientFactory f, Cancel
     }
     return Results.Ok(results);
 });
+// Send the morning briefing now to every device that has it switched on (admin test), or to one spot id.
+app.MapPost("/admin/brief/send", async (HttpRequest r, SpotStore store, BriefingFactsBuilder fb, BriefingWriter w, PushSender push, CancellationToken ct) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    var results = new List<object>();
+    foreach (var spot in store.All())
+    {
+        string lang = "en", activity = "camping"; bool on = false;
+        try { using var d = JsonDocument.Parse(spot.Prefs); if (d.RootElement.TryGetProperty("brief", out var b) && b.ValueKind == JsonValueKind.Object) { on = true; lang = b.TryGetProperty("lang", out var l) ? l.GetString() ?? "en" : "en"; activity = b.TryGetProperty("activity", out var a) ? a.GetString() ?? "camping" : "camping"; } } catch { }
+        if (!on) continue;
+        var facts = await fb.BuildAsync(spot.Lat, spot.Lon, activity, lang, ct);
+        if (facts is null) { results.Add(new { spot = spot.Id[..6], ok = false, error = "no NWS forecast" }); continue; }
+        var plain = PlainBriefing.Compose(facts.Value, lang);
+        var (text, provider) = await w.WriteAsync(facts.Value, plain, ct); text ??= plain;
+        var sentences = System.Text.RegularExpressions.Regex.Split(text, @"(?<=[.!?])\s+");
+        var ok = await push.SendAsync(spot, new { title = (lang == "es" ? "Informe de la mañana" : "Morning briefing") + " (test)", body = string.Join(" ", sentences.Take(2)), tag = "brief", level = "info", brief = text, lang, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "brief", false, ct);
+        results.Add(new { spot = spot.Id[..6], ok, provider = provider ?? "plain", activity, lang, text });
+    }
+    return Results.Ok(new { devices = results.Count, results });
+});
+app.MapPost("/admin/brief/send/{id}", async (string id, HttpRequest r, SpotStore store, BriefingFactsBuilder fb, BriefingWriter w, PushSender push, CancellationToken ct) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    var spot = store.Get(id); if (spot is null) return Results.NotFound();
+    string lang = "en", activity = "camping";
+    try { using var d = JsonDocument.Parse(spot.Prefs); if (d.RootElement.TryGetProperty("brief", out var b)) { lang = b.TryGetProperty("lang", out var l) ? l.GetString() ?? "en" : "en"; activity = b.TryGetProperty("activity", out var a) ? a.GetString() ?? "camping" : "camping"; } } catch { }
+    var facts = await fb.BuildAsync(spot.Lat, spot.Lon, activity, lang, ct);
+    if (facts is null) return Results.Json(new { ok = false, error = "no NWS forecast for this spot" });
+    var plain = PlainBriefing.Compose(facts.Value, lang);
+    var (text, provider) = await w.WriteAsync(facts.Value, plain, ct); text ??= plain;
+    var sentences = System.Text.RegularExpressions.Regex.Split(text, @"(?<=[.!?])\s+");
+    var ok = await push.SendAsync(spot, new { title = (lang == "es" ? "Informe de la mañana" : "Morning briefing") + " (test)", body = string.Join(" ", sentences.Take(2)), tag = "brief", level = "info", brief = text, lang, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "brief", false, ct);
+    return Results.Ok(new { ok, provider = provider ?? "plain", text });
+});
 app.MapGet("/admin/entitlements", (HttpRequest r, EntitlementStore ent) => IsAdmin(r) ? Results.Ok(ent.All().Select(x => new { x.E.Email, x.E.Plan, x.E.ExpiresMs, x.E.Source, x.E.Note, x.E.UpdatedMs, active = x.E.Active, devices = x.Devices })) : Results.Unauthorized());
 app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) =>
 {
@@ -297,7 +341,7 @@ app.MapGet("/admin/vapid/new", (HttpRequest r) =>
     var (pub, priv) = PushSender.GenerateKeys();
     return Results.Ok(new { note = "Put these in appsettings.Production.json under Vapid, restart, then keep them forever (changing them orphans every subscriber).", publicKey = pub, privateKey = priv });
 });
-app.MapGet("/admin/spots", (HttpRequest r, SpotStore s) => IsAdmin(r) ? Results.Ok(s.All().Select(x => new { x.Id, x.Lat, x.Lon, x.CreatedMs, x.UpdatedMs, x.Failures, x.SnoozeUntil })) : Results.Unauthorized());
+app.MapGet("/admin/spots", (HttpRequest r, SpotStore s) => IsAdmin(r) ? Results.Ok(s.All().Select(x => new { x.Id, x.Lat, x.Lon, x.CreatedMs, x.UpdatedMs, x.Failures, x.SnoozeUntil, x.LastBrief, prefs = JsonDocument.Parse(x.Prefs).RootElement.Clone() })) : Results.Unauthorized());
 
 app.Run();
 

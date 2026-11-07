@@ -14,8 +14,11 @@ self.addEventListener('push', e => {
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-    for (const c of list) if ('focus' in c) return c.focus();
-    return self.clients.openWindow('./');
+  const d = e.notification.data || {};
+  const isBrief = d.tag === 'brief' && d.brief;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async list => {
+    for (const c of list) if ('focus' in c) { await c.focus(); if (isBrief) c.postMessage({ type: 'brief', text: d.brief, lang: d.lang }); return; }
+    const w = await self.clients.openWindow(isBrief ? './?brief=1' : './');
+    if (w && isBrief) setTimeout(() => { try { w.postMessage({ type: 'brief', text: d.brief, lang: d.lang }); } catch (err) {} }, 3500);
   }));
 });

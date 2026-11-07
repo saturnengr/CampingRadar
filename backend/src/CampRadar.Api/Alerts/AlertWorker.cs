@@ -18,6 +18,9 @@ public sealed class AlertWorker : BackgroundService
     private readonly StatusService _status;
     private readonly SpotStore _spots;
     private readonly EntitlementStore _ent;
+    private readonly BriefingFactsBuilder _facts;
+    private readonly BriefingWriter _writer;
+    private long _lastBriefMs;
     private readonly PushSender _push;
     private readonly ILogger<AlertWorker> _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -25,8 +28,8 @@ public sealed class AlertWorker : BackgroundService
     public DateTimeOffset LastCycle { get; private set; }
     public string LastCycleNote { get; private set; } = "not yet";
 
-    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, ILogger<AlertWorker> log)
-    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _log = log; }
+    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, ILogger<AlertWorker> log)
+    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _log = log; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -50,6 +53,7 @@ public sealed class AlertWorker : BackgroundService
             if (now - _lastRadarMs > 120_000) { long before = _mrms.Latest; await _mrms.RefreshTimesAsync(ct); _lastRadarMs = now; if (_mrms.Latest != before) { notes.Add("new radar scan"); _lastEvalMs = 0; } }
             if (now - _lastGlmMs > 60_000) { await _glm.RunAsync(ct); _lastGlmMs = now; notes.Add("glm ok"); }
             if (now - _lastEvalMs > 300_000) { int n = await EvaluateSpotsAsync(ct); _lastEvalMs = now; notes.Add($"evaluated {n} spots"); }
+            if (now - _lastBriefMs > 60_000) { int b = await MorningBriefingsAsync(ct); _lastBriefMs = now; if (b > 0) notes.Add($"{b} morning briefings"); }
             if (now - _lastPruneMs > 3_600_000) { _mrms.PruneCache(TimeSpan.FromHours(5)); _lastPruneMs = now; }
             LastCycle = DateTimeOffset.UtcNow; LastCycleNote = string.Join(", ", notes);
             return LastCycleNote;
@@ -122,6 +126,59 @@ public sealed class AlertWorker : BackgroundService
             }
         }
         return spots.Count;
+    }
+
+    /// <summary>
+    /// Opt-in morning briefing: prefs.brief = { at:"06:30", days:"all"|"weekdays"|"weekends", tz:"America/Chicago", offsetMin:-360, lang:"en"|"es", activity }.
+    /// Sent once per local day, at or after the chosen time, to Pro devices seen in the last 30 days. The push carries
+    /// the whole text; tapping it opens the app, which reads it aloud.
+    /// </summary>
+    private async Task<int> MorningBriefingsAsync(CancellationToken ct)
+    {
+        int sent = 0;
+        var nowUtc = DateTimeOffset.UtcNow;
+        foreach (var spot in _spots.All())
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var doc = JsonDocument.Parse(spot.Prefs);
+                if (!doc.RootElement.TryGetProperty("brief", out var b) || b.ValueKind != JsonValueKind.Object) continue;
+                if (!b.TryGetProperty("at", out var atEl) || atEl.ValueKind != JsonValueKind.String) continue;
+                int offsetMin = b.TryGetProperty("offsetMin", out var om) && om.ValueKind == JsonValueKind.Number ? om.GetInt32() : -360;
+                var local = nowUtc.ToOffset(TimeSpan.FromMinutes(offsetMin));
+                string today = local.ToString("yyyy-MM-dd");
+                if (spot.LastBrief == today) continue;
+                var parts = (atEl.GetString() ?? "06:30").Split(':'); int atH = int.Parse(parts[0]), atM = parts.Length > 1 ? int.Parse(parts[1]) : 0;
+                if (local.Hour * 60 + local.Minute < atH * 60 + atM) continue;
+                if (local.Hour * 60 + local.Minute > atH * 60 + atM + 180) { _spots.SetLastBrief(spot.Id, today); continue; }   // missed by 3 h (app offline?) → skip today rather than wake someone at noon
+                string days = b.TryGetProperty("days", out var d) ? d.GetString() ?? "all" : "all";
+                bool weekend = local.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                if ((days == "weekdays" && weekend) || (days == "weekends" && !weekend)) { _spots.SetLastBrief(spot.Id, today); continue; }
+                if (nowUtc.ToUnixTimeMilliseconds() - spot.UpdatedMs > 30L * 86400000) continue;
+                string email = ExtractEmail(spot.Prefs);
+                if (email.Length == 0 || !(_ent.Get(email)?.Active ?? false)) continue;
+                string lang = b.TryGetProperty("lang", out var l) ? l.GetString() ?? "en" : "en";
+                string activity = b.TryGetProperty("activity", out var a) ? a.GetString() ?? "camping" : "camping";
+
+                var facts = await _facts.BuildAsync(spot.Lat, spot.Lon, activity, lang, ct);
+                if (facts is null) { _log.LogWarning("morning briefing: no forecast for spot {Id}", spot.Id); continue; }
+                var plain = PlainBriefing.Compose(facts.Value, lang);
+                var (text, provider) = await _writer.WriteAsync(facts.Value, plain, ct);
+                text ??= plain;
+                var place = facts.Value.TryGetProperty("place", out var pl) ? pl.GetString() : null;
+                string title = (lang == "es" ? "Informe de la mañana" : "Morning briefing") + (string.IsNullOrEmpty(place) ? "" : " · " + place);
+                // notification body: the first two sentences; the full text rides along for the app to read aloud
+                var sentences = System.Text.RegularExpressions.Regex.Split(text, @"(?<=[.!?])\s+");
+                string body = string.Join(" ", sentences.Take(2));
+                var ok = await _push.SendAsync(spot, new { title, body, tag = "brief", level = "info", brief = text, lang, at = nowUtc.ToUnixTimeMilliseconds() }, "brief", false, ct);
+                _spots.SetLastBrief(spot.Id, today);
+                if (ok) { sent++; _log.LogInformation("morning briefing sent to {Id} via {Provider}", spot.Id, provider ?? "plain"); }
+                else _spots.RecordFailure(spot.Id, gone: true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "morning briefing failed for spot {Id}", spot.Id); }
+        }
+        return sent;
     }
 
     private static Dictionary<string, double> Parse(string json)
