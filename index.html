@@ -615,7 +615,7 @@ const DEFAULTS = { range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false },
   brief: { lang: 'en', speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
-  voice: { enabled: true, key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
+  voice: { enabled: true, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
@@ -962,7 +962,7 @@ async function requestMicrophone() {
     stream.getTracks().forEach(t => t.stop());
     st.micErr = null;
   } catch (e) { st.micErr = /NotAllowed|denied|Permission/i.test(e && e.message || e.name) ? 'blocked' : (e && e.message) || String(e); setVoiceStatus('not running', st.micErr === 'blocked' ? 'microphone permission was refused' : st.micErr); return; }
-  if (S.voice.enabled && S.voice.key) startWakeWord(); else if (S.voice.enabled) setVoiceStatus('needs an access key'); else setVoiceStatus('off');
+  if (S.voice.enabled && (S.voice.engine !== 'porcupine' || S.voice.key)) startWakeWord(); else if (S.voice.enabled) setVoiceStatus('needs an access key'); else setVoiceStatus('off');
 }
 function useGps() {
   S.locMode = 'gps'; save();
@@ -1943,7 +1943,7 @@ function speak(text, opts) {
   const v = pickVoice();
   parts.forEach((part, i) => {
     const u = new SpeechSynthesisUtterance(part.trim()); u.lang = LANGS[lang()][1]; if (v) u.voice = v; u.rate = S.brief.rate || 1; u.volume = Math.max(0.05, S.volume);
-    u.onstart = () => { speech.speaking = true; updateSpeakBtns(); }; u.onend = u.onerror = () => { if (i === parts.length - 1) { speech.speaking = false; updateSpeakBtns(); } };
+    u.onstart = () => { speech.speaking = true; updateSpeakBtns(); try { if (voice.wakeRec) { const w = voice.wakeRec; voice.wakeRec = null; w.abort(); } } catch (e) {} }; u.onend = u.onerror = () => { if (i === parts.length - 1) { speech.speaking = false; updateSpeakBtns(); } };
     speechSynthesis.speak(u);
   });
   return true;
@@ -2361,6 +2361,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 /* ------------------------------ voice control ---------------------- */
 const VOICE_LIBS = { porcupine: 'https://cdn.jsdelivr.net/npm/@picovoice/porcupine-web@4.0.1/dist/iife/index.min.js', wvp: 'https://cdn.jsdelivr.net/npm/@picovoice/web-voice-processor@4.0.10/dist/iife/index.min.js',
   model: 'https://cdn.jsdelivr.net/gh/Picovoice/porcupine@v4.0/lib/common/porcupine_params.pv' };
+const BROWSER_WAKE = { 'Bumblebee': /\bbumble\s?bee\b/i, 'Lead Time': /\blead\s?time\b/i, 'Hey Radar': /\b(hey|hi|ok)\s+radar\b/i, 'Radar': /\bradar\b/i };
 const WAKE_WORDS = ['Bumblebee', 'Computer', 'Jarvis', 'Porcupine', 'Picovoice', 'Grasshopper', 'Terminator', 'Blueberry', 'Americano', 'Grapefruit'];
 const COMMANDS_HELP = 'Say the wake word, then: briefing, zoom in, zoom out, snooze (one, two, four or eight hours), stop, center, ten / thirty / fifty miles, night mode, day mode, status, or help.';
 const voice = { worker: null, running: false, status: 'off', listening: false, rec: null, err: null };
@@ -2369,6 +2370,7 @@ function loadScript(src) { return new Promise((res, rej) => { if (document.query
 function setVoiceStatus(t, err) { voice.status = t; voice.err = err || null; const el = $('#voiceStatus'); if (el) el.textContent = t + (err ? ' — ' + err : ''); $('#micBtn').hidden = !SR; $('#micBtn').classList.toggle('on', voice.running); }
 async function startWakeWord() {
   if (voice.running) return;
+  if (S.voice.engine !== 'porcupine') return startBrowserWake();
   if (!S.voice.key) { setVoiceStatus('needs an access key'); return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setVoiceStatus('no microphone access in this browser'); return; }
   setVoiceStatus('starting…');
@@ -2385,7 +2387,49 @@ async function startWakeWord() {
     try { if (voice.worker) { await voice.worker.terminate(); } } catch (x) {} voice.worker = null;
   }
 }
+/* Built-in wake word: the browser's own continuous speech recognition, no key. It listens for the wake phrase in the
+   rolling transcript; if a command follows in the same breath ("Bumblebee, briefing") it runs at once, otherwise it
+   opens the usual short command window. Chrome ends continuous sessions after a few seconds of silence, so it is
+   restarted whenever it stops, and paused while the app itself is speaking so it does not hear its own briefing. */
+function browserWakePhrase() { return BROWSER_WAKE[S.voice.keyword] ? S.voice.keyword : 'Bumblebee'; }
+function startBrowserWake() {
+  if (!SR) { setVoiceStatus('not available', 'this browser has no speech recognition (use Chrome or Safari)'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setVoiceStatus('no microphone access in this browser'); return; }
+  voice.running = true; voice.engine = 'browser'; voice.restarts = 0;
+  const phrase = browserWakePhrase(), re = BROWSER_WAKE[phrase];
+  setVoiceStatus('listening for "' + phrase + '"');
+  const loop = () => {
+    if (!voice.running || voice.engine !== 'browser') return;
+    if (voice.listening || speech.speaking) { voice.wakeTimer = setTimeout(loop, 700); return; }
+    let r; try { r = new SR(); } catch (e) { setVoiceStatus('not running', e.message); voice.running = false; return; }
+    voice.wakeRec = r; r.lang = LANGS[lang()][1]; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    let fired = false, startedAt = Date.now();
+    r.onresult = ev => {
+      if (fired) return;
+      let text = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) text += ' ' + ev.results[i][0].transcript;
+      const m = text.match(re); if (!m) return;
+      fired = true; try { r.abort(); } catch (e) {}
+      const rest = text.slice(m.index + m[0].length).replace(/^[\s,.!?]+/, '').trim();
+      tone(880, 0, 0.12, 'sine', 0.5); tone(1320, 0.12, 0.15, 'sine', 0.5);
+      if (rest.split(/\s+/).filter(Boolean).length >= 1 && ev.results[ev.results.length - 1].isFinal) { $('#voiceChip').hidden = false; $('#voiceChip').textContent = '“' + rest + '”'; setTimeout(() => { $('#voiceChip').hidden = true; }, 1500); handleCommand([rest]); }
+      else listenForCommand();
+    };
+    r.onerror = ev => { if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') { voice.running = false; setVoiceStatus('not running', 'microphone permission was refused'); } else if (ev.error === 'network') { voice.restarts++; } };
+    r.onend = () => {
+      voice.wakeRec = null; if (!voice.running || voice.engine !== 'browser') return;
+      // back off if the recognizer keeps dying instantly (offline, or no speech service)
+      const quick = Date.now() - startedAt < 1500; voice.restarts = quick ? voice.restarts + 1 : 0;
+      if (voice.restarts > 8) { setVoiceStatus('paused', 'speech service unavailable (offline?) — retrying in a minute'); voice.restarts = 0; voice.wakeTimer = setTimeout(loop, 60000); return; }
+      voice.wakeTimer = setTimeout(loop, fired ? 1200 : quick ? 1500 : 250);
+    };
+    try { r.start(); } catch (e) { voice.wakeTimer = setTimeout(loop, 2000); }
+  };
+  loop();
+}
 async function stopWakeWord() {
+  clearTimeout(voice.wakeTimer); voice.running = false;
+  try { if (voice.wakeRec) { const w = voice.wakeRec; voice.wakeRec = null; w.abort(); } } catch (e) {}
   try { if (voice.worker) { await WebVoiceProcessor.WebVoiceProcessor.unsubscribe(voice.worker); await voice.worker.terminate(); } } catch (e) {}
   voice.worker = null; voice.running = false; setVoiceStatus('off');
 }
@@ -2395,6 +2439,7 @@ function listenForCommand() {
   if (!SR) { speak('Voice commands are not supported in this browser.'); return; }
   if (voice.listening) return;
   voice.listening = true; $('#voiceChip').hidden = false; $('#voiceChip').textContent = 'Listening…';
+  try { if (voice.wakeRec) { const w = voice.wakeRec; voice.wakeRec = null; w.abort(); } } catch (e) {}
   if (speech.speaking) stopSpeaking();
   const r = new SR(); voice.rec = r; r.lang = LANGS[lang()][1]; r.continuous = false; r.interimResults = true; r.maxAlternatives = 5;
   let finalDone = false;
@@ -2490,10 +2535,11 @@ function openSettings(tab) {
       '<div class="toggle"><div><div class="tl">Spoken confirmations</div><div class="td">"Zooming in", "Snoozed for one hour"</div></div><button class="sw ' + (S.voice.confirm ? 'on' : '') + '" data-voice="confirm"></button></div></div>' +
       '<div class="row"><label>Status</label><div id="voiceStatus" style="font-size:15px">' + voice.status + (voice.err ? ' — ' + voice.err : '') + '</div>' +
       '<div class="btns"><button data-act="voice-start">Start listening</button><button data-act="voice-stop">Stop</button><button data-act="voice-test">Try a command (tap to talk)</button></div></div>' +
-      '<div class="row"><label>Wake word</label><select id="voiceKw" ' + inputStyle + '>' + WAKE_WORDS.map(w => '<option' + (S.voice.keyword === w ? ' selected' : '') + '>' + w + '</option>').join('') + '</select></div>' +
-      '<div class="row"><label>Wake-word sensitivity (higher = easier to trigger, more false alarms)</label><input type="range" min="0.3" max="0.9" step="0.05" data-slider="sensitivity" value="' + S.voice.sensitivity + '"></div>' +
-      '<div class="row"><label>Picovoice access key (free for personal use at console.picovoice.ai)</label><input id="voiceKey" type="password" autocomplete="off" value="' + (S.voice.key || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '><div class="btns"><button data-act="voice-key">Save key</button></div></div>' +
-      '<div class="row" style="color:var(--muted);font-size:14px">' + COMMANDS_HELP + ' The wake word is detected on the device and works offline; the command itself is recognised by the browser (Chrome uses Google\'s service, so it needs a connection). Listening works while the app is on screen on tablets and phones; the microphone is cut when the screen is off or another app is in front.</div>') +
+      '<div class="row"><label>Wake-word engine</label><select id="voiceEngine" ' + inputStyle + '><option value="browser"' + (S.voice.engine !== 'porcupine' ? ' selected' : '') + '>Built in — browser speech recognition (no key)</option><option value="porcupine"' + (S.voice.engine === 'porcupine' ? ' selected' : '') + '>Picovoice Porcupine (needs an access key; works offline)</option></select></div>' +
+      '<div class="row"><label>Wake word</label><select id="voiceKw" ' + inputStyle + '>' + (S.voice.engine === 'porcupine' ? WAKE_WORDS : Object.keys(BROWSER_WAKE)).map(w => '<option' + ((S.voice.engine === 'porcupine' ? S.voice.keyword : browserWakePhrase()) === w ? ' selected' : '') + '>' + w + '</option>').join('') + '</select></div>' +
+      (S.voice.engine === 'porcupine' ? '<div class="row"><label>Wake-word sensitivity (higher = easier to trigger, more false alarms)</label><input type="range" min="0.3" max="0.9" step="0.05" data-slider="sensitivity" value="' + S.voice.sensitivity + '"></div>' +
+      '<div class="row"><label>Picovoice access key</label><input id="voiceKey" type="password" autocomplete="off" value="' + (S.voice.key || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '><div class="btns"><button data-act="voice-key">Save key</button></div></div>' : '') +
+      '<div class="row" style="color:var(--muted);font-size:14px">' + COMMANDS_HELP + ' You can say the command in the same breath: "' + browserWakePhrase() + ', briefing". ' + (S.voice.engine === 'porcupine' ? 'The wake word is detected on the device and works offline; the command itself is recognised by the browser (Chrome uses Google\'s service, so it needs a connection).' : 'The built-in engine uses the browser\'s speech recognition for both the wake word and the command, so it needs a connection, and on Chrome the audio is transcribed by Google while listening. Best on a plugged-in tablet; on a phone, use the mic button.') + ' Listening works while the app is on screen; the microphone is cut when the screen is off or another app is in front.</div>') +
     pane('layers', '<div class="row" style="margin-top:4px">' + Object.entries(LAYER_INFO).map(([k, [name, desc]]) =>
       '<div class="toggle"><div><div class="tl">' + name + '</div><div class="td">' + desc + '</div></div><button class="sw ' + (S.layers[k] ? 'on' : '') + '" data-layer="' + k + '" role="switch" aria-checked="' + !!S.layers[k] + '" aria-label="' + name + '"></button></div>').join('') + '</div>' +
       '<div class="row" style="color:var(--muted);font-size:14px">Radar, your rings and NWS warnings are always shown. Lightning appears when a backend is set. Wind arrows come from Open-Meteo; satellite clouds and smoke from NOAA.</div>') +
@@ -2576,7 +2622,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') runNowcast();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
