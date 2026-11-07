@@ -680,7 +680,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07c';
+const APP_VERSION = '2026.11.07d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -3075,6 +3075,7 @@ function openSettings(tab) {
         '<div class="row"><label>Or a Pro activation code</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div></div>' +
         '<div class="row" style="color:var(--muted);font-size:14px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div>')) +
     pane('about', '<div class="diag" id="diag" style="border-top:0;margin-top:0;padding-top:4px"></div>' +
+      '<div class="row"><div class="btns"><button data-act="upd-check">Check for an update</button><button data-act="upd-reload">Reload the app</button></div><div id="updMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
       '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite, tropical cyclones, tides and water temperature), NIFC (wildfires), USDA SNOTEL (snow depth), Open-Meteo (wind arrows, UV, modeled snow depth), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
     '<button class="done" data-act="close">Done</button>';
   renderPushRow();
@@ -3086,6 +3087,7 @@ function renderDiag() {
   const d = $('#diag'); if (!d) return;
   const m = st.nc && st.nc.motion;
   d.textContent = [
+    'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + (st.timesFromServer ? '' : ' (estimated)') : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
@@ -3123,6 +3125,8 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
   if (b.dataset.act === 'acct-refresh') { refreshAccount().then(() => openSettings('account')); return; }
+  if (b.dataset.act === 'upd-check') { $('#updMsg').textContent = 'Checking…'; checkForUpdate(true).then(() => { $('#updMsg').textContent = upd.pending ? 'A newer version is on the server — tap Reload the app.' : 'You have the latest version (' + APP_VERSION + ').'; }); return; }
+  if (b.dataset.act === 'upd-reload') { applyUpdate(); return; }
   if (b.dataset.act === 'brief-now') { closeModal(); openBriefing(true); return; }
   if (b.dataset.act === 'brief-refresh') { openBriefing(true); return; }
   if (b.dataset.act === 'brief-settings') { openSettings('brief'); return; }
