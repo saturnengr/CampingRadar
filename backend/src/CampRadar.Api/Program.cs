@@ -20,6 +20,7 @@ builder.Services.AddHttpClient("noaa", c =>
     c.DefaultRequestHeaders.Accept.ParseAdd("application/geo+json, application/json, image/png, */*");
 });
 builder.Services.AddHttpClient("anthropic", c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
@@ -59,7 +60,7 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
     push = new { enabled = p.Enabled, spots = s.All().Count },
     briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled },
-    email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled }
+    email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });

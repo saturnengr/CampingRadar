@@ -57,7 +57,13 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
   "Anthropic": { "ApiKey": "sk-ant-…", "Model": "claude-haiku-5-5" }
 }
 ```
-Add an `Smtp` block to turn on **email sign-in** (6-digit codes); any mailbox on the hosting account works, for example one created under the control panel's *Emails*:
+Turn on **email sign-in** (6-digit codes) with either transport:
+
+- **Microsoft 365 via Graph** (preferred): an Entra app registration with the `Mail.Send` application permission (admin consent), sending as a mailbox or shared mailbox in the tenant:
+  ```json
+  "Graph": { "TenantId": "…", "ClientId": "…", "ClientSecret": "…", "From": "leadtime@yourdomain.com", "FromName": "LeadTime" }
+  ```
+- **SMTP** (Office 365 SMTP AUTH, Resend, Postmark, any relay):
 
 ```json
   "Smtp": { "Host": "mail.yourdomain.com", "Port": 587, "User": "no-reply@yourdomain.com", "Password": "…", "From": "LeadTime <no-reply@yourdomain.com>" }
