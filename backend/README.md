@@ -70,6 +70,8 @@ Turn on **email sign-in** (6-digit codes) with either transport:
 ```
 Without it, people can still sign in with an activation code from the admin page (`/admin`), which is also where Pro is granted.
 
+**Model-written briefings** use whichever of these keys is set, in the order of `Briefing:Providers` (default `gemini,anthropic,openai`), falling through to the next on failure: `Gemini:ApiKey` (Google AI Studio; free tier), `Anthropic:ApiKey`, or `OpenAI:ApiKey` + `OpenAI:BaseUrl` + `OpenAI:Model` for any OpenAI-compatible endpoint (Groq, OpenRouter, Cloudflare Workers AI). With no key the device composes the text itself.
+
 `Anthropic:ApiKey` is optional: with it, the app's Briefing is written by a language model; without it the device composes the text itself. A key comes from console.anthropic.com; a briefing costs well under a cent.
 ```
 ```

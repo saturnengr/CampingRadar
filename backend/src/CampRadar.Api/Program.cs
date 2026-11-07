@@ -19,7 +19,7 @@ builder.Services.AddHttpClient("noaa", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd(builder.Configuration["UserAgent"] ?? "CampRadar/1.0 (+https://github.com/saturnengr/CampingRadar)");
     c.DefaultRequestHeaders.Accept.ParseAdd("application/geo+json, application/json, image/png, */*");
 });
-builder.Services.AddHttpClient("anthropic", c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(40));
 builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
@@ -59,7 +59,7 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null, newestFlash = l.NewestFlashMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.NewestFlashMs) : (DateTimeOffset?)null },
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
     push = new { enabled = p.Enabled, spots = s.All().Count },
-    briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled },
+    briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled, providers = app.Services.GetRequiredService<BriefingWriter>().Active },
     email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
@@ -101,8 +101,8 @@ app.MapPost("/brief", async (HttpRequest http, EntitlementStore ent, [FromBody] 
     if (RequirePro(http, ent) is { } gate) return gate;
     if (!w.Enabled) return Results.StatusCode(503);
     if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
-    var text = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct);
-    return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend" });
+    var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct);
+    return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend", provider });
 });
 
 // ---------- push subscriptions ----------
