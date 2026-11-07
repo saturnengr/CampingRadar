@@ -2,6 +2,7 @@ using System.Text.Json;
 using CampRadar.Api.Admin;
 using CampRadar.Api.Alerts;
 using CampRadar.Api.Lightning;
+using CampRadar.Api.Mail;
 using CampRadar.Api.Nws;
 using CampRadar.Api.Push;
 using CampRadar.Api.Radar;
@@ -27,6 +28,7 @@ builder.Services.AddSingleton<NwsClient>();
 builder.Services.AddSingleton<SpotStore>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<EntitlementStore>();
+builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
@@ -56,7 +58,8 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null, newestFlash = l.NewestFlashMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.NewestFlashMs) : (DateTimeOffset?)null },
     worker = new { lastCycle = w.LastCycle, note = w.LastCycleNote },
     push = new { enabled = p.Enabled, spots = s.All().Count },
-    briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled }
+    briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled },
+    email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
@@ -141,7 +144,52 @@ app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
     return Results.Ok();
 });
 
-// ---------- account: activation codes → device tokens ----------
+// ---------- account: email sign-in (6-digit code by email), activation codes, settings sync, deletion ----------
+var ipCodes = new System.Collections.Concurrent.ConcurrentDictionary<string, Queue<long>>();
+app.MapGet("/auth/config", (Mailer mail) => new { emailSignIn = mail.Enabled });
+app.MapPost("/auth/start", async (HttpRequest http, [FromBody] StartRequest r, EntitlementStore ent, Mailer mail, CancellationToken ct) =>
+{
+    if (!mail.Enabled) return Results.Json(new { error = "Email sign-in is not set up on this server yet. Use an activation code instead." }, statusCode: 503);
+    var email = (r.Email ?? "").Trim();
+    if (email.Length < 5 || email.Length > 254 || !email.Contains('@') || email.Contains(' ')) return Results.BadRequest(new { error = "Enter a valid email address." });
+    // rate limit: 3 codes per email per 10 min, 10 per IP per 10 min
+    var ip = http.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "?"; long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var q = ipCodes.GetOrAdd(ip, _ => new Queue<long>()); lock (q) { while (q.Count > 0 && now - q.Peek() > 600000) q.Dequeue(); if (q.Count >= 10) return Results.Json(new { error = "Too many codes requested. Try again in a few minutes." }, statusCode: 429); q.Enqueue(now); }
+    if (ent.RecentLoginCodes(email) >= 3) return Results.Json(new { error = "A code was already sent. Check your email (and spam), or wait a few minutes." }, statusCode: 429);
+    var code = ent.NewLoginCode(email);
+    try { await mail.SendCodeAsync(email, code, ct); }
+    catch (Exception ex) { app.Logger.LogWarning(ex, "sign-in mail failed"); return Results.Json(new { error = "Could not send the email right now. Try again in a minute." }, statusCode: 502); }
+    return Results.Ok(new { sent = true });
+});
+app.MapPost("/auth/verify", ([FromBody] VerifyRequest r, EntitlementStore ent) =>
+{
+    if (string.IsNullOrWhiteSpace(r.Email) || string.IsNullOrWhiteSpace(r.Code) || string.IsNullOrWhiteSpace(r.DeviceId)) return Results.BadRequest(new { error = "email, code and deviceId required" });
+    var t = ent.Verify(r.Email, r.Code, r.DeviceId);
+    if (t is null) return Results.Json(new { error = "That code is not right or has expired. Request a new one." }, statusCode: 400);
+    var e = ent.Get(t.Email);
+    return Results.Ok(new { token = t.Token, email = t.Email, plan = e?.Plan ?? "free", expiresMs = e?.ExpiresMs ?? 0, pro = e?.Active == true });
+});
+app.MapGet("/me/settings", (HttpRequest r, EntitlementStore ent) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var json = ent.GetSettings(t.Email, out var upd);
+    return json is null ? Results.Ok(new { settings = (object?)null, updatedMs = 0L }) : Results.Content("{\"settings\":" + json + ",\"updatedMs\":" + upd + "}", "application/json");
+});
+app.MapPut("/me/settings", (HttpRequest r, [FromBody] JsonElement body, EntitlementStore ent) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    var raw = body.GetRawText(); if (body.ValueKind != JsonValueKind.Object || raw.Length > 32000) return Results.BadRequest(new { error = "settings object required (max 32 KB)" });
+    return Results.Ok(new { updatedMs = ent.PutSettings(t.Email, raw) });
+});
+app.MapDelete("/me", (HttpRequest r, EntitlementStore ent, SpotStore spots) =>
+{
+    var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
+    foreach (var sp in spots.All().Where(sp => sp.Prefs.Contains("\"email\":\"" + t.Email + "\""))) spots.Delete(sp.Id);
+    ent.DeleteAccount(t.Email);
+    return Results.Ok(new { deleted = true });
+});
+
+// ---------- activation codes (admin-issued or from a purchase) → device tokens ----------
 app.MapPost("/auth/redeem", ([FromBody] RedeemRequest r, EntitlementStore ent) =>
 {
     if (string.IsNullOrWhiteSpace(r.Code) || string.IsNullOrWhiteSpace(r.DeviceId)) return Results.BadRequest(new { error = "code and deviceId required" });
@@ -213,5 +261,7 @@ public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
 public sealed record BriefRequest(JsonElement Facts, string? Fallback);
 public sealed record RedeemRequest(string Code, string DeviceId);
+public sealed record StartRequest(string Email);
+public sealed record VerifyRequest(string Email, string Code, string DeviceId);
 public sealed record GrantRequest(string Email, int Months, string? Plan, string? Note);
 public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);

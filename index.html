@@ -626,7 +626,7 @@ S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {});
 S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
 // Devices set up before the shared backend existed have an empty address saved; adopt the default unless they chose "no backend".
 if (!S.backend && !S.backendOff) S.backend = DEFAULTS.backend;
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} if (typeof scheduleSync === 'function') scheduleSync(); }
 
 const $ = s => document.querySelector(s);
 const st = {
@@ -691,7 +691,7 @@ async function refreshAccount() {
     const r = await fetchT(BE() + '/auth/me', { headers: authHeaders() }, 10000);
     if (r.status === 401) { S.account = null; save(); applyProState(); return; }
     if (!r.ok) return;
-    const j = await r.json(); S.account = { ...S.account, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; save(); applyProState();
+    const j = await r.json(); S.account = { ...S.account, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; save(); applyProState(); pullSettings(false);
   } catch (e) {}
 }
 async function redeemCode(code) {
@@ -700,8 +700,50 @@ async function redeemCode(code) {
   const r = await fetchT(BE() + '/auth/redeem', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, deviceId: S.deviceId }) }, 15000);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || ('Could not activate (' + r.status + ')'));
-  S.account = { token: j.token, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; save(); applyProState();
+  S.account = { token: j.token, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; S.syncedAt = 0; save(); await pullSettings(true); applyProState();
   return j;
+}
+// Settings that travel with the account. Device-bound things (push id, device id, token, backend address, last fix) stay local.
+const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash']);
+const syncable = () => { const o = {}; for (const k of Object.keys(S)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; return o; };
+let syncTimer = null, syncBusy = false;
+function scheduleSync() { if (!S.account || !S.account.token || !BE()) return; clearTimeout(syncTimer); syncTimer = setTimeout(pushSettings, 4000); }
+async function pushSettings() {
+  if (syncBusy || !S.account || !S.account.token || !BE()) return;
+  const body = JSON.stringify(syncable()); if (body === S.syncedHash) return;
+  syncBusy = true;
+  try { const r = await fetchT(BE() + '/me/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body }, 10000); if (r.ok) { S.syncedHash = body; S.syncedAt = (await r.json()).updatedMs || Date.now(); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} } }
+  catch (e) {} finally { syncBusy = false; }
+}
+async function pullSettings(force) {
+  if (!S.account || !S.account.token || !BE()) return false;
+  try {
+    const r = await fetchT(BE() + '/me/settings', { headers: authHeaders() }, 10000); if (!r.ok) return false;
+    const j = await r.json(); if (!j.settings) { pushSettings(); return false; }
+    if (!force && j.updatedMs <= (S.syncedAt || 0)) return false;
+    for (const [k, v] of Object.entries(j.settings)) if (!SYNC_SKIP.has(k)) S[k] = v;
+    S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {}); S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {}); S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
+    S.syncedAt = j.updatedMs; S.syncedHash = JSON.stringify(syncable()); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+    if (typeof applyNight === 'function') applyNight(); if (typeof renderRangeButtons === 'function') { renderRangeButtons(); drawRings(); } if (typeof applyLayers === 'function') applyLayers(); if (typeof loadVoices === 'function') loadVoices(); if (typeof refreshAll === 'function') refreshAll();
+    return true;
+  } catch (e) { return false; }
+}
+async function startSignIn(email) {
+  if (!BE()) throw new Error('No backend address set');
+  const r = await fetchT(BE() + '/auth/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }, 15000);
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || ('Could not send a code (' + r.status + ')')); return j;
+}
+async function verifySignIn(email, code) {
+  if (!S.deviceId) { S.deviceId = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); save(); }
+  const r = await fetchT(BE() + '/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, code, deviceId: S.deviceId }) }, 15000);
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || ('Could not sign in (' + r.status + ')'));
+  S.account = { token: j.token, email: j.email, plan: j.plan, expiresMs: j.expiresMs, pro: j.pro, checkedAt: Date.now() }; S.syncedAt = 0; save();
+  const pulled = await pullSettings(true); applyProState(); return { ...j, pulled };
+}
+async function deleteAccount() {
+  if (!BE() || !S.account || !S.account.token) return;
+  const r = await fetchT(BE() + '/me', { method: 'DELETE', headers: authHeaders() }, 10000); if (!r.ok) throw new Error('Could not delete (' + r.status + ')');
+  S.account = null; S.pushId = null; S.syncedAt = 0; S.syncedHash = null; save(); applyProState();
 }
 async function signOut() {
   try { if (BE() && S.account && S.account.token) await fetchT(BE() + '/auth/signout', { method: 'POST', headers: authHeaders() }, 8000); } catch (e) {}
@@ -2653,11 +2695,18 @@ function openSettings(tab) {
       '<div class="row"><label>Backend address (optional — adds lightning, shared radar cache and alerts with the screen off)</label>' +
       '<input id="beUrl" type="url" placeholder="https://radar.tieroneehs.com" value="' + (S.backend || '').replace(/"/g, '&quot;') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="besave">Save address</button><button data-act="beclear">Use no backend</button></div><div id="beMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>') +
-    pane('account', (isPro()
-      ? '<div class="row"><div class="tl"><span class="pro">PRO</span> LeadTime Pro is active</div><div class="td">Signed in as ' + S.account.email + (S.account.expiresMs ? ' · renews or ends ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div><div class="btns"><button data-act="acct-refresh">Check again</button><button data-act="acct-signout">Sign out on this device</button></div></div>'
-      : '<div class="row"><div class="tl">' + (S.account && S.account.email ? 'Signed in as ' + S.account.email + ' — Pro is not active' : 'Free version') + '</div><div class="td">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '.</div></div>' +
-        '<div class="row"><label>Activation code</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button>' + (S.account && S.account.email ? '<button data-act="acct-signout">Sign out</button>' : '') + '</div><div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
-        '<div class="row" style="color:var(--muted);font-size:14px">Codes come with a Pro purchase or the tablet bundle, and work on every device you sign in on. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div>')) +
+    pane('account', (S.account && S.account.email
+      ? '<div class="row"><div class="tl">' + (isPro() ? '<span class="pro">PRO</span> LeadTime Pro is active' : 'Signed in — free version') + '</div><div class="td">' + S.account.email + (isPro() && S.account.expiresMs ? ' · Pro until ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div>' +
+        '<div class="td" style="margin-top:4px">Settings sync across your signed-in devices' + (S.syncedAt ? ' · last synced ' + new Date(S.syncedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '') + '.</div>' +
+        '<div class="btns"><button data-act="acct-refresh">Check again</button><button data-act="acct-signout">Sign out on this device</button></div></div>' +
+        (isPro() ? '' : '<div class="row"><label>Have a Pro activation code?</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div><div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div style="color:var(--muted);font-size:14px;margin-top:8px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div></div>') +
+        '<div class="row" style="color:var(--muted);font-size:14px">Delete account: removes your email, synced settings and alert subscriptions from the server. <button data-act="acct-delete" style="margin-left:6px;min-height:34px;font-size:13px">Delete my account…</button></div>'
+      : '<div class="row"><div class="tl">Sign in (optional)</div><div class="td">Keeps your settings across phone, tablet and desktop, and is where Pro lives. Nothing in the free app needs it.</div></div>' +
+        '<div class="row"><label>Email</label><input id="acctEmail" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="' + (st.signinEmail || '') + '" ' + inputStyle + '>' +
+        (st.signinSent ? '<label style="margin-top:10px">Code from the email</label><input id="acctLogin" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits" ' + inputStyle + '><div class="btns"><button data-act="acct-verify">Sign in</button><button data-act="acct-start">Send a new code</button></div>' : '<div class="btns"><button data-act="acct-start">Send me a code</button></div>') +
+        '<div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (st.signinSent ? 'Sent to ' + st.signinEmail + ' — check spam if it is slow.' : '') + '</div></div>' +
+        '<div class="row"><label>Or a Pro activation code</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div></div>' +
+        '<div class="row" style="color:var(--muted);font-size:14px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div>')) +
     pane('about', '<div class="diag" id="diag" style="border-top:0;margin-top:0;padding-top:4px"></div>' +
       '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite, tropical cyclones, tides and water temperature), NIFC (wildfires), USDA SNOTEL (snow depth), Open-Meteo (wind arrows, UV, modeled snow depth), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
     '<button class="done" data-act="close">Done</button>';
@@ -2701,6 +2750,9 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
   if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
+  if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings('account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
   if (b.dataset.act === 'acct-refresh') { refreshAccount().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'brief-now') { closeModal(); openBriefing(true); return; }
   if (b.dataset.act === 'brief-refresh') { openBriefing(true); return; }

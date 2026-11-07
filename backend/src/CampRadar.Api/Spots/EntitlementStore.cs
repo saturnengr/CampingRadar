@@ -29,6 +29,7 @@ public sealed class EntitlementStore
             CREATE TABLE IF NOT EXISTS codes(code TEXT PRIMARY KEY, email TEXT NOT NULL, expires_ms INTEGER NOT NULL, used_ms INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS tokens(token TEXT PRIMARY KEY, email TEXT NOT NULL, device_id TEXT NOT NULL, created_ms INTEGER NOT NULL, last_ms INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS tokens_email ON tokens(email);
+            CREATE TABLE IF NOT EXISTS settings(email TEXT PRIMARY KEY, json TEXT NOT NULL, updated_ms INTEGER NOT NULL);
             """);
     }
 
@@ -83,11 +84,57 @@ public sealed class EntitlementStore
         return code;
     }
 
+    /// <summary>Six-digit sign-in code, 10 minutes, bound to the email. Older unused login codes for the email are voided.</summary>
+    public string NewLoginCode(string email)
+    {
+        email = NormalizeEmail(email);
+        var code = RandomNumberGenerator.GetInt32(0, 1000000).ToString("D6");
+        using var c = Open();
+        Exec(c, "UPDATE codes SET used_ms=$n WHERE email=$e AND used_ms=0 AND length(code)=6", ("$n", Now), ("$e", email));
+        Exec(c, "INSERT INTO codes(code, email, expires_ms, created_ms) VALUES($c, $e, $x, $n)", ("$c", email + ":" + code), ("$e", email), ("$x", DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds()), ("$n", Now));
+        if (Get(email) is null) Grant(email, "free", 0, "signin", "");
+        return code;
+    }
+    /// <summary>How many login codes were issued for this email in the last 10 minutes (rate limiting).</summary>
+    public int RecentLoginCodes(string email)
+    {
+        using var c = Open(); using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM codes WHERE email=$e AND created_ms > $t AND code LIKE '%:%'";
+        cmd.Parameters.AddWithValue("$e", NormalizeEmail(email)); cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds());
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+    public DeviceToken? Verify(string email, string code, string deviceId) => RedeemKey(NormalizeEmail(email) + ":" + code.Trim(), deviceId);
+
+    public string? GetSettings(string email, out long updatedMs)
+    {
+        updatedMs = 0;
+        using var c = Open(); using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT json, updated_ms FROM settings WHERE email=$e"; cmd.Parameters.AddWithValue("$e", NormalizeEmail(email));
+        using var r = cmd.ExecuteReader(); if (!r.Read()) return null; updatedMs = r.GetInt64(1); return r.GetString(0);
+    }
+    public long PutSettings(string email, string json)
+    {
+        using var c = Open(); long now = Now;
+        Exec(c, "INSERT INTO settings(email, json, updated_ms) VALUES($e, $j, $n) ON CONFLICT(email) DO UPDATE SET json=$j, updated_ms=$n", ("$e", NormalizeEmail(email)), ("$j", json), ("$n", now));
+        return now;
+    }
+    /// <summary>Delete everything held for an email: tokens, settings, codes, the entitlement row.</summary>
+    public void DeleteAccount(string email)
+    {
+        email = NormalizeEmail(email);
+        using var c = Open();
+        foreach (var t in new[] { "tokens", "settings", "codes", "entitlements" }) Exec(c, $"DELETE FROM {t} WHERE email=$e", ("$e", email));
+    }
+
     /// <summary>Exchange a code for a device token. Returns null when the code is unknown, used or expired.</summary>
     public DeviceToken? Redeem(string code, string deviceId)
     {
         code = code.Trim().ToUpperInvariant().Replace(" ", "");
         if (code.Length == 8) code = code[..4] + "-" + code[4..];
+        return RedeemKey(code, deviceId);
+    }
+    private DeviceToken? RedeemKey(string code, string deviceId)
+    {
         using var c = Open();
         string? email = null;
         using (var cmd = c.CreateCommand())

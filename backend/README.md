@@ -20,6 +20,10 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
 | GET | `/lightning?lat&lon&minutes=30` | Counts within 10/20/30 mi, nearest strike, trend |
 | GET | `/lightning/recent?minLat&minLon&maxLat&maxLon` | Strikes in a box, for the map |
 | GET | `/status?lat&lon&hitMi=3&threshDbz=20` | Rain prediction + lightning + NWS alerts, with the same wording as the page |
+| POST | `/auth/start` · `/auth/verify` | Email sign-in: send a 6-digit code, exchange it for a device token |
+| POST | `/auth/redeem` | Activation code (admin or purchase) → device token |
+| GET/PUT | `/me/settings` · DELETE `/me` | Synced settings; delete the account |
+| GET | `/admin` | Admin dashboard (devices, Pro grants, health); needs the admin key |
 | POST | `/brief` | `{facts, fallback}` → a spoken-English briefing written by a language model (needs `Anthropic:ApiKey`) |
 | GET | `/push/vapid-public-key` | Key the browser needs to subscribe |
 | POST | `/push/subscribe` | `{subscription, lat, lon, prefs}` → `{id}` |
@@ -53,6 +57,13 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
   "Anthropic": { "ApiKey": "sk-ant-…", "Model": "claude-haiku-5-5" }
 }
 ```
+Add an `Smtp` block to turn on **email sign-in** (6-digit codes); any mailbox on the hosting account works, for example one created under the control panel's *Emails*:
+
+```json
+  "Smtp": { "Host": "mail.yourdomain.com", "Port": 587, "User": "no-reply@yourdomain.com", "Password": "…", "From": "LeadTime <no-reply@yourdomain.com>" }
+```
+Without it, people can still sign in with an activation code from the admin page (`/admin`), which is also where Pro is granted.
+
 `Anthropic:ApiKey` is optional: with it, the app's Briefing is written by a language model; without it the device composes the text itself. A key comes from console.anthropic.com; a briefing costs well under a cent.
 ```
 ```
