@@ -2697,6 +2697,19 @@ const QUICK_MESSAGES = {
 };
 const REPLY_CHIPS = { en: ['OK', '5 min', "Can't"], es: ['OK', '5 min', 'No puedo'] };
 const signedIn = () => !!(S.account && S.account.token && BE());
+const JOIN_BASE = location.origin + location.pathname.replace(/[^/]*$/, '');
+let qrLoading = null;
+function loadQr() { if (window.qrcode) return Promise.resolve(); if (qrLoading) return qrLoading; qrLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js'; sc.onload = res; sc.onerror = rej; document.head.appendChild(sc); }); return qrLoading; }
+async function showInvite(code, emailed) {
+  const es = lang() === 'es', link = JOIN_BASE + '?join=' + code, box = $('#famInviteBox'); if (!box) return;
+  let svg = '';
+  try { await loadQr(); const q = qrcode(0, 'M'); q.addData(link); q.make(); svg = q.createSvgTag({ cellSize: 5, margin: 2, scalable: true }); } catch (e) {}
+  box.innerHTML = '<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px"><div style="width:150px;height:150px;background:#fff;padding:6px;border-radius:10px">' + svg + '</div>' +
+    '<div><div style="font-size:26px;font-weight:800;letter-spacing:.12em">' + code + '</div><div class="muted" style="font-size:14px">' + (emailed ? (es ? 'Invitación enviada por correo. ' : 'Invitation emailed. ') : '') + (es ? 'Vale 7 días. Que escaneen el código o escriban las letras en Ajustes → Family después de iniciar sesión.' : 'Good for 7 days. They can scan the code or type the letters under Settings → Family after signing in.') + '</div>' +
+    '<div class="btns" style="margin-top:8px"><button class="mini" data-act="fam-copy" data-link="' + link + '">' + (es ? 'Copiar enlace' : 'Copy link') + '</button>' + (navigator.share ? '<button class="mini" data-act="fam-sharelink" data-link="' + link + '">' + (es ? 'Compartir…' : 'Share…') + '</button>' : '') + '</div></div></div>';
+}
+// Opened from a scanned invite: remember the code, and offer to join once signed in.
+st.pendingJoin = new URLSearchParams(location.search).get('join') || st.pendingJoin || null;
 const famApi = async (path, opts) => { const r = await fetchT(BE() + path, Object.assign({ headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()) }, opts || {}), 12000); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.message || j.error || ('Request failed (' + r.status + ')')); return j; };
 async function refreshFamily() {
   if (!signedIn()) { fam.info = null; fam.positions = []; drawPeople(); return null; }
@@ -2773,15 +2786,15 @@ function familyPane() {
     h += '<div class="row"><div class="tl">' + (es ? 'Crear un grupo' : 'Start a group') + (isPro() ? '' : ' <span class="pro">PRO</span>') + '</div><div class="td">' + (es ? 'Invita a familia y amigos por correo o con un código. Ellos obtienen las funciones Pro a través de ti mientras tu Pro esté activo.' : 'Invite family and friends by email or with a code. They get Pro features through you while your Pro is active.') + '</div>' +
       '<label>' + (es ? 'Tu nombre (como lo verán los demás)' : 'Your name (as others will see it)') + '</label><input id="famName" value="' + escapeHtml((S.account.name || '')) + '" placeholder="' + (es ? 'p. ej. Jeff' : 'e.g. Jeff') + '" ' + inputStyle + '>' +
       '<label style="margin-top:8px">' + (es ? 'Correo de la persona (opcional; si lo dejas vacío te damos un código para compartir)' : "Their email (optional; leave blank to get a code you can share any way you like)") + '</label><input id="famInviteEmail" type="email" placeholder="friend@example.com" ' + inputStyle + '>' +
-      '<div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar' : 'Invite') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
-      '<div class="row"><div class="tl">' + (es ? '¿Te invitaron?' : 'Were you invited?') + '</div><label>' + (es ? 'Código de invitación' : 'Invite code') + '</label><input id="famJoinCode" autocapitalize="characters" placeholder="XXXXXX" ' + inputStyle + '><label style="margin-top:8px">' + (es ? 'Tu nombre' : 'Your name') + '</label><input id="famJoinName" placeholder="' + (es ? 'p. ej. Ana' : 'e.g. Ana') + '" ' + inputStyle + '>' +
+      '<div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar' : 'Invite') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div id="famInviteBox"></div></div>' +
+      '<div class="row"><div class="tl">' + (es ? '¿Te invitaron?' : 'Were you invited?') + '</div><label>' + (es ? 'Código de invitación' : 'Invite code') + '</label><input id="famJoinCode" autocapitalize="characters" placeholder="XXXXXX" value="' + escapeHtml(st.pendingJoin || '') + '" ' + inputStyle + '><label style="margin-top:8px">' + (es ? 'Tu nombre' : 'Your name') + '</label><input id="famJoinName" placeholder="' + (es ? 'p. ej. Ana' : 'e.g. Ana') + '" ' + inputStyle + '>' +
       '<div class="btns"><button data-act="fam-join">' + (es ? 'Unirme' : 'Join') + '</button></div><div id="famJoinMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>';
     return h;
   }
   const me = g.me || {}, until = me.shareUntilMs ? new Date(me.shareUntilMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
   h += '<div class="row"><div class="tl">' + (g.isOwner ? (es ? 'Tu grupo' : 'Your group') : (es ? 'Grupo de ' : 'Group of ') + escapeHtml(g.ownerName)) + (g.ownerPro ? '' : ' <span class="pro" style="background:#ef5350;color:#fff">' + (es ? 'SIN PRO' : 'NO PRO') + '</span>') + '</div>' +
     '<table class="fam"><tbody>' + g.members.map(m => '<tr><td><b>' + escapeHtml(m.name) + '</b>' + (m.role === 'owner' ? ' <small>' + (es ? 'dueño' : 'owner') + '</small>' : '') + (m.email === me.email ? ' <small>(' + (es ? 'tú' : 'you') + ')</small>' : '') + '</td><td class="muted">' + (m.shareLocation ? (es ? 'compartiendo hasta ' : 'sharing until ') + new Date(m.shareUntilMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : (es ? 'no comparte' : 'not sharing')) + '</td><td>' + (g.isOwner && m.role !== 'owner' ? '<button class="mini" data-fam-remove="' + escapeHtml(m.email) + '">' + (es ? 'Quitar' : 'Remove') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table>' +
-    (g.isOwner ? '<div style="margin-top:10px"><input id="famInviteEmail" type="email" placeholder="' + (es ? 'correo de la persona (opcional)' : "their email (optional)") + '" ' + inputStyle + '><div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar a alguien' : 'Invite someone') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' : '') + '</div>';
+    (g.isOwner ? '<div style="margin-top:10px"><input id="famInviteEmail" type="email" placeholder="' + (es ? 'correo de la persona (opcional)' : "their email (optional)") + '" ' + inputStyle + '><div class="btns"><button data-act="fam-invite">' + (es ? 'Invitar a alguien' : 'Invite someone') + '</button></div><div id="famMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div id="famInviteBox"></div></div>' : '') + '</div>';
   h += '<div class="row"><div class="toggle"><div><div class="tl">' + (es ? 'Compartir mi ubicación con el grupo' : 'Share my location with the group') + '</div><div class="td">' + (sharing() ? (es ? 'Compartiendo hasta las ' + until + '. ' : 'Sharing until ' + until + '. ') : '') + (es ? 'Solo mientras la app está en pantalla, se apaga sola a la hora elegida, y las posiciones se borran a las 24 horas. Los demás te ven en su mapa con tu nombre.' : 'Only while the app is on screen; turns itself off at the chosen time; positions are deleted after 24 hours. Others see you on their map with your name.') + '</div></div><button class="sw ' + (sharing() ? 'on' : '') + '" data-act="fam-share" role="switch"></button></div>' +
     '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px"><label style="margin:0">' + (es ? 'Durante' : 'For') + '</label><select id="famHours" ' + inputStyle.replace('width:100%', 'width:auto') + '>' + [2, 4, 8, 12, 24].map(hh => '<option value="' + hh + '"' + ((S.famHours || 8) === hh ? ' selected' : '') + '>' + hh + ' h</option>').join('') + '</select><input id="famName" value="' + escapeHtml(me.name || '') + '" placeholder="' + (es ? 'tu nombre' : 'your name') + '" ' + inputStyle.replace('width:100%', 'width:160px') + '></div></div>';
   const qm = QUICK_MESSAGES[lang()] || QUICK_MESSAGES.en;
@@ -2807,13 +2820,15 @@ async function familyAction(b) {
       say_('#famMsg', es ? 'Invitando…' : 'Inviting…');
       const j = await famApi('/group/invite', { method: 'POST', body: JSON.stringify({ email: ($('#famInviteEmail').value || '').trim(), myName: name }) });
       await refreshFamily(); openSettings('family');
-      setTimeout(() => say_('#famMsg', (j.emailed ? (es ? 'Invitación enviada por correo. ' : 'Invitation emailed. ') : '') + (es ? 'Código de invitación: ' : 'Invite code: ') + j.code + (es ? ' (7 días). La persona lo escribe en Ajustes → Familia después de iniciar sesión.' : ' (7 days). They enter it under Settings → Family after signing in.')), 50);
+      setTimeout(() => showInvite(j.code, j.emailed), 50);
       return true;
     }
+    if (act === 'fam-copy') { try { await navigator.clipboard.writeText(b.dataset.link); b.textContent = es ? 'Copiado' : 'Copied'; } catch (e) { prompt(es ? 'Copia este enlace' : 'Copy this link', b.dataset.link); } return true; }
+    if (act === 'fam-sharelink') { try { await navigator.share({ title: 'LeadTime', text: es ? 'Únete a mi grupo de LeadTime' : 'Join my LeadTime group', url: b.dataset.link }); } catch (e) {} return true; }
     if (act === 'fam-join') {
       const name = ($('#famJoinName').value || '').trim(); if (name) { S.account.name = name; save(); }
       say_('#famJoinMsg', es ? 'Uniéndote…' : 'Joining…');
-      await famApi('/group/join', { method: 'POST', body: JSON.stringify({ code: $('#famJoinCode').value, myName: name }) });
+      await famApi('/group/join', { method: 'POST', body: JSON.stringify({ code: $('#famJoinCode').value, myName: name }) }); st.pendingJoin = null; try { history.replaceState(null, '', location.pathname); } catch (e) {}
       await refreshFamily(); refreshAccount(); openSettings('family'); return true;
     }
     if (act === 'fam-share') {
@@ -2946,7 +2961,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
-  if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings('account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
   if (b.dataset.act === 'acct-refresh') { refreshAccount().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'brief-now') { closeModal(); openBriefing(true); return; }
@@ -3028,6 +3043,7 @@ applySentinel();
 // Opened from a morning-briefing notification: the service worker passes the text; read it as soon as weather is up.
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
 if (new URLSearchParams(location.search).get('brief') === '1') setTimeout(() => { if (!st.pushBrief) openBriefing(true); }, 4000);
+if (st.pendingJoin) setTimeout(() => openSettings(signedIn() ? 'family' : 'account'), 2500);
 updatePickHint();
 renderStatus();
 keepAwake();
