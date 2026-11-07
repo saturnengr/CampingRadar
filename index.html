@@ -485,6 +485,16 @@ function bearingDeg(e, n) { return (Math.atan2(e, n) * 180 / Math.PI + 360) % 36
 
 /* Project every rain cell forward along its motion and see if it passes over
    the user (cx, cy in fine-cell units). Returns arrival estimate + what's passing. */
+// Nearest echo of any strength (the map draws everything from about 5 dBZ) — used so the status never says "clear" when the map shows returns.
+function nearestEcho(grid, cellKm, cx, cy, thresh, maxRing) {
+  const cellMi = cellKm * 0.621371; let best = null;
+  for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
+    const d = grid.d[y * grid.w + x]; if (d < thresh) continue;
+    const e = (x + 0.5 - cx) * cellMi, n = -(y + 0.5 - cy) * cellMi, dist = Math.hypot(e, n);
+    if (dist <= maxRing && (!best || dist < best.distMi)) best = { distMi: dist, bearing: bearingDeg(e, n), dbz: d };
+  }
+  return best;
+}
 function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
@@ -650,7 +660,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07';
+const APP_VERSION = '2026.11.07b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -862,7 +872,7 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
   getTileUrl(c) {
     // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
     const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
-    if (BE() && st.timesFromBackend) return BE() + '/radar/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png';
+    if (BE() && st.timesFromBackend) return BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png';
     return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t);
   }
 });
@@ -877,7 +887,7 @@ async function updateFrameTimes() {
     st.timesFromBackend = false;
     if (BE()) {   // the backend caches tiles for everyone; prefer it, fall back to NOAA directly
       try {
-        const r = await fetchT(BE() + '/radar/times', {}, 10000);
+        const r = await fetchT(BE() + '/mrms/times', {}, 10000);
         const j = await r.json();
         if (j.times && j.times.length) { times = j.times; st.radarIds = null; st.timesFromBackend = true; st.backendOk = true; }
       } catch (e) { st.backendOk = false; }
@@ -1370,6 +1380,7 @@ async function runNowcast() {
     const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, S.threshDbz);
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
       { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
+    res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     if (res.hit) {
       // the trend of the storm that arrives first; if several storms will hit, the biggest contributor wins the wording
       let tr = trends.get(res.hit.blob) || null;
@@ -1728,7 +1739,8 @@ function computeStatus() {
     out.main = 'Rain ' + Math.round(p.distMi) + ' mi ' + compass(p.bearing) + ' — ' + (motion.ok && motion.speedMph >= 3 ? 'passing to the ' + compassLong(p.passBearing) : 'not heading your way');
     out.sub = (motion.ok && motion.speedMph >= 3 ? 'Closest ≈ ' + Math.max(1, Math.round(p.closestMi)) + ' mi · ' : '') + (moving || 'Movement unclear') + (nt && nt.word === 'strengthening' ? ' · nearest storm strengthening' : nt && nt.word === 'weakening' ? ' · nearest storm weakening' : '');
   } else {
-    out.cls = 'green'; out.main = 'No rain heading your way'; out.sub = res.nearest ? '' : 'Clear within 50 miles';
+    out.cls = 'green'; out.main = 'No rain heading your way';
+    out.sub = res.nearest ? '' : res.faint ? 'Only very light echoes within 50 mi (nearest ' + Math.max(1, Math.round(res.faint.distMi)) + ' mi ' + compass(res.faint.bearing) + ') — below your "count as rain" level' : 'Clear within 50 miles';
   }
   return overlayLightning(out);
 }
@@ -2687,7 +2699,7 @@ const SETTINGS = {
   alerts: [
     ['sound', 'Sound (chimes and warning alarm)', [[true, 'On'], [false, 'Off']]],
     ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
-    ['threshDbz', 'Count as rain', [[20, 'Light and up'], [30, 'Moderate and up']]],
+    ['threshDbz', 'Count as rain', [[10, 'Any echo'], [20, 'Light and up'], [30, 'Moderate and up']]],
   ],
   data: [
     ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
@@ -2745,12 +2757,12 @@ function drawPeople() {
     const initial = (p.name || '?').trim()[0].toUpperCase();
     const icon = L.divIcon({ className: '', html: '<div class="person' + (stale ? ' stale' : '') + '"><span>' + initial + '</span></div>', iconSize: [34, 34], iconAnchor: [17, 17] });
     const dMi = st.loc ? distMi(st.loc, { lat: p.lat, lon: p.lon }) : null;
-    const brg = st.loc ? compass(bearingDeg(st.loc.lat, st.loc.lon, p.lat, p.lon)) : '';
+    const brg = st.loc ? compass(bearingLL(st.loc.lat, st.loc.lon, p.lat, p.lon)) : '';
     L.marker([p.lat, p.lon], { icon, zIndexOffset: 900 }).bindPopup('<b>' + escapeHtml(p.name) + '</b><br>' + (lang() === 'es' ? 'hace ' : '') + agoWord(p.ms) + (lang() === 'es' ? '' : ' ago') + (dMi != null ? ' · ' + (dMi < 1 ? Math.round(dMi * 5280) + ' ft' : dMi.toFixed(1) + ' mi') + ' ' + brg : '') + '<br><button class="mini" data-person-weather="' + p.lat + ',' + p.lon + '">' + (lang() === 'es' ? 'Tiempo allí' : 'Weather there') + '</button>').addTo(peopleLayer);
   }
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-function bearingDeg(lat1, lon1, lat2, lon2) { const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180, Δλ = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(Δλ) * Math.cos(φ2), x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
+function bearingLL(lat1, lon1, lat2, lon2) { const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180, Δλ = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(Δλ) * Math.cos(φ2), x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-person-weather]'); if (!b || !BE()) return;
   const [lat, lon] = b.dataset.personWeather.split(',').map(Number); b.textContent = '…';

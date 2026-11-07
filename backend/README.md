@@ -2,7 +2,7 @@
 
 ASP.NET Core 8 Web API that does the shared work for every Camp Radar device:
 
-- **Radar cache** — fetches NOAA MRMS quality-controlled reflectivity once per scan and serves Web-Mercator tiles (`/radar/tile/{time}/{z}/{x}/{y}.png`). NOAA data, public domain.
+- **Radar cache** — fetches NOAA MRMS quality-controlled reflectivity once per scan and serves Web-Mercator tiles (`/mrms/tile/{time}/{z}/{x}/{y}.png`). NOAA data, public domain.
 - **Lightning** — ingests GOES-19 GLM flash files from AWS Open Data every minute (no credentials), keeps the last hour in memory, answers "strikes within 10/20/30 miles of here".
 - **Rain arrival** — the same storm-tracking engine as the page, run on the server (`/status`).
 - **Push alerts** — Web Push (VAPID) to phones and tablets that opted in, even with the screen off: rain arriving, lightning within 10 mi, and life-safety NWS warnings — tornado, severe thunderstorm, flash flood / flood, hurricane / tropical storm / storm surge, extreme wind, tsunami, blizzard / ice storm / winter storm, extreme cold, avalanche — which are never snoozed.
@@ -15,8 +15,8 @@ GitHub Actions builds and tests it on every push and attaches `campradar-api.zip
 | --- | --- | --- |
 | GET | `/health` | Radar scan count, lightning flashes in store, worker heartbeat, push status |
 | GET | `/tick` | Runs one worker cycle; the host's Scheduled Task calls this every 1–2 min |
-| GET | `/radar/times` | Scan times (epoch ms), the latest, and the six loop frames |
-| GET | `/radar/tile/{t}/{z}/{x}/{y}.png` | 512-px radar tile for scan `t` |
+| GET | `/mrms/times` | Scan times (epoch ms), the latest, and the six loop frames |
+| GET | `/mrms/tile/{t}/{z}/{x}/{y}.png` | 512-px radar tile for scan `t` |
 | GET | `/lightning?lat&lon&minutes=30` | Counts within 10/20/30 mi, nearest strike, trend |
 | GET | `/lightning/recent?minLat&minLon&maxLat&maxLon` | Strikes in a box, for the map |
 | GET | `/status?lat&lon&hitMi=3&threshDbz=20` | Rain prediction + lightning + NWS alerts, with the same wording as the page |

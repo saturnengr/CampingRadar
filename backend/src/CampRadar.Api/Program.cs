@@ -85,8 +85,9 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
 app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
 
 // ---------- radar ----------
-app.MapGet("/radar/times", (MrmsClient m) => new { times = m.Times, latest = m.Latest, loop = m.LoopFrames(new[] { 50, 40, 30, 20, 10, 0 }), refreshed = m.TimesRefreshedAt });
-app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", async (long t, int z, int x, int y, MrmsClient m, HttpResponse res, CancellationToken ct) =>
+// Served under /mrms: on the production host the app lives in a folder named "radar", and IIS answers /radar/* itself (500) before the app sees it.
+object RadarTimes(MrmsClient m) => new { times = m.Times, latest = m.Latest, loop = m.LoopFrames(new[] { 50, 40, 30, 20, 10, 0 }), refreshed = m.TimesRefreshedAt };
+async Task<IResult> RadarTile(long t, int z, int x, int y, MrmsClient m, HttpResponse res, CancellationToken ct)
 {
     if (z < 0 || z > 10) return Results.BadRequest("zoom 0-10");
     if (m.Times.Count == 0) await m.RefreshTimesAsync(ct);
@@ -95,7 +96,11 @@ app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", async (long t, in
     var png = await m.TileAsync(t, z, x, y, ct);
     res.Headers.CacheControl = t == m.Latest ? "public, max-age=60" : "public, max-age=86400, immutable";
     return Results.Bytes(png, "image/png");
-});
+}
+app.MapGet("/mrms/times", (MrmsClient m) => RadarTimes(m));
+app.MapGet("/mrms/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
+app.MapGet("/radar/times", (MrmsClient m) => RadarTimes(m));
+app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
 
 // ---------- lightning ----------
 app.MapGet("/lightning", (HttpRequest req, EntitlementStore ent, double lat, double lon, LightningStore l, int minutes = 30) => RequirePro(req, ent) ?? Results.Ok(l.Summarize(lat, lon, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Math.Clamp(minutes, 5, 60))));

@@ -22,6 +22,7 @@ public sealed class RainStatus
     public bool Ring30 { get; set; }
     public bool Ring50 { get; set; }
     public Nearest? Nearest { get; set; }
+    public Nearest? Faint { get; set; }    // nearest echo of any strength (≥5 dBZ) within 50 mi
     public Passing? Passing { get; set; }
     public object? Motion { get; set; }
     public object? Trends { get; set; }
@@ -136,6 +137,7 @@ public sealed class StatusService
         if (p.NearestBlob != 0 && trends.TryGetValue(p.NearestBlob, out var nt)) p.NearestTrend = nt;
         r.Trends = new { strengthening = trends.Values.Count(t => t.Word == "strengthening"), weakening = trends.Values.Count(t => t.Word == "weakening"), steady = trends.Values.Count(t => t.Word == "steady"), fresh = trends.Values.Count(t => t.Word == "new"), arriving = p.Hit?.Trend?.Word, fizzles = p.Hit?.Fizzles ?? false };
         r.Ring10 = p.Ring10; r.Ring30 = p.Ring30; r.Ring50 = p.Ring50; r.Nearest = p.Nearest; r.Passing = p.Passing;
+        r.Faint = NearestEcho(fine[2], fineKm, c, c, 5, 50);
         r.Motion = new { motion.Ok, motion.Reason, motion.SpeedMph, motion.HeadingDeg, motion.Conf, Regions = motion.Regions.Count(x => x.Ok) };
         Describe(r, p, motion);
         return r;
@@ -173,7 +175,20 @@ public sealed class StatusService
             r.Sub = (mv ? $"Closest ≈ {Math.Max(1, Math.Round(q.ClosestMi))} mi · " : "") + (moving.Length > 0 ? moving : "Movement unclear")
                 + (p.NearestTrend?.Word == "strengthening" ? " · nearest storm strengthening" : p.NearestTrend?.Word == "weakening" ? " · nearest storm weakening" : "");
         }
-        else { r.Color = "green"; r.Level = "none"; r.Main = "No rain heading your way"; r.Sub = p.Nearest is null ? "Clear within 50 miles" : ""; }
+        else { r.Color = "green"; r.Level = "none"; r.Main = "No rain heading your way"; r.Sub = p.Nearest is not null ? "" : r.Faint is { } fe ? $"Only very light echoes within 50 mi (nearest {Math.Max(1, Math.Round(fe.DistMi))} mi {Compass(fe.Bearing)}) — below the rain threshold" : "Clear within 50 miles"; }
+    }
+
+    /// <summary>Nearest cell at or above thresh within maxRing miles, any strength; mirrors the page's nearestEcho().</summary>
+    private static Nearest? NearestEcho(DbzGrid g, double cellKm, double cx, double cy, double thresh, double maxRing)
+    {
+        double cellMi = cellKm * 0.621371; Nearest? best = null;
+        for (int y = 0; y < g.H; y++) for (int x = 0; x < g.W; x++)
+        {
+            double d = g.D[y * g.W + x]; if (d < thresh) continue;
+            double e = (x + 0.5 - cx) * cellMi, n = -(y + 0.5 - cy) * cellMi, dist = Math.Sqrt(e * e + n * n);
+            if (dist <= maxRing && (best is null || dist < best.DistMi)) best = new Nearest(dist, (Math.Atan2(e, n) * 180 / Math.PI + 360) % 360, d);
+        }
+        return best;
     }
 
     private static readonly string[] Dirs = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
