@@ -171,12 +171,11 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 .done{margin-top:12px;width:100%;background:var(--accent);border-color:var(--accent2);font-weight:750}
 
 /* ---- tablets in landscape (8–11 in): two columns of map buttons so they fit above the bottom edge ---- */
-@media (min-width:861px) and (max-height:900px){
-  #controls{display:grid;grid-template-columns:62px 62px;gap:8px;top:12px;right:12px}
+/* tablets and desktops: one column of buttons down the right edge, zoom at the bottom of it */
+@media (min-width:601px) and (min-height:521px){
   #controls .gap{display:none}
-  #controls button{height:52px}
-  #zoomCtl{right:152px}
-  #legend{right:152px}
+  #zoomCtl{right:12px;top:calc(12px + 5 * 64px)}
+  #legend{right:12px;bottom:26px}
 }
 
 /* ---- phones: portrait (narrow) and landscape (short) ---- */
@@ -239,13 +238,14 @@ body.side #nowTemp{font-size:56px}
 body.side #days{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 body.side .day{width:auto;flex:none}
 body.side #side::after{content:"";flex:1;order:9}
-/* map buttons move into the sidebar under the forecast */
-body.side #sideCtl{order:3;display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
-body.side #sideCtl #zoomCtl,body.side #sideCtl #controls{position:static;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;right:auto;top:auto;left:auto;bottom:auto}
-body.side #sideCtl #zoomCtl{grid-template-columns:1fr 1fr}
-body.side #sideCtl #controls .gap{display:none}
-body.side #sideCtl button{width:auto;height:52px}
-body.side #legend{right:12px}
+/* watches & warnings pills under the forecast */
+#wwRow{display:none;flex-wrap:wrap;gap:6px;padding:6px 14px;border-bottom:1px solid var(--line)}
+#wwRow.has{display:flex}
+body.side #wwRow{order:3;border-bottom:0;padding:8px 14px 12px}
+.ww{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:750;color:#fff;border:2px solid transparent;background:#555;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+.ww.watch{background:transparent;border-style:dashed}
+.ww.here{box-shadow:0 0 0 2px #fff inset}
+@media (max-width:600px){#wwRow{padding:4px 8px}.ww{min-height:30px;font-size:13px;padding:0 10px}}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
@@ -266,6 +266,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   </div>
   <div id="days"></div>
 </header>
+<div id="wwRow"></div>
 
 <div id="warnbar" hidden>
   <div id="warnText"></div>
@@ -289,10 +290,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
 <main id="mapwrap">
   <div id="map"></div>
   <div id="controls">
-    <button data-range="10">10<small>mi</small></button>
-    <button data-range="30">30<small>mi</small></button>
-    <button data-range="50">50<small>mi</small></button>
-    <div class="gap"></div>
+    <button id="btnRange" title="Range: tap to cycle">30<small>mi</small></button>
     <button id="btnCenter" title="Re-center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
     <button id="btnPlay" title="Play/pause radar loop"></button>
     <button id="btnBrief" title="Spoken briefing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
@@ -691,7 +689,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07h';
+const APP_VERSION = '2026.11.07i';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -967,7 +965,7 @@ const RANGE_SETS = { '10-30-50': [10, 30, 50], '5-10-30': [5, 10, 30], '2-5-10':
 const ranges = () => RANGE_SETS[S.rangeSet] || RANGE_SETS['10-30-50'];
 function renderRangeButtons() {
   const rs = ranges(); if (!rs.includes(S.range)) S.range = rs[1];
-  document.querySelectorAll('[data-range]').forEach((b, i) => { b.dataset.range = rs[i]; b.innerHTML = rs[i] + '<small>mi</small>'; b.classList.toggle('on', rs[i] === S.range); });
+  const b = $('#btnRange'); b.innerHTML = S.range + '<small>mi · tap</small>'; b.classList.add('on');
 }
 function drawRings() {
   ringLayer.clearLayers();
@@ -997,10 +995,7 @@ function applyLayout() {
   const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
   document.body.classList.toggle('side', side);
   document.body.classList.toggle('side-right', side && S.layout === 'right');
-  // the zoom and range/briefing/settings buttons live in the sidebar when there is one, on the map otherwise
-  let sc = $('#sideCtl');
-  if (side) { if (!sc) { sc = document.createElement('div'); sc.id = 'sideCtl'; $('#side').appendChild(sc); } if ($('#controls').parentElement !== sc) { sc.appendChild($('#controls')); sc.appendChild($('#zoomCtl')); } }
-  else if (sc) { const mw = $('#mapwrap'); mw.insertBefore($('#controls'), $('#updated')); mw.insertBefore($('#zoomCtl'), $('#updated')); sc.remove(); }
+  if (typeof renderWwPills === 'function') renderWwPills();
   setTimeout(checkMapSize, 50);
 }
 window.addEventListener('resize', applyLayout);
@@ -1016,16 +1011,16 @@ function fitRange() {
   if (!st.loc) return;
   if (!pinged) { pinged = true; setTimeout(() => pingBackend(true), 1500); }
   map.fitBounds(L.latLng(st.loc.lat, st.loc.lon).toBounds(S.range * MI * 2 * 1.06), { animate: true, ...mapPadding() });
-  document.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('on', +b.dataset.range === S.range));
+  renderRangeButtons();
 }
 renderRangeButtons();
 applyLayout();
-document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { S.range = +b.dataset.range; save(); drawRings(); fitRange(); }));
+$('#btnRange').addEventListener('click', () => { const rs = ranges(); S.range = rs[(rs.indexOf(S.range) + 1) % rs.length]; save(); drawRings(); fitRange(); });
 $('#btnCenter').addEventListener('click', fitRange);
 function manualZoom(dir) {
   dir > 0 ? map.zoomIn(1) : map.zoomOut(1);
   st.lastTouch = Date.now();   // drifts back to the chosen range after 2 min, like a pinch
-  document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('on'));
+  $('#btnRange').classList.remove('on');
 }
 $('#zoomIn').addEventListener('click', () => manualZoom(1));
 $('#zoomOut').addEventListener('click', () => manualZoom(-1));
@@ -1314,7 +1309,7 @@ async function refreshAlerts() {
     const j = await nws(NWS + '/alerts/active?point=' + st.loc.lat.toFixed(4) + ',' + st.loc.lon.toFixed(4));
     st.alerts = (j.features || []).map(f => ({ id: f.properties.id, event: f.properties.event, headline: f.properties.headline,
       desc: f.properties.description, instr: f.properties.instruction, ends: f.properties.ends || f.properties.expires, geom: f.geometry }));
-    st.alertsAt = Date.now(); st.alertsErr = null;
+    st.alertsAt = Date.now(); st.alertsErr = null; if (typeof renderWwPills === 'function') renderWwPills();
   } catch (e) { st.alertsErr = e.message; }
   renderAlerts();
   try { if (st.alerts.some(a => TROPICAL_EVENTS.test(a.event)) !== map.hasLayer(tropicalLayer)) applyLayers(); } catch (e) {}
@@ -1606,7 +1601,7 @@ async function refreshHazards() {
   if (L_.gauges) tasks.push(loadGauges(bb)); if (L_.fire || L_.rx) tasks.push(loadFires(bb, b)); if (L_.storms || L_.flood || L_.firewx) tasks.push(loadHazardAlerts(b));
   try { await Promise.all(tasks); st.hz.err = null; } catch (e) { st.hz.err = e.message; }
   st.hz.at = Date.now();
-  summarizeHazards(); renderLegend();
+  summarizeHazards(); renderLegend(); renderWwPills();
   const s = renderStatus(); handleHazardEvents();
 }
 async function loadGauges(bb) {
@@ -1690,9 +1685,36 @@ async function loadHazardAlerts(b) {
     lyr.bindPopup('<b>' + esc(p.event) + '</b><br>' + esc(p.headline || '') + (p.ends ? '<br><small>Until ' + clock(Date.parse(p.ends)) + ' ' + fmtDate(Date.parse(p.ends)) + '</small>' : ''));
     lyr.addTo(isStorm ? stormLayer : isFire ? firewxLayer : floodLayer);
     const c = lyr.getBounds().getCenter();
-    (isStorm ? st.hz.storms : isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event) });
+    (isStorm ? st.hz.storms : isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event), props: p, color: isStorm ? STORM_COLORS[p.event] : isFire ? '#ff8a65' : '#1e88e5' });
   }
 }
+// Pills under the forecast: every watch/warning drawn in view (storms, floods, fire weather) plus any alert for your spot. Tap for the full text.
+function renderWwPills() {
+  const row = $('#wwRow'); if (!row) return;
+  const list = [].concat(st.hz.storms || [], st.hz.floodAlerts || [], st.hz.firewx || []);
+  const seen = new Map();
+  for (const a of list) { const k = a.props && a.props.id || a.event + (a.headline || ''); if (!seen.has(k)) seen.set(k, a); }
+  for (const a of (st.alerts || [])) { const k = a.id || a.event; if (!seen.has(k)) seen.set(k, { event: a.event, headline: a.headline, props: { headline: a.headline, description: a.desc, instruction: a.instr, ends: a.ends }, color: STORM_COLORS[a.event] || '#1e88e5', here: true }); }
+  const here = st.loc ? L.latLng(st.loc.lat, st.loc.lon) : null;
+  const items = [...seen.values()].map(a => ({ ...a, here: a.here || !!(here && a.bounds && a.bounds.contains(here)) }))
+    .sort((a, b) => (b.here - a.here) || ((/Warning/.test(b.event)) - (/Warning/.test(a.event))));
+  st.wwPills = items;
+  row.innerHTML = items.slice(0, 12).map((a, i) => '<button class="ww' + (/Warning/.test(a.event) ? '' : ' watch') + (a.here ? ' here' : '') + '" data-ww="' + i + '" style="' + (/Warning/.test(a.event) ? 'background:' + a.color : 'border-color:' + a.color) + '">' + esc(a.event) + (a.here ? ' · here' : '') + '</button>').join('');
+  row.classList.toggle('has', items.length > 0);
+}
+$('#wwRow').addEventListener('click', e => {
+  const b = e.target.closest('[data-ww]'); if (!b) return;
+  const a = st.wwPills[+b.dataset.ww]; if (!a) return;
+  const p = a.props || {}, ends = p.ends || p.expires;
+  $('#sheet').innerHTML = '<h2 style="color:' + a.color + '">' + esc(a.event) + '</h2>' +
+    (p.headline ? '<div class="row" style="font-weight:700">' + esc(p.headline) + '</div>' : '') +
+    (p.areaDesc ? '<div class="row" style="color:var(--muted);font-size:14px">' + esc(p.areaDesc) + '</div>' : '') +
+    (ends ? '<div class="row" style="font-size:14px">Until ' + clock(Date.parse(ends)) + ' ' + fmtDate(Date.parse(ends)) + '</div>' : '') +
+    (p.description ? '<div class="row" style="white-space:pre-wrap;font-size:15px;line-height:1.35">' + esc(p.description) + '</div>' : '') +
+    (p.instruction ? '<div class="row" style="white-space:pre-wrap;font-size:15px;line-height:1.35;border-left:3px solid ' + a.color + ';padding-left:10px">' + esc(p.instruction) + '</div>' : '') +
+    (a.bounds ? '<div class="btns"><button data-act="ww-show" data-ww="' + b.dataset.ww + '">Show on map</button><button class="done" data-act="close">Done</button></div>' : '<button class="done" data-act="close">Done</button>');
+  openModal();
+});
 function summarizeHazards() {
   const n = {}; if (!st.loc) { st.hz.nearest = n; return; }
   const here = { lat: st.loc.lat, lon: st.loc.lon }, pt = L.latLng(st.loc.lat, st.loc.lon);
@@ -3148,6 +3170,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
   if (b.dataset.act === 'acct-refresh') { refreshAccount().then(() => openSettings('account')); return; }
+  if (b.dataset.act === 'ww-show') { const a = st.wwPills[+b.dataset.ww]; closeModal(); if (a && a.bounds) { st.lastTouch = Date.now(); map.fitBounds(a.bounds.pad(0.2)); } return; }
   if (b.dataset.act === 'upd-check') { $('#updMsg').textContent = 'Checking…'; checkForUpdate(true).then(() => { $('#updMsg').textContent = upd.pending ? 'A newer version is on the server — tap Reload the app.' : 'You have the latest version (' + APP_VERSION + ').'; }); return; }
   if (b.dataset.act === 'upd-reload') { applyUpdate(); return; }
   if (b.dataset.act === 'brief-now') { closeModal(); openBriefing(true); return; }
