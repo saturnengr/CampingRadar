@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-title" content="Camp Radar">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-:root{--chrome:#0d141b;--chrome2:#16212c;--text:#eef3f7;--muted:#9fb0bf;--line:#2a3846;--accent:#2f7dd1;--accent2:#7cc4ff}
+:root{--navpad:env(safe-area-inset-bottom,0px);--chrome:#0d141b;--chrome2:#16212c;--text:#eef3f7;--muted:#9fb0bf;--line:#2a3846;--accent:#2f7dd1;--accent2:#7cc4ff}
 html,body{margin:0;height:100%;background:var(--chrome);color:var(--text);
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent;overflow:hidden;user-select:none}
 body{display:flex;flex-direction:column;height:100vh;height:100dvh}
@@ -185,7 +185,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 
 /* ---- phones: portrait (narrow) and landscape (short) ---- */
 @media (max-width:600px),(max-height:520px){
-  body{padding-top:env(safe-area-inset-top)}
+  body{padding-top:env(safe-area-inset-top);padding-bottom:var(--navpad)}
+  #mapwrap{margin-bottom:calc(-1 * var(--navpad))}
   #nowTemp{font-size:46px;letter-spacing:-1px}
   #nowCond{font-size:17px}#nowWind{font-size:15px}#nowPlace{font-size:13px}
   .day{padding:4px 4px 3px;border-radius:10px}
@@ -197,7 +198,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #warnbar button{min-height:38px;font-size:14px}
   /* map controls become a toolbar along the bottom */
   .leaflet-control-attribution{white-space:nowrap}
-  #controls{top:auto;bottom:calc(22px + env(safe-area-inset-bottom));left:8px;right:8px;flex-direction:row;gap:5px}
+  #controls{top:auto;bottom:calc(22px + var(--navpad));left:8px;right:8px;flex-direction:row;gap:5px}
   #controls .gap{display:none}
   #controls button{flex:1;width:auto;min-width:0;height:50px;font-size:16px}
   #controls button small{font-size:10px}
@@ -205,9 +206,9 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #zoomCtl{right:8px;top:8px;gap:6px}
   #zoomCtl button{width:48px;height:46px;font-size:26px}
   #updated{top:8px;left:8px;font-size:12px;padding:4px 7px}
-  #frameInfo{left:8px;bottom:calc(80px + env(safe-area-inset-bottom));font-size:13px;padding:5px 9px}
-  #soundChip{left:8px;bottom:calc(120px + env(safe-area-inset-bottom));min-height:40px;font-size:14px}
-  #pickHint{top:auto;bottom:calc(122px + env(safe-area-inset-bottom));white-space:normal;max-width:calc(100% - 24px);font-size:15px;padding:6px 6px 6px 12px}
+  #frameInfo{left:8px;bottom:calc(80px + var(--navpad));font-size:13px;padding:5px 9px}
+  #soundChip{left:8px;bottom:calc(120px + var(--navpad));min-height:40px;font-size:14px}
+  #pickHint{top:auto;bottom:calc(122px + var(--navpad));white-space:normal;max-width:calc(100% - 24px);font-size:15px;padding:6px 6px 6px 12px}
   .sheetwrap{width:100%}
   .sheet{width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:12px 14px 18px}
   #modal{align-items:flex-end}
@@ -671,7 +672,7 @@ const BEACH_EVENTS = /Rip Current|High Surf|Beach Hazards|Coastal Flood|Small Cr
 const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar loop
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
-const DEFAULTS = { layout: 'top', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
+const DEFAULTS = { layout: 'top', bottomGap: 'auto', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { storms: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
@@ -701,7 +702,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07l';
+const APP_VERSION = '2026.11.07m';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1003,6 +1004,15 @@ function mapPadding() {
 // The banner changes height after the forecast loads (on phones the day strip wraps to its own row), which shrinks the
 // map underneath it. Leaflet only watches the window, so tell it, and re-fit unless the user has just been panning.
 // Sidebar layout only when the window is wide enough; the phone CSS (≤600 px) always stacks.
+// Android draws installed apps edge-to-edge under its navigation bar; when the browser reports no safe-area inset we assume the 48 px three-button bar.
+function applyBottomGap() {
+  const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;bottom:0;height:env(safe-area-inset-bottom,0px);visibility:hidden'; document.body.appendChild(probe);
+  const inset = probe.getBoundingClientRect().height; probe.remove();
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, android = /Android/i.test(navigator.userAgent);
+  let px = S.bottomGap === 'auto' || S.bottomGap == null ? (inset > 0 ? inset : (standalone && android ? 48 : 0)) : +S.bottomGap;
+  document.documentElement.style.setProperty('--navpad', px + 'px');
+  setTimeout(checkMapSize, 50);
+}
 function applyLayout() {
   const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
   document.body.classList.toggle('side', side);
@@ -1030,6 +1040,7 @@ function fitRange() {
   renderRangeButtons();
 }
 renderRangeButtons();
+applyBottomGap();
 applyLayout();
 $('#btnRange').addEventListener('click', () => { const rs = ranges(); S.range = rs[(rs.indexOf(S.range) + 1) % rs.length]; save(); drawRings(); fitRange(); });
 $('#btnCenter').addEventListener('click', fitRange);
@@ -2860,6 +2871,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
+    ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], [0, 'None'], [24, 'Gesture bar'], [48, '3-button bar']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
@@ -3303,6 +3315,7 @@ $('#sheet').addEventListener('click', e => {
   b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   if (k === 'night') applyNight();
   if (k === 'layout') applyLayout();
+  if (k === 'bottomGap') applyBottomGap();
   if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
