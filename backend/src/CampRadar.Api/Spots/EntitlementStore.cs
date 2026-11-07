@@ -103,6 +103,8 @@ public sealed class EntitlementStore
         cmd.Parameters.AddWithValue("$e", NormalizeEmail(email)); cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds());
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
+    /// <summary>Forget a login code whose email could not be sent, so it neither works nor counts toward the limit.</summary>
+    public void VoidLoginCode(string email, string code) { using var c = Open(); Exec(c, "DELETE FROM codes WHERE code=$c", ("$c", NormalizeEmail(email) + ":" + code)); }
     public DeviceToken? Verify(string email, string code, string deviceId) => RedeemKey(NormalizeEmail(email) + ":" + code.Trim(), deviceId);
 
     public string? GetSettings(string email, out long updatedMs)

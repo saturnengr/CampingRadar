@@ -159,7 +159,7 @@ app.MapPost("/auth/start", async (HttpRequest http, [FromBody] StartRequest r, E
     if (ent.RecentLoginCodes(email) >= 3) return Results.Json(new { error = "A code was already sent. Check your email (and spam), or wait a few minutes." }, statusCode: 429);
     var code = ent.NewLoginCode(email);
     try { await mail.SendCodeAsync(email, code, ct); }
-    catch (Exception ex) { app.Logger.LogWarning(ex, "sign-in mail failed"); return Results.Json(new { error = "Could not send the email right now. Try again in a minute." }, statusCode: 502); }
+    catch (Exception ex) { ent.VoidLoginCode(email, code); app.Logger.LogWarning(ex, "sign-in mail failed"); return Results.Json(new { error = "Could not send the email right now. Try again in a minute." }, statusCode: 502); }
     return Results.Ok(new { sent = true });
 });
 app.MapPost("/auth/verify", ([FromBody] VerifyRequest r, EntitlementStore ent) =>
