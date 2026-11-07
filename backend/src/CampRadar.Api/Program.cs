@@ -215,6 +215,15 @@ app.MapPost("/admin/mail/test", async (HttpRequest r, [FromBody] MailTestRequest
     try { await mail.SendAsync(m.To, $"{mail.ProductName} test email", $"This is a test from the {mail.ProductName} server via {mail.Transport}. If you can read this, sign-in codes will arrive.", ct); return Results.Ok(new { ok = true, transport = mail.Transport }); }
     catch (Exception ex) { return Results.Json(new { ok = false, transport = mail.Transport, error = ex.Message, inner = ex.InnerException?.Message }); }
 });
+app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, CancellationToken ct) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    if (!w.Enabled) return Results.Json(new { ok = false, error = "No briefing provider configured (Gemini, Anthropic or OpenAI key)." });
+    var facts = JsonDocument.Parse("""{"activity":"camping","language":"en-US","place":"Dallas, TX","time":"3:10 PM","morning":false,"now":{"temp":"71°","cond":"Partly Cloudy","wind":"Wind S 9 mph"},"rain":{"etaMin":42,"from":"southwest","intensity":"Moderate","trend":"strengthening"},"lightning":{"within10":false,"within30":true,"nearestMi":18,"dir":"SW","trend":"approaching"},"alerts":[],"hazards":[],"tropical":[],"precipType":"rain","nextStats":{"maxPop":70,"rainFrom":"4 PM","rainTo":"7 PM","thunderFrom":"4 PM","thunderTo":"6 PM","maxThunder":40,"hi":73,"lo":58,"topGust":28,"gustAt":"5 PM","windDir":"S","windNow":9},"today":{"night":{"lo":55,"text":"Clearing"}},"outlook":{"label":"tomorrow","day":{"text":"Sunny","hi":68,"pop":0},"night":{"lo":48}},"sun":{"rise":"6:55 AM","set":"5:28 PM","minsToSunset":138}}""").RootElement;
+    var errors = new List<string>();
+    var (text, provider) = await w.WriteAsync(facts, null, ct, errors);
+    return Results.Ok(new { ok = text is not null, provider, providers = w.Active, text, errors });
+});
 app.MapGet("/admin/entitlements", (HttpRequest r, EntitlementStore ent) => IsAdmin(r) ? Results.Ok(ent.All().Select(x => new { x.E.Email, x.E.Plan, x.E.ExpiresMs, x.E.Source, x.E.Note, x.E.UpdatedMs, active = x.E.Active, devices = x.Devices })) : Results.Unauthorized());
 app.MapPost("/admin/grant", (HttpRequest r, [FromBody] GrantRequest g, EntitlementStore ent) =>
 {

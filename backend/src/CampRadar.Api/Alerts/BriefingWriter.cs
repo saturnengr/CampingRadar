@@ -54,7 +54,7 @@ public sealed class BriefingWriter
         Target 110 to 170 words in total. Output only the briefing text.
         """;
 
-    public async Task<(string? Text, string? Provider)> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct)
+    public async Task<(string? Text, string? Provider)> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct, List<string>? errors = null)
     {
         var user = "Facts:\n" + facts.GetRawText() + (fallback is null ? "" : "\n\nA plain template version, for reference only:\n" + fallback);
         foreach (var p in Providers)
@@ -64,9 +64,9 @@ public sealed class BriefingWriter
                 var text = p switch { "gemini" => await GeminiAsync(user, ct), "anthropic" => await AnthropicAsync(user, ct), "openai" => await OpenAiAsync(user, ct), _ => null };
                 text = text?.Trim();
                 if (!string.IsNullOrEmpty(text)) return (text, p);
-                _log.LogWarning("briefing provider {Provider} returned no text", p);
+                _log.LogWarning("briefing provider {Provider} returned no text", p); errors?.Add(p + ": returned no text");
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "briefing provider {Provider} failed; trying the next", p); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "briefing provider {Provider} failed; trying the next", p); errors?.Add(p + ": " + ex.Message); }
         }
         return (null, null);
     }
