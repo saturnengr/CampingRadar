@@ -45,6 +45,13 @@ public static class AdminPage
     <p><input id="gEmail" type="email" placeholder="email" style="width:260px"> <input id="gMonths" type="number" value="12" min="0" max="120" style="width:80px"> months <input id="gNote" placeholder="note (optional)" style="width:200px"> <button id="grant">Grant Pro</button> <span id="gOut" class="sub"></span></p>
     <div style="overflow:auto;max-height:320px"><table id="ents"><thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Expires</th><th>Devices</th><th>Source</th><th>Note</th><th></th></tr></thead><tbody></tbody></table></div>
   </div>
+  <details class="card wide" id="diag"><summary style="cursor:pointer;color:var(--muted);font-size:13px;letter-spacing:.08em;text-transform:uppercase">Diagnostics (tests)</summary>
+    <table style="margin-top:10px">
+      <tr><th>Outside services</th><td><button id="netTest" style="padding:4px 10px;font-size:12px">Test reachability</button> <span id="netOut" class="sub"></span></td></tr>
+      <tr><th>Model briefing</th><td><button id="briefTest" style="padding:4px 10px;font-size:12px">Write a test briefing</button> <span id="briefOut" class="sub"></span></td></tr>
+      <tr><th>Email</th><td><input id="mailTo" placeholder="you@example.com" style="width:200px;padding:4px 8px"> <button id="mailTest" style="padding:4px 10px;font-size:12px">Send test email</button> <span id="mailOut" class="sub"></span></td></tr>
+    </table>
+  </details>
   <div class="card wide"><h2>Devices (30 days)</h2><div style="overflow:auto;max-height:420px"><table id="devs"><thead><tr><th>Last seen</th><th>First seen</th><th>Opens</th><th>Activity</th><th>Lang</th><th>Platform</th><th>Version</th><th>Alerts</th><th>Near</th></tr></thead><tbody></tbody></table></div></div>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -65,11 +72,9 @@ async function load(){
     ['Lightning flashes in store',h.lightning.flashes+(h.lightning.lastIngest?' · ingested '+ago(Date.parse(h.lightning.lastIngest)):'')],
     ['Worker last cycle',h.worker.lastCycle?ago(Date.parse(h.worker.lastCycle)):'—'],
     ['Push',h.push.enabled?'<span class="ok">enabled</span>':'<span class="warn">disabled</span>'],
-    ['Model briefings',h.briefings.enabled?'<span class="ok">enabled</span>':'off (no API key)'],
+    ['Model briefings',(h.briefings.enabled?'<span class="ok">on via '+h.briefings.providers+'</span>':'off (no API key)')+(h.briefings.last24h?' · <b>'+h.briefings.last24h.written+'</b> written in 24 h'+(h.briefings.last24h.failed?' · <span class="warn">'+h.briefings.last24h.failed+' failed</span>':'')+(Object.keys(h.briefings.last24h.byProvider||{}).length>1?' ('+Object.entries(h.briefings.last24h.byProvider).map(([k,v])=>k+' '+v).join(', ')+')':''):'')],
     ['Alerts sent (24 h)',o.alerts24],
-    ['Outbound reachability','<button id="netTest" style="padding:4px 10px;font-size:12px">Test outside services</button> <span id="netOut" class="sub"></span>'],
-    ['Model briefings test','<button id="briefTest" style="padding:4px 10px;font-size:12px">Write a test briefing</button> <span id="briefOut" class="sub"></span>'],
-    ['Email sign-in',(h.email&&h.email.enabled?'<span class="ok">on via '+h.email.transport+'</span>':'<span class="warn">off</span>')+' &nbsp; <input id="mailTo" placeholder="you@example.com" style="width:200px;padding:4px 8px"> <button id="mailTest" style="padding:4px 10px;font-size:12px">Send test email</button> <span id="mailOut" class="sub"></span>'],
+    ['Email sign-in',h.email&&h.email.enabled?'<span class="ok">on via '+h.email.transport+'</span>':'<span class="warn">off</span>'],
   ].map(([k,v])=>'<tr><th>'+k+'</th><td>'+v+'</td></tr>').join('');
   if(!map){map=L.map('map',{worldCopyJump:true}).setView([38,-96],4);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);layer=L.layerGroup().addTo(map)}
   layer.clearLayers();

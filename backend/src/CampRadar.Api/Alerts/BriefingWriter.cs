@@ -24,6 +24,22 @@ public sealed class BriefingWriter
     public IEnumerable<string> Providers => (_cfg["Briefing:Providers"] ?? "gemini,anthropic,openai").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Where(p => p switch { "gemini" => Has("Gemini:ApiKey"), "anthropic" => Has("Anthropic:ApiKey"), "openai" => Has("OpenAI:ApiKey"), _ => false });
     public bool Enabled => Providers.Any();
+
+    // Rolling 24-hour tally of briefings written and failed, per provider, for the admin page.
+    private readonly object _lock = new();
+    private readonly Queue<(long Ms, string Provider, bool Ok)> _log24 = new();
+    private void Tally(string provider, bool ok) { lock (_lock) { _log24.Enqueue((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), provider, ok)); if (_log24.Count > 50000) _log24.Dequeue(); } }
+    public object Stats24h()
+    {
+        long cut = DateTimeOffset.UtcNow.AddHours(-24).ToUnixTimeMilliseconds();
+        lock (_lock)
+        {
+            while (_log24.Count > 0 && _log24.Peek().Ms < cut) _log24.Dequeue();
+            var written = _log24.Where(x => x.Ok).GroupBy(x => x.Provider).ToDictionary(g => g.Key, g => g.Count());
+            var failed = _log24.Where(x => !x.Ok).GroupBy(x => x.Provider).ToDictionary(g => g.Key, g => g.Count());
+            return new { written = written.Values.Sum(), failed = failed.Values.Sum(), byProvider = written, failedByProvider = failed };
+        }
+    }
     public string Active => string.Join(",", Providers);
 
     private const string System = """
@@ -64,11 +80,11 @@ public sealed class BriefingWriter
             {
                 var text = p switch { "gemini" => await GeminiAsync(user, ct), "anthropic" => await AnthropicAsync(user, ct), "openai" => await OpenAiAsync(user, ct), _ => null };
                 text = text?.Trim();
-                if (!string.IsNullOrEmpty(text)) { _log.LogInformation("briefing written by {Provider} in {Ms} ms", p, sw.ElapsedMilliseconds); return (text, p); }
+                if (!string.IsNullOrEmpty(text)) { Tally(p, true); _log.LogInformation("briefing written by {Provider} in {Ms} ms", p, sw.ElapsedMilliseconds); return (text, p); }
                 _log.LogWarning("briefing provider {Provider} returned no text", p); errors?.Add(p + ": returned no text");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)   // a provider timeout is an ordinary failure; only the caller going away stops the loop
-            { var msg = ex is TaskCanceledException ? "timed out after " + sw.ElapsedMilliseconds / 1000 + " s" : ex.Message; _log.LogWarning("briefing provider {Provider} failed after {Ms} ms: {Error}", p, sw.ElapsedMilliseconds, msg); errors?.Add(p + ": " + msg); }
+            { var msg = ex is TaskCanceledException ? "timed out after " + sw.ElapsedMilliseconds / 1000 + " s" : ex.Message; Tally(p, false); _log.LogWarning("briefing provider {Provider} failed after {Ms} ms: {Error}", p, sw.ElapsedMilliseconds, msg); errors?.Add(p + ": " + msg); }
         }
         return (null, null);
     }

@@ -286,7 +286,7 @@ app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, MrmsCl
             lightning = new { flashes = l.Count, lastIngest = l.LastIngestMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(l.LastIngestMs) : (DateTimeOffset?)null },
             worker = new { lastCycle = w.LastCycle },
             push = new { enabled = p.Enabled },
-            briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled },
+            briefings = new { enabled = app.Services.GetRequiredService<BriefingWriter>().Enabled, providers = app.Services.GetRequiredService<BriefingWriter>().Active, last24h = app.Services.GetRequiredService<BriefingWriter>().Stats24h() },
             email = new { enabled = app.Services.GetRequiredService<Mailer>().Enabled, transport = app.Services.GetRequiredService<Mailer>().Transport }
         }
     });
