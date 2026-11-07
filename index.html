@@ -239,6 +239,13 @@ body.side #nowTemp{font-size:56px}
 body.side #days{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 body.side .day{width:auto;flex:none}
 body.side #side::after{content:"";flex:1;order:9}
+/* map buttons move into the sidebar under the forecast */
+body.side #sideCtl{order:3;display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+body.side #sideCtl #zoomCtl,body.side #sideCtl #controls{position:static;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;right:auto;top:auto;left:auto;bottom:auto}
+body.side #sideCtl #zoomCtl{grid-template-columns:1fr 1fr}
+body.side #sideCtl #controls .gap{display:none}
+body.side #sideCtl button{width:auto;height:52px}
+body.side #legend{right:12px}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
@@ -684,7 +691,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07g';
+const APP_VERSION = '2026.11.07h';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -990,6 +997,10 @@ function applyLayout() {
   const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
   document.body.classList.toggle('side', side);
   document.body.classList.toggle('side-right', side && S.layout === 'right');
+  // the zoom and range/briefing/settings buttons live in the sidebar when there is one, on the map otherwise
+  let sc = $('#sideCtl');
+  if (side) { if (!sc) { sc = document.createElement('div'); sc.id = 'sideCtl'; $('#side').appendChild(sc); } if ($('#controls').parentElement !== sc) { sc.appendChild($('#controls')); sc.appendChild($('#zoomCtl')); } }
+  else if (sc) { const mw = $('#mapwrap'); mw.insertBefore($('#controls'), $('#updated')); mw.insertBefore($('#zoomCtl'), $('#updated')); sc.remove(); }
   setTimeout(checkMapSize, 50);
 }
 window.addEventListener('resize', applyLayout);
