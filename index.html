@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09l';
+const APP_VERSION = '2026.11.09m';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1205,7 +1205,12 @@ renderRangeButtons();
 applyBottomGap();
 applyLayout();
 $('#btnRange').addEventListener('click', () => { const rs = ranges(); S.range = rs[(rs.indexOf(S.range) + 1) % rs.length]; save(); drawRings(); fitRange(); if (typeof renderWwPills === 'function') renderWwPills(); });
-$('#btnCenter').addEventListener('click', fitRange);
+// Recentre in two stages: off-centre → come back to the location at the current zoom; already centred → fit the selected range ring
+$('#btnCenter').addEventListener('click', () => {
+  if (!st.loc) return;
+  const c = map.getCenter(), off = distMi({ lat: c.lat, lon: c.lng }, st.loc);
+  if (off > 0.6) { st.lastTouch = Date.now(); map.panTo([st.loc.lat, st.loc.lon], { animate: true }); } else fitRange();
+});
 function manualZoom(dir) {
   dir > 0 ? map.zoomIn(1) : map.zoomOut(1);
   st.lastTouch = Date.now();   // drifts back to the chosen range after 2 min, like a pinch
