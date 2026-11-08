@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09f';
+const APP_VERSION = '2026.11.09g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1158,12 +1158,18 @@ function applyBottomGap() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, android = /Android/i.test(navigator.userAgent);
   if (S.lowData !== 'on') S.lowData = 'off';   // earlier builds had an 'auto' value
   if (S.bottomGap == null || (S.bottomGap !== 'auto' && isNaN(+S.bottomGap))) S.bottomGap = 'auto'; else if (S.bottomGap !== 'auto') S.bottomGap = String(+S.bottomGap);
-  let px = S.bottomGap === 'auto' ? (inset > 0 ? inset : (standalone && android ? 48 : 0)) : +S.bottomGap;
+  // Measured, not assumed: when the layout viewport is taller than what is actually visible, the difference is the strip Android is
+  // drawing over (navigation bar, or the bar plus a gesture inset after a reload); it is added on top of whatever was chosen
+  const vv = window.visualViewport, layoutH = document.documentElement.clientHeight, visibleH = vv ? Math.round(vv.height) : layoutH;
+  const hidden = Math.max(0, layoutH - visibleH);
+  let px = S.bottomGap === 'auto' ? Math.max(inset, hidden, standalone && android ? 48 : 0) : Math.max(+S.bottomGap, hidden);
   document.documentElement.style.setProperty('--navpad', px + 'px');
-  st.navpad = { setting: S.bottomGap, px, inset, standalone: !!standalone, at: Date.now() };
+  st.navpad = { setting: S.bottomGap, px, inset, hidden, layoutH, visibleH, innerH: window.innerHeight, screenH: screen.height, standalone: !!standalone, at: Date.now() };
   setTimeout(checkMapSize, 50);
 }
 // Belt and braces: whatever else touches the page, the gap the person chose is re-asserted on the map-size poll
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => setTimeout(applyBottomGap, 50));
+window.addEventListener('resize', () => setTimeout(applyBottomGap, 50));
 function assertBottomGap() { try { const want = st.navpad && st.navpad.px; const have = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--navpad')); if (want != null && Math.abs((have || 0) - want) > 0.5) { st.navpadFixes = (st.navpadFixes || 0) + 1; applyBottomGap(); } } catch (e) {} }
 function applyLayout() {
   const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
@@ -3916,7 +3922,7 @@ function renderDiag() {
   d.textContent = [
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
-    'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
+    'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', hidden strip ' + st.navpad.hidden + ', layout ' + st.navpad.layoutH + ' / visible ' + st.navpad.visibleH + ' / inner ' + st.navpad.innerH + ' / screen ' + st.navpad.screenH + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
