@@ -97,7 +97,7 @@ public sealed class VerifyWorker : BackgroundService
         _ledger.LogGauge(p.Id, t, mm, wx, tc is null ? null : tc * 9 / 5 + 32, dc is null ? null : dc * 9 / 5 + 32, present);
         // ground truth rides along inside any recording of this point
         foreach (var name in _rec.RunningNames().Where(n => n.StartsWith(p.Id + "-", StringComparison.Ordinal)))
-            _rec.AppendAux(name, "gauge.jsonl", JsonSerializer.Serialize(new { t, station = p.Id, precipMm = mm, wx, tempF = tc is null ? null : Math.Round(tc.Value * 9 / 5 + 32, 1), dewF = dc is null ? null : Math.Round(dc.Value * 9 / 5 + 32, 1), present }));
+            _rec.AppendAux(name, "gauge.jsonl", JsonSerializer.Serialize(new { t, station = p.Id, precipMm = mm, wx, tempF = tc is null ? (double?)null : Math.Round(tc.Value * 9 / 5 + 32, 1), dewF = dc is null ? (double?)null : Math.Round(dc.Value * 9 / 5 + 32, 1), present }));
         return true;
     }
 }
