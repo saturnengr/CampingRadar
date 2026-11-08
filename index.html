@@ -795,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08y';
+const APP_VERSION = '2026.11.08z';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1011,13 +1011,19 @@ function mrmsExportUrl(minx, miny, maxx, maxy, w, h, t) {
     '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=png32&transparent=true&interpolation=RSP_NearestNeighbor' +
     (id ? '&mosaicRule=' + encodeURIComponent('{"mosaicMethod":"esriMosaicLockRaster","lockRasterIds":[' + id + ']}') : t ? '&time=' + t : '') + '&f=image';
 }
+// tile bookkeeping for Settings → Status: how many radar tiles loaded or failed since the last frame refresh, and from where
+st.tileStats = { ok: 0, err: 0, backend: 0, noaa: 0, at: Date.now() };
 const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's exportImage for one valid time
-  initialize(f, opts) { this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts); },
+  initialize(f, opts) {
+    this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts);
+    this.on('tileload', () => { st.tileStats.ok++; }); this.on('tileerror', e => { st.tileStats.err++; st.tileStats.lastErr = (e.tile && e.tile.src || '').slice(0, 120); });
+  },
   setTime(f) { if (f.t !== this._t || !!f.live !== this._live) { this._t = f.t; this._live = !!f.live; this.redraw(); } },
   getTileUrl(c) {
     // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
     const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
-    if (BE() && st.timesFromBackend) return BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png' + (this._live ? '' : '?keep=1');
+    st.tileStats[BE() && st.backendTimes && st.backendTimes.has(this._t) ? 'backend' : 'noaa']++;
+    if (BE() && st.backendTimes && st.backendTimes.has(this._t)) return BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png' + (this._live ? '' : '?keep=1');
     return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t) + (this._live || !st.radarIds ? '' : '&keep=1');
   }
 });
@@ -1034,8 +1040,10 @@ async function updateFrameTimes() {
       try {
         const r = await fetchT(BE() + '/mrms/times', { cache: 'no-store' }, 10000);
         const j = await r.json();
-        if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; }
-      } catch (e) { st.backendOk = false; }
+        if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; st.backendTimes = new Set(j.times); st.backendTimesAt = Date.now(); }
+      } catch (e) { st.backendOk = false; st.radarTimesErr = e.message; }
+      // a dropped request on a waking radio must not switch every tile to NOAA's slow per-tile renderer: keep the last list for 20 min
+      if (!times && st.backendTimes && Date.now() - (st.backendTimesAt || 0) < 20 * 60000) { times = [...st.backendTimes].sort((a, b) => a - b); st.timesFromBackend = true; }
     }
     // Always learn NOAA's raster ids: asking the image service by *time* returns the wrong scan more often than not (usually the
     // previous one), which mislabels frames by 5–8 minutes and wrecks the speed estimate. Locking by id is exact.
@@ -1089,6 +1097,7 @@ function buildRadarLayers() {
 }
 async function refreshRadarTiles(rebuild) {
   await updateFrameTimes();
+  st.tileStats = { ok: 0, err: 0, backend: 0, noaa: 0, at: Date.now() };
   if (rebuild || radarLayers.length !== st.frames.length) return buildRadarLayers();
   radarLayers.forEach((l, i) => S.source === 'mrms' ? l.setTime(st.frames[i]) : l.setUrl(iemUrl(st.frames[i].off)));
   showFrame(frameIdx);
@@ -1190,7 +1199,8 @@ function showFrame(i) {
   const f = st.frames && st.frames[i]; if (!f) return;
   const off = Math.round((st.latestRadar - f.t) / 60000);
   const dots = FRAMES.map((_, j) => '<i class="' + (j === i ? 'on' : '') + '"></i>').join('');
-  const staleNote = radarStale() ? ' <span style="color:#ffb74d">· radar ' + Math.round(radarLag()) + ' min behind</span>' : '';
+  const ts = st.tileStats || {}, tilesBad = ts.err >= 6 && ts.err > ts.ok;
+  const staleNote = (radarStale() ? ' <span style="color:#ffb74d">· radar ' + Math.round(radarLag()) + ' min behind</span>' : '') + (tilesBad ? ' <span style="color:#ff8a80">· radar tiles not loading</span>' : '');
   $('#frameInfo').innerHTML = (off > 0 ? '−' + off + ' min' : 'Latest') + ' · ' + (st.timesFromServer ? '' : '≈') + clock(f.t) +
     '<span class="dots">' + dots + '</span>' + staleNote;
 }
@@ -3885,7 +3895,7 @@ function renderDiag() {
   d.textContent = [
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
@@ -3996,7 +4006,7 @@ function applySentinel() {
   }
 }
 async function keepAwake() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen'); } catch (e) {} }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); runNowcast(); refreshAlerts(); if (S.account && Date.now() - (S.account.checkedAt || 0) > 60000) refreshAccount(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); refreshRadarTiles().then(runNowcast); refreshAlerts(); if (S.account && Date.now() - (S.account.checkedAt || 0) > 60000) refreshAccount(); } });
 
 /* -------------------------------- start ---------------------------- */
 $('#soundChip').addEventListener('click', () => { const a = audio(); if (a) a.resume().then(updateSoundChip); });
