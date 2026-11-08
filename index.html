@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09i';
+const APP_VERSION = '2026.11.09j';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1954,11 +1954,14 @@ function drawMotion() {
   const toLL = (cx, cy) => { const p = pxToLonLat(center.x - R + (cx + 0.5) * cellPx, center.y - R + (cy + 0.5) * cellPx, z); return [p.lat, p.lon]; };
   const conf = Math.max(0.25, Math.min(1, motion.global.conf * 2)), op = 0.35 + 0.65 * conf;
   const hitBlob = res && res.hit ? res.hit.blob : null;
+  // the storm the status bar is talking about is drawn brighter, with a solid outline around its present shape, so text and map agree
+  const focus = hitBlob || (res && res.far ? res.far.blob : null) || (res && res.passing ? res.nearestBlob : null);
+  const focusWord = hitBlob ? ' · toward you' : res && res.far && focus === res.far.blob ? ' · could reach you' : focus ? ' · nearest' : '';
   // cells by blob, for the significant areas only (and always the one that hits you)
   // every significant rain area gets an arrow (up to 14). A storm cut by the window edge is drawn from the part we can see once that
   // part is large enough to carry its own motion estimate; small edge fragments are skipped. Only the largest few carry a text label.
-  const ranked = blobs.filter(b => b.id === hitBlob || (b.edge ? b.n >= 40 : b.n >= 12)).sort((a, b) => b.vol - a.vol).slice(0, 14);
-  const keep = new Set(ranked.map(b => b.id)), labelled = new Set(ranked.slice(0, 6).map(b => b.id)); if (hitBlob) labelled.add(hitBlob);
+  const ranked = blobs.filter(b => b.id === hitBlob || b.id === focus || (b.edge ? b.n >= 40 : b.n >= 12)).sort((a, b) => b.vol - a.vol).slice(0, 14);
+  const keep = new Set(ranked.map(b => b.id)), labelled = new Set(ranked.slice(0, 6).map(b => b.id)); if (hitBlob) labelled.add(hitBlob); if (focus) labelled.add(focus);
   const cells = new Map(); for (const id of keep) cells.set(id, []);
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) { const lb = labels[y * grid.w + x]; if (lb && keep.has(lb)) cells.get(lb).push([x, y]); }
   for (const b of blobs) {
@@ -1967,11 +1970,13 @@ function drawMotion() {
     const nv = Math.ceil(pts0.length / Math.max(1, Math.floor(pts0.length / 200))), v = { vx: svx / nv, vy: svy / nv }; const sp = Math.hypot(v.vx, v.vy) * 60 * 0.621371; if (sp < 3) continue;
     const hdg = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360, dirWord = compass(hdg);
     const pts = cells.get(b.id), step = Math.max(1, Math.floor(pts.length / 400)), sample = pts.filter((_, i) => i % step === 0);
+    const isFocus = b.id === focus, dim = focus && !isFocus ? 0.7 : 1;
+    if (isFocus) { const h0 = hull(sample); if (h0.length >= 3) L.polygon(h0.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: '#fff', weight: 2.5, opacity: 0.9 * op, fill: false, interactive: false }).addTo(motionLayer); }
     // ghost outlines
     [[60, GHOST_COLORS[60], 0.55], [30, GHOST_COLORS[30], 0.7], [15, GHOST_COLORS[15], 0.85]].forEach(([min, col, alpha]) => {
       const dx = v.vx * min / fineKm, dy = v.vy * min / fineKm;
       const h = hull(sample.map(([x, y]) => [x + dx, y + dy])); if (h.length < 3) return;
-      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: col, weight: 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op, fillColor: col, fillOpacity: 0.06 * op, interactive: false }).addTo(motionLayer);
+      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: col, weight: isFocus ? 3 : 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op * dim, fillColor: col, fillOpacity: (isFocus ? 0.1 : 0.06) * op * dim, interactive: false }).addTo(motionLayer);
     });
     // arrow = 30 minutes of travel from the centroid
     const a0 = toLL(b.cx, b.cy), a1 = toLL(b.cx + v.vx * 30 / fineKm, b.cy + v.vy * 30 / fineKm);
@@ -1980,7 +1985,7 @@ function drawMotion() {
     const head = L.divIcon({ className: '', html: '<div style="transform:rotate(' + hdg + 'deg);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #fff;filter:drop-shadow(0 0 2px #000);opacity:' + op + '"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
     L.marker(a1, { icon: head, pane: 'hazards', interactive: false }).addTo(motionLayer);
     if (!labelled.has(b.id)) continue;
-    const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (b.id === hitBlob ? ' · toward you' : '') + '</div>', iconSize: null, iconAnchor: [0, -6] });
+    const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + (isFocus ? ';border:1.5px solid #fff;font-weight:800' : '') + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (isFocus ? focusWord : '') + '</div>', iconSize: null, iconAnchor: [0, -6] });
     L.marker(a0, { icon: lbl, pane: 'hazards', interactive: false }).addTo(motionLayer);
   }
   // where and when it enters your hit zone
