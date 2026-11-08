@@ -9,12 +9,15 @@ self.addEventListener('fetch', e => {
   const url = e.request.url;
   if (e.request.method !== 'GET' || !/[?&]keep=1\b/.test(url) || !/\/mrms\/tile\/|lockRasterIds/.test(url)) return;
   e.respondWith((async () => {
-    const c = await caches.open(TILES);
-    const hit = await c.match(e.request, { ignoreVary: true }); if (hit) return hit;
+    // the cache is a convenience, never a dependency: any storage trouble (quota, a private window, a dying battery's storage limits)
+    // falls straight through to the network, and a network failure is reported as such rather than swallowed
+    let c = null, hit = null;
+    try { c = await caches.open(TILES); hit = await c.match(e.request, { ignoreVary: true }); } catch (err) { c = null; }
+    if (hit) return hit;
     const res = await fetch(e.request);
-    if (res.ok) { try { await c.put(e.request, res.clone()); trimTiles(c); } catch (err) {} }   // only real (CORS) responses: opaque ones cost megabytes of quota each
+    if (c && res.ok) { try { await c.put(e.request, res.clone()); trimTiles(c); } catch (err) {} }   // only real (CORS) responses: opaque ones cost megabytes of quota each
     return res;
-  })());
+  })().catch(() => fetch(e.request)));
 });
 let trimming = false;
 async function trimTiles(c) {

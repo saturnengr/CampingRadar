@@ -795,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09b';
+const APP_VERSION = '2026.11.09c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1016,7 +1016,12 @@ st.tileStats = { ok: 0, err: 0, backend: 0, noaa: 0, at: Date.now() };
 const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's exportImage for one valid time
   initialize(f, opts) {
     this._t = f.t; this._live = !!f.live; L.TileLayer.prototype.initialize.call(this, '', opts);
-    this.on('tileload', () => { st.tileStats.ok++; }); this.on('tileerror', e => { st.tileStats.err++; st.tileStats.lastErr = (e.tile && e.tile.src || '').slice(0, 120); });
+    this.on('tileload', () => { st.tileStats.ok++; });
+    this.on('tileerror', e => {
+      st.tileStats.err++; const src = e.tile && e.tile.src || ''; st.tileStats.lastErr = src.slice(0, 120);
+      // a cached-tile request that fails is retried once straight from the network, bypassing the service worker's cache path
+      if (e.tile && /[?&]keep=1\b/.test(src) && !e.tile.dataset.retried) { e.tile.dataset.retried = '1'; st.tileStats.retried = (st.tileStats.retried || 0) + 1; setTimeout(() => { e.tile.src = src.replace(/([?&])keep=1\b/, '$1retry=' + Date.now()); }, 300); }
+    });
   },
   setTime(f) { if (f.t !== this._t || !!f.live !== this._live) { this._t = f.t; this._live = !!f.live; this.redraw(); } },
   getTileUrl(c) {
@@ -3904,7 +3909,7 @@ function renderDiag() {
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
