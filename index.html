@@ -189,8 +189,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #mapwrap{margin-bottom:calc(-1 * var(--navpad))}
   #nowTemp{font-size:46px;letter-spacing:-1px}
   #nowCond{font-size:17px}#nowWind{font-size:15px}#nowPlace{font-size:13px}
-  .day{padding:4px 4px 3px;border-radius:10px}
-  .day .nm{font-size:12px}.day svg{width:32px;height:32px}.day .t{font-size:15px}.day .p{font-size:11.5px;min-height:14px}
+  .day{padding:3px 4px 2px;border-radius:10px}
+  .day .nm{font-size:12px;line-height:1.1}.day svg{width:30px;height:30px;margin:1px auto 0}.day .t{font-size:14.5px;line-height:1.2}.day .p{font-size:11px;min-height:13px;line-height:1.15}
   #statusbar{min-height:50px;padding:5px 10px;gap:8px}
   #statusMain{font-size:17px}#statusSub{font-size:13px}
   #snoozeBtn{min-height:40px;padding:0 10px;font-size:14px}
@@ -774,7 +774,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08r';
+const APP_VERSION = '2026.11.08s';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
