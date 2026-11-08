@@ -105,6 +105,17 @@ public sealed class MrmsClient
     }
 
     /// <summary>Square radar image centered on a point: RGBA pixels, for the tracking engine.</summary>
+    /// <summary>The NOAA PNG for a square window around a point (what the trackers decode), for recording and offline replay.</summary>
+    public async Task<byte[]> ExportPngAsync(long t, double lat, double lon, int zoom, double radiusMi, CancellationToken ct)
+    {
+        var (cx, cy) = LonLatToPx(lon, lat, zoom);
+        double mpp = 156543.03392 * Math.Cos(lat * Math.PI / 180) / Math.Pow(2, zoom);
+        int R = (int)Math.Round(radiusMi * 1609.344 / mpp), size = 2 * R;
+        double res = 2 * Merc / (256 * Math.Pow(2, zoom));
+        double ox = Math.Round(cx) - R, oy = Math.Round(cy) - R;
+        return await FetchAsync(ExportUrl(ox * res - Merc, Merc - (oy + size) * res, (ox + size) * res - Merc, Merc - oy * res, size, size, RasterId(t)), ct);
+    }
+
     public async Task<(byte[] Rgba, int Size, double MetersPerPx)> AnalysisFrameAsync(long t, double lat, double lon, int zoom, double radiusMi, CancellationToken ct)
     {
         var (cx, cy) = LonLatToPx(lon, lat, zoom);

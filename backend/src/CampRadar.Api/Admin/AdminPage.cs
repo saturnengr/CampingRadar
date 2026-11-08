@@ -51,6 +51,7 @@ public static class AdminPage
       <tr><th>Model briefing</th><td><button id="briefTest" style="padding:4px 10px;font-size:12px">Write a test briefing</button> <span id="briefOut" class="sub"></span></td></tr>
       <tr><th>Morning briefing</th><td><button id="morningTest" style="padding:4px 10px;font-size:12px">Send now to devices that have it on</button> <span id="morningOut" class="sub"></span></td></tr>
       <tr><th>Email</th><td><input id="mailTo" placeholder="you@example.com" style="width:200px;padding:4px 8px"> <button id="mailTest" style="padding:4px 10px;font-size:12px">Send test email</button> <span id="mailOut" class="sub"></span></td></tr>
+      <tr><th>Radar recording</th><td><input id="recName" placeholder="name" value="dallas" style="width:110px;padding:4px 8px"> <input id="recLat" value="32.8954" style="width:80px;padding:4px 8px"> <input id="recLon" value="-96.8424" style="width:90px;padding:4px 8px"> <input id="recHours" value="6" style="width:40px;padding:4px 8px" title="hours"> h · <input id="recRadius" value="200" style="width:50px;padding:4px 8px" title="radius, miles"> mi <button id="recStart" style="padding:4px 10px;font-size:12px">Start</button> <span id="recOut" class="sub"></span><div id="recList" class="sub" style="margin-top:6px"></div></td></tr>
     </table>
   </details>
   <div class="card wide"><h2>Devices (30 days)</h2><div style="overflow:auto;max-height:420px"><table id="devs"><thead><tr><th>Last seen</th><th>First seen</th><th>Opens</th><th>Activity</th><th>Lang</th><th>Platform</th><th>Version</th><th>Alerts</th><th>Near</th></tr></thead><tbody></tbody></table></div></div>
@@ -58,6 +59,11 @@ public static class AdminPage
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $=s=>document.querySelector(s);
+async function loadRecs(){ try{ const r=await fetch('/admin/record',{headers:{'X-Admin-Key':key}}); if(!r.ok) return; const l=await r.json();
+  $('#recList').innerHTML = l.length ? l.map(x=>'<div>'+x.name+' — '+x.frames+' frames, '+x.mb+' MB'+(x.running?' · recording until '+new Date(x.endsAt).toLocaleTimeString():'')+(x.lastError?' · <span style="color:#ef9a9a">'+x.lastError+'</span>':'')+' · <a href="/admin/record/'+x.name+'.zip?key='+encodeURIComponent(key)+'">download zip</a>'+(x.running?' · <a href="#" data-stop="'+x.name+'">stop</a>':'')+'</div>').join('') : 'No recordings yet.';
+  $('#recList').querySelectorAll('[data-stop]').forEach(a=>a.onclick=async e=>{e.preventDefault(); await fetch('/admin/record/'+a.dataset.stop+'/stop',{method:'POST',headers:{'X-Admin-Key':key}}); loadRecs();});
+ }catch(e){} }
+document.addEventListener('DOMContentLoaded',()=>{ const b=$('#recStart'); if(!b) return; b.onclick=async()=>{ $('#recOut').textContent='starting…'; const q=new URLSearchParams({name:$('#recName').value,lat:$('#recLat').value,lon:$('#recLon').value,hours:$('#recHours').value,radiusMi:$('#recRadius').value}); const r=await fetch('/admin/record/start?'+q,{method:'POST',headers:{'X-Admin-Key':key}}); $('#recOut').textContent=r.ok?'recording':'failed ('+r.status+')'; loadRecs(); }; setInterval(loadRecs, 60000); setTimeout(loadRecs, 1500); });
 let key=sessionStorage.getItem('adminKey')||'', map, layer;
 const ago=ms=>{const m=Math.round((Date.now()-ms)/60000);return m<1?'just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago'};
 async function load(){

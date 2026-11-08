@@ -53,6 +53,7 @@ builder.Services.AddSingleton<SynopticProvider>();
 builder.Services.AddSingleton<MadisProvider>();
 builder.Services.AddSingleton<IemProvider>();
 builder.Services.AddSingleton<StationObsClient>();
+builder.Services.AddSingleton<Recorder>();
 builder.Services.AddSingleton<Mailer>();
 builder.Services.AddSingleton<PushSender>();
 builder.Services.AddSingleton<StatusService>();
@@ -455,6 +456,22 @@ app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, Cancell
     return Results.Ok(new { ok = text is not null, provider, providers = w.Active, text, errors });
 });
 // Which outside services can this host actually reach? (shared hosts block or black-hole some destinations)
+// ---------- radar recordings for offline verification ----------
+app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Results.Ok(rec.List()) : Results.Unauthorized());
+app.MapPost("/admin/record/start", (HttpRequest r, Recorder rec, string name, double lat, double lon, double hours = 6, double radiusMi = 200) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    var j = rec.Start(name, lat, lon, hours, Math.Clamp(radiusMi, 20, 400));
+    return Results.Ok(new { j.Name, j.Lat, j.Lon, j.RadiusMi, j.Zoom, j.EndsAt, j.Running });
+});
+app.MapPost("/admin/record/{name}/stop", (HttpRequest r, Recorder rec, string name) => { if (!IsAdmin(r)) return Results.Unauthorized(); rec.Stop(name); return Results.Ok(); });
+app.MapGet("/admin/record/{name}.zip", (HttpRequest r, Recorder rec, string name, string? key) =>
+{
+    if (!IsAdmin(r) && key != adminKey) return Results.Unauthorized();
+    var zip = rec.ZipPath(name); if (zip is null) return Results.NotFound();
+    return Results.File(zip, "application/zip", name + ".zip");
+});
+
 app.MapGet("/admin/net/test", async (HttpRequest r, IHttpClientFactory f, CancellationToken ct) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
