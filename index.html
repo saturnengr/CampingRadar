@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09k';
+const APP_VERSION = '2026.11.09l';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -3551,7 +3551,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
-    ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], ['0', 'None'], ['24', 'Gesture bar'], ['48', '3-button bar']]],
+    ['bottomGap', 'Phone: extra space under the toolbar (Auto measures what Android covers; use a fixed value only if Auto leaves the toolbar under the navigation bar)', [['auto', 'Auto'], ['0', 'None'], ['24', '+24 px'], ['48', '+48 px']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)'], ['50-100-150', '50 · 100 · 150 mi (overview) · Pro']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
