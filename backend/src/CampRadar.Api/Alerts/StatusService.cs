@@ -50,6 +50,7 @@ public sealed class Status
 public sealed class StatusService
 {
     private const int Zoom = 7;
+    private const double AlertRangeMi = 50;   // "it will reach you" alerts wait until the arriving rain is this close
     private const double RadiusMi = 120;
     private const int FineCellPx = 2, Coarse = 2;
     private readonly MrmsClient _mrms;
@@ -155,6 +156,14 @@ public sealed class StatusService
             r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             r.Main = $"Rain to the {CompassLong(hit.FromBearing)} is weakening — may fizzle before it reaches you";
             r.Sub = $"If it holds together: {Intensity(hit.MaxDbz).ToLowerInvariant()} rain in {FmtDur(Math.Max(0, hit.EtaMin - lag))}" + (moving.Length > 0 ? " · " + moving : "");
+            return;
+        }
+        if (hit is not null && hit.DistMi > AlertRangeMi)
+        {   // heading this way but still far out: informational only, no alert until it is inside the alert range
+            double eta = Math.Max(0, hit.EtaMin - lag);
+            r.Color = "blue"; r.Level = "watch"; r.EtaMin = eta; r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
+            r.Main = $"Rain {Math.Round(hit.DistMi)} mi {Compass(hit.FromBearing)} is heading this way";
+            r.Sub = $"About {FmtDur(eta)} out at current speed" + (moving.Length > 0 ? " · " + moving : "") + $" · alerts start inside {AlertRangeMi} mi";
             return;
         }
         if (hit is not null)

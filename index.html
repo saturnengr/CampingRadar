@@ -574,7 +574,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
   const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false };
   const ringR = [2, 5, 10, 30, 50, 100, 120], farRing = Math.max(opts.maxRingMi || 50, 120);
-  let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null;
+  let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
     const d = grid.d[y * grid.w + x];
@@ -601,7 +601,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
     }
     if (tIn !== null) {
       hits++;
-      if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitBlob = labels ? labels[y * grid.w + x] : null; }
+      if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitDist = dist; hitBlob = labels ? labels[y * grid.w + x] : null; }
       if (labels) { const lb = labels[y * grid.w + x]; hitBlobCells.set(lb, (hitBlobCells.get(lb) || 0) + 1); }
       if (tOut > end) end = tOut;
       if (d > maxDbz) maxDbz = d;
@@ -612,7 +612,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
         passing = { distMi: dist, bearing: bearingDeg(e, n), passBearing: bearingDeg(pe, pn), closestMi: Math.hypot(pe, pn) };
     }
   }
-  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
+  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, distMi: hitDist, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
   return { rings, nearest, passing, hit, nearestBlob };
 }
 /* ---- intensity trends: track each storm cell across frames ---- */
@@ -710,6 +710,7 @@ function applyLowData() {
   if (FRAMES !== want) { FRAMES = want; frameIdx = FRAMES.length - 1; if (typeof refreshRadarTiles === 'function' && st.frames) refreshRadarTiles(true).then(() => showFrame(FRAMES.length - 1)).catch(() => {}); }
   if (typeof applyLayers === 'function' && map) applyLayers();
 }
+const ALERT_RANGE_MI = 50;   // rain is tracked out to the window edge, but "it will reach you" alerts wait until it is this close
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
@@ -742,7 +743,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08a';
+const APP_VERSION = '2026.11.08b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2056,7 +2057,13 @@ function computeStatus() {
     out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000) + (moving ? ' · ' + moving : '');
     out.rings = Object.assign({}, res.rings, { 150: res.rings[120] }); return overlayLightning(out);
   }
-  if (hit && !lowConf) {
+  if (hit && !lowConf && hit.distMi > ALERT_RANGE_MI) {
+    // heading this way but still far out: say so, no alert until it is inside the alert range
+    const eta = Math.max(0, hit.etaMin - lat);
+    out.cls = 'blue'; out.level = 'watch';
+    out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + ' is heading this way';
+    out.sub = 'About ' + fmtDur(eta) + ' out at current speed (' + clock(Date.now() + eta * 60000) + ')' + (moving ? ' · ' + moving : '') + ' · alerts start inside ' + ALERT_RANGE_MI + ' mi';
+  } else if (hit && !lowConf) {
     const eta = Math.max(0, hit.etaMin - lat), word = intensityWord(hit.maxDbz) + trendWord;
     if (hit.etaMin <= 0.5) {
       out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';

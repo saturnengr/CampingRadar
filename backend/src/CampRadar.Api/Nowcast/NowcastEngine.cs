@@ -33,7 +33,7 @@ public sealed class Motion
 
 public sealed record Nearest(double DistMi, double Bearing, double Dbz);
 public sealed record Passing(double DistMi, double Bearing, double PassBearing, double ClosestMi);
-public sealed record Hit(double EtaMin, double EndMin, double MaxDbz, double FromBearing, int Cells, int Blob, Dictionary<int, int> BlobCells)
+public sealed record Hit(double EtaMin, double EndMin, double MaxDbz, double FromBearing, int Cells, int Blob, Dictionary<int, int> BlobCells, double DistMi = 0)
 {
     public BlobTrend? Trend { get; set; }
     public bool Fizzles { get; set; }
@@ -326,7 +326,7 @@ public static class NowcastEngine
                 if (tIn is not null)
                 {
                     hits++;
-                    if (tIn.Value < eta) { eta = tIn.Value; from = BearingDeg(e, n); hitBlob = labels is null ? 0 : labels[y * grid.W + x]; }
+                    if (tIn.Value < eta) { eta = tIn.Value; from = BearingDeg(e, n); hitDist = dist; hitBlob = labels is null ? 0 : labels[y * grid.W + x]; }
                     if (labels is not null) { int lb = labels[y * grid.W + x]; blobCells[lb] = blobCells.GetValueOrDefault(lb) + 1; }
                     if (tOut!.Value > end) end = tOut.Value;
                     if (d > maxDbz) maxDbz = d;
@@ -339,7 +339,7 @@ public static class NowcastEngine
                         p.Passing = new Passing(dist, BearingDeg(e, n), BearingDeg(pe, pn), Math.Sqrt(pe * pe + pn * pn));
                 }
             }
-        if (hits >= minHitCells) p.Hit = new Hit(eta, end, maxDbz, from, hits, hitBlob, blobCells);
+        if (hits >= minHitCells) p.Hit = new Hit(eta, end, maxDbz, from, hits, hitBlob, blobCells, hitDist);
         return p;
     }
 
