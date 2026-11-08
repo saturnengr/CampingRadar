@@ -71,6 +71,7 @@ var app = builder.Build();
 app.UseCors();
 app.Services.GetRequiredService<EntitlementStore>().OwnerResolver = email => app.Services.GetRequiredService<GroupStore>().GroupOf(email)?.OwnerEmail;
 string adminKey = app.Configuration["AdminKey"] ?? "";
+static string ExtractEmail(string prefsJson) { try { using var d = JsonDocument.Parse(prefsJson); return d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { return ""; } }
 bool IsAdmin(HttpRequest r) => adminKey.Length > 0 && r.Headers["X-Admin-Key"] == adminKey;
 string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : null; }
 // Pro gate: 402 with a short reason the app shows next to the feature.
@@ -90,7 +91,7 @@ app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender
     observations = new { source = app.Services.GetRequiredService<StationObsClient>().Source }
 });
 // The host's Scheduled Task calls this every 1–2 minutes so alerts go out even if IIS idled the app.
-app.MapGet("/tick", async (AlertWorker w, CancellationToken ct) => new { ran = await w.RunCycleAsync(ct), utc = DateTimeOffset.UtcNow });
+app.MapGet("/tick", async (AlertWorker w) => { using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5)); return new { ran = await w.RunCycleAsync(cts.Token), utc = DateTimeOffset.UtcNow }; });   // a client timeout must not cancel a half-done cycle
 
 // ---------- radar ----------
 // Served under /mrms: on the production host the app lives in a folder named "radar", and IIS answers /radar/* itself (500) before the app sees it.
@@ -106,9 +107,9 @@ async Task<IResult> RadarTile(long t, int z, int x, int y, MrmsClient m, HttpRes
     return Results.Bytes(png, "image/png");
 }
 app.MapGet("/mrms/times", (MrmsClient m) => RadarTimes(m));
-app.MapGet("/mrms/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
+app.MapGet("/mrms/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", (long t, int z, int x, int y, MrmsClient m, HttpResponse res, CancellationToken ct) => z < 0 || z > 12 || x < 0 || y < 0 || x >= (1 << z) || y >= (1 << z) ? Task.FromResult(Results.BadRequest()) : RadarTile(t, z, x, y, m, res, ct));
 app.MapGet("/radar/times", (MrmsClient m) => RadarTimes(m));
-app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", RadarTile);
+app.MapGet("/radar/tile/{t:long}/{z:int}/{x:int}/{y:int}.png", (long t, int z, int x, int y, MrmsClient m, HttpResponse res, CancellationToken ct) => z < 0 || z > 12 || x < 0 || y < 0 || x >= (1 << z) || y >= (1 << z) ? Task.FromResult(Results.BadRequest()) : RadarTile(t, z, x, y, m, res, ct));
 
 // ---------- nearby surface observations (free; Synoptic token on the server) ----------
 // Free: the best nearby station and the pressure trend (replaces the single NWS airport). Pro: the whole list for the map layer.
@@ -147,6 +148,8 @@ app.MapPost("/brief", async (HttpRequest http, EntitlementStore ent, [FromBody] 
     if (RequirePro(http, ent) is { } gate) return gate;
     if (!w.Enabled) return Results.StatusCode(503);
     if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
+    var bq = ipCodes.GetOrAdd("brief:" + (Bearer(http) ?? "anon"), _ => new Queue<long>()); long bnow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    lock (bq) { while (bq.Count > 0 && bnow - bq.Peek() > 3600_000) bq.Dequeue(); if (bq.Count >= 40) return Results.Json(new { error = "That is a lot of briefings in an hour — try again later." }, statusCode: 429); bq.Enqueue(bnow); }
     var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct, null, req.Style == "now" ? "now" : "briefing");
     return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend", provider });
 });
@@ -203,12 +206,13 @@ app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
 
 // ---------- account: email sign-in (6-digit code by email), activation codes, settings sync, deletion ----------
 var ipCodes = new System.Collections.Concurrent.ConcurrentDictionary<string, Queue<long>>();
+var EmailRx = new System.Text.RegularExpressions.Regex(@"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 app.MapGet("/auth/config", (Mailer mail) => new { emailSignIn = mail.Enabled });
 app.MapPost("/auth/start", async (HttpRequest http, [FromBody] StartRequest r, EntitlementStore ent, Mailer mail, CancellationToken ct) =>
 {
     if (!mail.Enabled) return Results.Json(new { error = "Email sign-in is not set up on this server yet. Use an activation code instead." }, statusCode: 503);
     var email = (r.Email ?? "").Trim();
-    if (email.Length < 5 || email.Length > 254 || !email.Contains('@') || email.Contains(' ')) return Results.BadRequest(new { error = "Enter a valid email address." });
+    if (email.Length < 5 || email.Length > 254 || !EmailRx.IsMatch(email)) return Results.BadRequest(new { error = "Enter a valid email address." });
     // rate limit: 3 codes per email per 10 min, 10 per IP per 10 min
     var ip = http.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "?"; long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     var q = ipCodes.GetOrAdd(ip, _ => new Queue<long>()); lock (q) { while (q.Count > 0 && now - q.Peek() > 600000) q.Dequeue(); if (q.Count >= 10) return Results.Json(new { error = "Too many codes requested. Try again in a few minutes." }, statusCode: 429); q.Enqueue(now); }
@@ -221,8 +225,11 @@ app.MapPost("/auth/start", async (HttpRequest http, [FromBody] StartRequest r, E
 app.MapPost("/auth/verify", ([FromBody] VerifyRequest r, EntitlementStore ent) =>
 {
     if (string.IsNullOrWhiteSpace(r.Email) || string.IsNullOrWhiteSpace(r.Code) || string.IsNullOrWhiteSpace(r.DeviceId)) return Results.BadRequest(new { error = "email, code and deviceId required" });
+    var vkey = EntitlementStore.NormalizeEmail(r.Email); long vnow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var vq = ipCodes.GetOrAdd("verify:" + vkey, _ => new Queue<long>());
+    lock (vq) { while (vq.Count > 0 && vnow - vq.Peek() > 600000) vq.Dequeue(); if (vq.Count >= 8) return Results.Json(new { error = "Too many attempts. Request a new code in a few minutes." }, statusCode: 429); }
     var t = ent.Verify(r.Email, r.Code, r.DeviceId);
-    if (t is null) return Results.Json(new { error = "That code is not right or has expired. Request a new one." }, statusCode: 400);
+    if (t is null) { lock (vq) vq.Enqueue(vnow); if (ipCodes.Count > 5000) ipCodes.Clear(); return Results.Json(new { error = "That code is not right or has expired. Request a new one." }, statusCode: 400); }
     var e = ent.Get(t.Email);
     return Results.Ok(new { token = t.Token, email = t.Email, plan = e?.Plan ?? "free", expiresMs = e?.ExpiresMs ?? 0, pro = e?.Active == true });
 });
@@ -242,7 +249,7 @@ app.MapDelete("/me", (HttpRequest r, EntitlementStore ent, SpotStore spots, Site
 {
     var (_, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
     sites.DeleteFor(t.Email);
-    foreach (var sp in spots.All().Where(sp => sp.Prefs.Contains("\"email\":\"" + t.Email + "\""))) spots.Delete(sp.Id);
+    foreach (var sp in spots.All().Where(sp => string.Equals(ExtractEmail(sp.Prefs), t.Email, StringComparison.OrdinalIgnoreCase))) spots.Delete(sp.Id);
     app.Services.GetRequiredService<GroupStore>().DeleteEverythingFor(t.Email);
     ent.DeleteAccount(t.Email);
     return Results.Ok(new { deleted = true });
@@ -394,10 +401,20 @@ async Task<int> FanOutMessage(GroupStore groups, SpotStore spots, PushSender pus
     {
         string email = ""; try { using var d = JsonDocument.Parse(spot.Prefs); email = d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { }
         if (!memberEmails.Contains(email) || spot.Id == senderSpotId) continue;
-        var ok = await push.SendAsync(spot, new { title = m.FromName + (device.Length > 0 ? " · " + device : ""), body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, toEmail = email, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
-        if (ok) sent++; else spots.RecordFailure(spot.Id, gone: true);
+        bool ok;
+        try { ok = await push.SendAsync(spot, new { title = m.FromName + (device.Length > 0 ? " · " + device : ""), body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken = ReplyKey(m.Id, email), toEmail = email, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { app.Logger.LogWarning(ex, "message push to {Spot} failed", spot.Id); ok = false; }
+        if (ok) sent++; else spots.RecordFailure(spot.Id, gone: false);
     }
     return sent;
+}
+// A reply token is bound to one recipient: HMAC(message id : recipient email) with a server secret, so a notification button can only reply as the device it was sent to.
+string ReplyKey(long msgId, string email)
+{
+    var secret = System.Text.Encoding.UTF8.GetBytes((builder.Configuration["Vapid:PrivateKey"] ?? "") + "|" + adminKey + "|replies");
+    using var h = new System.Security.Cryptography.HMACSHA256(secret);
+    return Convert.ToHexString(h.ComputeHash(System.Text.Encoding.UTF8.GetBytes(msgId + ":" + EntitlementStore.NormalizeEmail(email)))).ToLowerInvariant();
 }
 app.MapPost("/group/message", async (HttpRequest r, [FromBody] MessageRequest req, EntitlementStore ent, GroupStore groups, SpotStore spots, PushSender push, CancellationToken ct) =>
 {
@@ -414,9 +431,12 @@ app.MapPost("/group/message", async (HttpRequest r, [FromBody] MessageRequest re
 // Reply from a notification button: no sign-in token in the service worker, so the message's own reply token authorises it.
 app.MapPost("/group/reply", async ([FromBody] ReplyRequest req, GroupStore groups, SpotStore spots, PushSender push, CancellationToken ct) =>
 {
-    var orig = groups.MessageByToken(req.ReplyToken ?? ""); if (orig is null) return Results.BadRequest(new { error = "expired" });
+    if (req.MsgId is not { } mid || string.IsNullOrWhiteSpace(req.FromEmail) || string.IsNullOrWhiteSpace(req.ReplyToken)) return Results.BadRequest(new { error = "expired" });
+    var expected = ReplyKey(mid, req.FromEmail);
+    if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(expected), System.Text.Encoding.UTF8.GetBytes(req.ReplyToken.ToLowerInvariant()))) return Results.StatusCode(403);
+    var orig = groups.MessageById(mid); if (orig is null || DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - orig.Ms > 24 * 3600_000L) return Results.BadRequest(new { error = "expired" });
     var g = groups.GroupOf(orig.FromEmail); if (g is null) return Results.BadRequest();
-    var replier = groups.Members(g.Id).FirstOrDefault(m => m.Email == EntitlementStore.NormalizeEmail(req.FromEmail ?? "")); if (replier is null) return Results.StatusCode(403);
+    var replier = groups.Members(g.Id).FirstOrDefault(m => m.Email == EntitlementStore.NormalizeEmail(req.FromEmail)); if (replier is null) return Results.StatusCode(403);
     var text = (req.Text ?? "").Trim(); if (text.Length == 0 || text.Length > 160) return Results.BadRequest();
     var m = groups.AddMessage(g.Id, replier.Email, DisplayName(replier.Name, replier.Email), "preset", text, "{}", orig.Id);
     var sent = await FanOutMessage(groups, spots, push, g, m, replier.Email, ct);
@@ -467,11 +487,11 @@ app.MapPost("/admin/record/start", (HttpRequest r, Recorder rec, string name, do
     return Results.Ok(new { j.Name, j.Lat, j.Lon, j.RadiusMi, j.Zoom, j.EndsAt, j.Running });
 });
 app.MapPost("/admin/record/{name}/stop", (HttpRequest r, Recorder rec, string name) => { if (!IsAdmin(r)) return Results.Unauthorized(); rec.Stop(name); return Results.Ok(); });
-app.MapGet("/admin/record/{name}.zip", (HttpRequest r, Recorder rec, string name, string? key) =>
+app.MapGet("/admin/record/{name}.zip", (HttpRequest r, Recorder rec, string name) =>
 {
-    if (!IsAdmin(r) && key != adminKey) return Results.Unauthorized();
+    if (!IsAdmin(r)) return Results.Unauthorized();   // the admin page downloads with the header and a blob URL, so the key never rides in a URL
     var zip = rec.ZipPath(name); if (zip is null) return Results.NotFound();
-    return Results.File(zip, "application/zip", name + ".zip");
+    return Results.File(Path.GetFullPath(zip), "application/zip", Recorder.SafeName(name) + ".zip");
 });
 
 app.MapGet("/admin/net/test", async (HttpRequest r, IHttpClientFactory f, CancellationToken ct) =>
@@ -584,7 +604,7 @@ public sealed record JoinRequest(string Code, string? MyName);
 public sealed record ShareRequest(bool On, int Hours, string? MyName);
 public sealed record PositionRequest(double Lat, double Lon, double? AccM);
 public sealed record MessageRequest(string Text, string? Kind, JsonElement? Data, long? ReplyTo, string? FromSpot);
-public sealed record ReplyRequest(string ReplyToken, string FromEmail, string Text);
+public sealed record ReplyRequest(string? ReplyToken, string? FromEmail, string? Text, long? MsgId);
 public sealed record StartRequest(string Email);
 public sealed record MailTestRequest(string To);
 public sealed record VerifyRequest(string Email, string Code, string DeviceId);

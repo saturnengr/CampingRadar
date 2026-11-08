@@ -21,7 +21,7 @@ public sealed class EntitlementStore
     {
         var dir = cfg["DataDir"] ?? "App_Data";
         Directory.CreateDirectory(dir);
-        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db"), Cache = SqliteCacheMode.Shared }.ToString();
+        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db") }.ToString();
         using var c = Open();
         Exec(c, """
             CREATE TABLE IF NOT EXISTS entitlements(email TEXT PRIMARY KEY, plan TEXT NOT NULL, expires_ms INTEGER NOT NULL, source TEXT NOT NULL,
@@ -33,7 +33,7 @@ public sealed class EntitlementStore
             """);
     }
 
-    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); return c; }
+    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); } return c; }
     private static void Exec(SqliteConnection c, string sql, params (string, object)[] p) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; foreach (var (k, v) in p) cmd.Parameters.AddWithValue(k, v); cmd.ExecuteNonQuery(); }
     private static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     public static string NormalizeEmail(string e) => e.Trim().ToLowerInvariant();
@@ -90,7 +90,7 @@ public sealed class EntitlementStore
         email = NormalizeEmail(email);
         var code = RandomNumberGenerator.GetInt32(0, 1000000).ToString("D6");
         using var c = Open();
-        Exec(c, "UPDATE codes SET used_ms=$n WHERE email=$e AND used_ms=0 AND length(code)=6", ("$n", Now), ("$e", email));
+        Exec(c, "UPDATE codes SET used_ms=$n WHERE email=$e AND used_ms=0 AND code LIKE $e || ':%'", ("$n", Now), ("$e", email));
         Exec(c, "INSERT INTO codes(code, email, expires_ms, created_ms) VALUES($c, $e, $x, $n)", ("$c", email + ":" + code), ("$e", email), ("$x", DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds()), ("$n", Now));
         if (Get(email) is null) Grant(email, "free", 0, "signin", "");
         return code;

@@ -29,7 +29,7 @@ public sealed class SpotStore
     {
         var dir = cfg["DataDir"] ?? "App_Data";
         Directory.CreateDirectory(dir);
-        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db"), Cache = SqliteCacheMode.Shared }.ToString();
+        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db") }.ToString();
         using var c = Open();
         Exec(c, """
             CREATE TABLE IF NOT EXISTS spots(
@@ -40,7 +40,7 @@ public sealed class SpotStore
         try { Exec(c, "ALTER TABLE spots ADD COLUMN last_brief TEXT NOT NULL DEFAULT ''"); } catch (SqliteException) { }
     }
 
-    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); return c; }
+    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); } return c; }
     private static void Exec(SqliteConnection c, string sql, params (string, object?)[] p)
     {
         using var cmd = c.CreateCommand(); cmd.CommandText = sql;

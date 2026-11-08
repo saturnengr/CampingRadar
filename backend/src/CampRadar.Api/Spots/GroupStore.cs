@@ -21,7 +21,7 @@ public sealed class GroupStore
     {
         var dir = cfg["DataDir"] ?? "App_Data";
         Directory.CreateDirectory(dir);
-        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db"), Cache = SqliteCacheMode.Shared }.ToString();
+        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db") }.ToString();
         using var c = Open();
         Exec(c, """
             CREATE TABLE IF NOT EXISTS groups(id TEXT PRIMARY KEY, owner_email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', created_ms INTEGER NOT NULL);
@@ -37,7 +37,7 @@ public sealed class GroupStore
             """);
     }
 
-    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); return c; }
+    private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); } return c; }
     private static void Exec(SqliteConnection c, string sql, params (string, object?)[] p) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; foreach (var (k, v) in p) cmd.Parameters.AddWithValue(k, v ?? DBNull.Value); cmd.ExecuteNonQuery(); }
     private static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private static string N(string e) => EntitlementStore.NormalizeEmail(e);
@@ -165,6 +165,11 @@ public sealed class GroupStore
     {
         using var c = Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT reply_token FROM messages WHERE id=$id"; cmd.Parameters.AddWithValue("$id", messageId);
         return cmd.ExecuteScalar() as string;
+    }
+    public Message? MessageById(long id)
+    {
+        using var c = Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT id, group_id, from_email, from_name, kind, text, data, ms, reply_to FROM messages WHERE id=$id"; cmd.Parameters.AddWithValue("$id", id);
+        using var r = cmd.ExecuteReader(); return r.Read() ? Row(r) : null;
     }
     public Message? MessageByToken(string token)
     {

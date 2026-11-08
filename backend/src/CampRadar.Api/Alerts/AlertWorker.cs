@@ -97,7 +97,7 @@ public sealed class AlertWorker : BackgroundService
                 var crit = s.Alerts.Where(a => a.Critical).ToList();
                 foreach (var a in crit.Where(a => !prev.Warnings.Contains(a.Id)))
                     msgs.Add(("warning", a.Event.ToUpperInvariant() + (a.MaxHailIn >= 0.75 ? $" · hail to {a.MaxHailIn} in" : ""), (a.MaxHailIn >= 0.75 ? $"Hail to {a.MaxHailIn} in" + (a.MaxWindGust is { } g ? $", wind to {g}" : "") + ". " : "") + (a.Headline ?? "Take shelter now. Open the app for details."), true));
-                next.Warnings = crit.Select(a => a.Id).ToList();
+                next.Warnings = s.AlertsUnknown ? prev.Warnings : crit.Select(a => a.Id).ToList();
 
                 // Rain: notify on escalation (none/passing → incoming → imminent/atyou), re-arm after clearing; at most one per level per 2 h.
                 int Rank(string l) => l switch { "incoming" => 1, "imminent" => 2, "atyou" => 2, "low" => 0, _ => 0 };
@@ -226,7 +226,7 @@ public sealed class AlertWorker : BackgroundService
 
                 var crit = s.Alerts.Where(a => a.Critical).ToList();
                 foreach (var a in crit.Where(a => !prev.Warnings.Contains(a.Id))) msgs.Add(("warning", pfx + a.Event.ToUpperInvariant(), a.Headline ?? "Take shelter now.", true));
-                next.Warnings = crit.Select(a => a.Id).ToList();
+                next.Warnings = s.AlertsUnknown ? prev.Warnings : crit.Select(a => a.Id).ToList();
 
                 int Rank(string l) => l switch { "incoming" => 1, "imminent" => 2, "atyou" => 2, _ => 0 };
                 if (Rank(s.Rain.Level) > Rank(prev.Rain) && now - prev.RainSentMs > 20 * 60000L) { msgs.Add(("rain", pfx + s.Rain.Main, s.Rain.Sub, Rank(s.Rain.Level) >= 2)); next.RainSentMs = now; }

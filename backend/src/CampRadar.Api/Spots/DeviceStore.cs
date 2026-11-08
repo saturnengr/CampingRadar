@@ -16,8 +16,8 @@ public sealed class DeviceStore
     {
         var dir = cfg["DataDir"] ?? "App_Data";
         Directory.CreateDirectory(dir);
-        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db"), Cache = SqliteCacheMode.Shared }.ToString();
-        using var c = new SqliteConnection(_cs); c.Open();
+        _cs = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dir, "campradar.db") }.ToString();
+        using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS devices(
@@ -32,7 +32,7 @@ public sealed class DeviceStore
     public void Ping(string id, double lat, double lon, string activity, string lang, string platform, string version, bool push, bool opened)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        using var c = new SqliteConnection(_cs); c.Open();
+        using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
         cmd.CommandText = """
             INSERT INTO devices(id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens)
@@ -49,7 +49,7 @@ public sealed class DeviceStore
     {
         long since = DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeMilliseconds();
         var list = new List<DeviceRow>();
-        using var c = new SqliteConnection(_cs); c.Open();
+        using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens FROM devices WHERE last_ms >= $since ORDER BY last_ms DESC";
         cmd.Parameters.AddWithValue("$since", since);
@@ -60,7 +60,7 @@ public sealed class DeviceStore
 
     public int Prune(int days)
     {
-        using var c = new SqliteConnection(_cs); c.Open();
+        using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
         cmd.CommandText = "DELETE FROM devices WHERE last_ms < $cut";
         cmd.Parameters.AddWithValue("$cut", DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeMilliseconds());

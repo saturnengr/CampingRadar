@@ -22,7 +22,7 @@ public sealed class NwsClient
     static string? Param(JsonElement p, string name) => p.TryGetProperty("parameters", out var pr) && pr.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() > 0 ? v[0].ToString() : null;
     static double HailSize(JsonElement p) => double.TryParse(Param(p, "maxHailSize"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
 
-    public async Task<List<NwsAlert>> ActiveAlertsAsync(double lat, double lon, CancellationToken ct)
+    public async Task<List<NwsAlert>?> ActiveAlertsAsync(double lat, double lon, CancellationToken ct)
     {
         var key = $"{lat:F2},{lon:F2}";
         if (_cache.TryGetValue(key, out var hit) && DateTimeOffset.UtcNow - hit.At < TimeSpan.FromMinutes(2)) return hit.Alerts;
@@ -47,6 +47,7 @@ public sealed class NwsClient
         {
             _log.LogWarning(ex, "NWS alerts failed for {Key}", key);
             if (_cache.TryGetValue(key, out hit)) return hit.Alerts;
+            return null;   // unknown, not empty
         }
         return list;
     }

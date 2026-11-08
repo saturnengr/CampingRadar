@@ -38,7 +38,7 @@ self.addEventListener('notificationclick', e => {
     e.waitUntil((async () => {
       // the page stores the backend address for us under caches 'campradar-meta' / 'backend'; the payload names the recipient
       let be = null; try { const c = await caches.open('campradar-meta'); const r = await c.match('backend'); be = r ? await r.text() : null; } catch (err) {}
-      if (be && d.toEmail) { try { await fetch(be + '/group/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replyToken: d.replyToken, fromEmail: d.toEmail, text }) }); return; } catch (err) {} }
+      if (be && d.toEmail) { try { await fetch(be + '/group/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replyToken: d.replyToken, fromEmail: d.toEmail, text, msgId: d.msgId }) }); return; } catch (err) {} }
       const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       if (list.length) list[0].postMessage({ type: 'reply', replyToken: d.replyToken, text });
     })());

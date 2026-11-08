@@ -37,9 +37,10 @@ public sealed class Recorder
         }
     }
 
+    public static string SafeName(string name) { var n = new string((name ?? "").Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray()); return n.Length == 0 ? "rec-" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmm") : n[..Math.Min(40, n.Length)]; }
     public Job Start(string name, double lat, double lon, double hours, double radiusMi = 200, int zoom = 8)
     {
-        name = new string(name.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray()); if (name.Length == 0) name = "rec-" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmm");
+        name = SafeName(name);
         if (_jobs.TryGetValue(name, out var existing) && existing.Running) return existing;
         var job = new Job { Name = name, Lat = lat, Lon = lon, RadiusMi = radiusMi, Zoom = zoom, StartedAt = DateTimeOffset.UtcNow, EndsAt = DateTimeOffset.UtcNow.AddHours(Math.Clamp(hours, 0.1, 48)), Running = true };
         _jobs[name] = job;
@@ -47,11 +48,12 @@ public sealed class Recorder
         var dir = Path.Combine(_dir, name); Directory.CreateDirectory(dir);
         double mpp = 156543.03392 * Math.Cos(lat * Math.PI / 180) / Math.Pow(2, zoom);
         File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(new { name, lat, lon, radiusMi, zoom, metersPerPx = mpp, sizePx = 2 * (int)Math.Round(radiusMi * 1609.344 / mpp), startedAt = job.StartedAt, endsAt = job.EndsAt, note = "frames are NOAA MRMS exportImage PNGs (Web Mercator, centred on lat/lon, radiusMi each side); {t}.status.json is the server engine's output for that scan with default options" }, new JsonSerializerOptions { WriteIndented = true }));
+        Prune();
         _ = Task.Run(() => RunAsync(job, dir, cts.Token));
         return job;
     }
 
-    public void Stop(string name) { if (_cts.TryRemove(name, out var c)) c.Cancel(); if (_jobs.TryGetValue(name, out var j)) j.Running = false; }
+    public void Stop(string name) { name = SafeName(name); if (_cts.TryRemove(name, out var c)) c.Cancel(); if (_jobs.TryGetValue(name, out var j)) j.Running = false; }
 
     private async Task RunAsync(Job job, string dir, CancellationToken ct)
     {
@@ -86,10 +88,22 @@ public sealed class Recorder
 
     public string? ZipPath(string name)
     {
-        var dir = Path.Combine(_dir, name); if (!Directory.Exists(dir)) return null;
-        var zip = Path.Combine(_dir, name + ".zip");
-        if (File.Exists(zip)) File.Delete(zip);
-        ZipFile.CreateFromDirectory(dir, zip, CompressionLevel.Fastest, includeBaseDirectory: true);
+        name = SafeName(name);
+        var dir = Path.GetFullPath(Path.Combine(_dir, name)); if (!dir.StartsWith(Path.GetFullPath(_dir) + Path.DirectorySeparatorChar) || !Directory.Exists(dir)) return null;
+        var zip = Path.Combine(_dir, name + ".zip"), tmp = zip + "." + Environment.TickCount64 + ".tmp";
+        ZipFile.CreateFromDirectory(dir, tmp, CompressionLevel.Fastest, includeBaseDirectory: true);
+        File.Move(tmp, zip, overwrite: true);   // a download in flight keeps its open handle on the old file
         return zip;
+    }
+    /// <summary>Keep disk in check on shared hosting: at most the newest 4 recordings, and no zips older than a day.</summary>
+    public void Prune()
+    {
+        try
+        {
+            foreach (var z in Directory.EnumerateFiles(_dir, "*.zip").Where(f => DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromDays(1))) File.Delete(z);
+            var dirs = Directory.EnumerateDirectories(_dir).OrderByDescending(Directory.GetCreationTimeUtc).Skip(4).ToList();
+            foreach (var d in dirs) if (!(_jobs.TryGetValue(Path.GetFileName(d), out var j) && j.Running)) Directory.Delete(d, true);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "recording prune"); }
     }
 }

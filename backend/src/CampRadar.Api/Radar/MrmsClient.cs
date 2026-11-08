@@ -50,7 +50,7 @@ public sealed class MrmsClient
                     if (f.TryGetProperty("attributes", out var a) && a.TryGetProperty("idp_validtime", out var t) && t.ValueKind == JsonValueKind.Number
                         && a.TryGetProperty("objectid", out var id) && id.ValueKind == JsonValueKind.Number)
                         ids[t.GetInt64()] = id.GetInt64();
-            if (ids.Count > 0) { _ids = ids; Times = ids.Keys.OrderBy(x => x).ToList(); TimesRefreshedAt = DateTimeOffset.UtcNow; }
+            if (ids.Count > 0) { var times = ids.Keys.OrderBy(x => x).ToList(); Times = times; _ids = ids; TimesRefreshedAt = DateTimeOffset.UtcNow; }   // times first: a time listed before its id exists only fails one request, the reverse serves stale frames
             else _log.LogWarning("MRMS time query returned no features");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -7,7 +7,7 @@ namespace CampRadar.Api.Push;
 /// <summary>Web Push (VAPID) to the home-screen app. Keys come from configuration.</summary>
 public sealed class PushSender
 {
-    private readonly WebPushClient _client = new();
+    private readonly WebPushClient _client = new(new HttpClient(new SocketsHttpHandler { ConnectCallback = async (ctx, ct) => { var s = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true }; try { var addrs = await System.Net.Dns.GetHostAddressesAsync(ctx.DnsEndPoint.Host, System.Net.Sockets.AddressFamily.InterNetwork, ct); await s.ConnectAsync(addrs, ctx.DnsEndPoint.Port, ct); return new System.Net.Sockets.NetworkStream(s, true); } catch { s.Dispose(); throw; } } }) { Timeout = TimeSpan.FromSeconds(15) });   // IPv4 only (googleapis hangs on v6 here) and a short timeout so one dead endpoint cannot stall the loop
     private readonly VapidDetails? _vapid;
     private readonly ILogger<PushSender> _log;
     public string? PublicKey { get; }

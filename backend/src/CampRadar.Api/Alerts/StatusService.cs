@@ -40,10 +40,12 @@ public sealed class Status
     public LightningSummary? Lightning { get; set; }
     public string LightningLevel { get; set; } = "none";   // none | near30 | near20 | alarm
     public List<NwsAlert> Alerts { get; set; } = new();
+    public bool AlertsUnknown { get; set; }   // the NWS alert fetch failed this cycle; do not treat the empty list as "all clear"
     public string Level { get; set; } = "none";            // overall: max of rain and lightning, warnings separate
     public string Color { get; set; } = "grey";
     public string Main { get; set; } = "";
     public string Sub { get; set; } = "";
+    public Status Clone() => (Status)MemberwiseClone();
 }
 
 /// <summary>Computes the full "what's coming for this spot" picture; shared by the API and the alert worker.</summary>
@@ -68,12 +70,13 @@ public sealed class StatusService
         var key = $"{Math.Round(lat, 2)},{Math.Round(lon, 2)}|{opt.HitMi}|{opt.ThreshDbz}";
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (allowCached && _cache.TryGetValue(key, out var hit) && hit.S.Rain.LatestRadarMs == _mrms.Latest && now - hit.At < 150_000)
-            return Refresh(hit.S, lat, lon, opt, now);
+            return Refresh(hit.S.Clone(), lat, lon, opt, now);   // a copy per caller: the cached one must not be mutated under other readers
 
         var s = new Status { AsOfMs = now, Lat = lat, Lon = lon };
         try { s.Rain = await RainAsync(lat, lon, opt, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { s.Rain = new RainStatus { Error = ex.Message, Main = "Rain tracking unavailable", Sub = ex.Message }; _log.LogWarning(ex, "rain status failed"); }
-        s.Alerts = await _nws.ActiveAlertsAsync(lat, lon, ct);
+        var alerts = await _nws.ActiveAlertsAsync(lat, lon, ct);
+        s.Alerts = alerts ?? new List<NwsAlert>(); s.AlertsUnknown = alerts is null;
         var done = Refresh(s, lat, lon, opt, now);
         _cache[key] = (now, done);
         if (_cache.Count > 5000) _cache.Clear();
