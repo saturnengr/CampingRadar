@@ -71,15 +71,29 @@ public sealed class BriefingWriter
         Target 110 to 170 words in total. Output only the briefing text.
         """;
 
-    public async Task<(string? Text, string? Provider)> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct, List<string>? errors = null)
+    private const string NowSystem = """
+        You are a meteorologist explaining the current weather to one person standing outside at the given spot, in 90 to 150 words of plain prose,
+        no markdown, no lists. You are given facts as JSON: the nearest station's measured conditions (with its distance and age), the NWS hourly forecast
+        for the next few hours, what the radar shows (nearest returns, their strength in dBZ, the tracked motion and any arrival estimate), lightning,
+        pressure and its trend, dew point, visibility, sun times, NWS alerts, and the person's activity.
+        Explain what is happening and why, concretely: what the measurements say, what the radar shows and whether it is reaching the ground
+        (light returns of 10 to 20 dBZ with a dry layer below — a dew-point spread of ten degrees or more, or a low NWS rain chance — usually mean
+        virga or drizzle evaporating before the ground; say so plainly), what the pressure trend implies, what the wind is doing, and what to expect
+        over the next two to three hours. If the facts disagree (radar overhead but no rain reported, forecast rain but radar clear), say which to trust and why.
+        Keep numbers rounded. End with one sentence of practical advice for the activity. Language: English, or US Spanish when "language" is "es-US".
+        Output only the text.
+        """;
+
+    public async Task<(string? Text, string? Provider)> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct, List<string>? errors = null, string style = "briefing")
     {
+        var sys = style == "now" ? NowSystem : System;
         var user = "Facts:\n" + facts.GetRawText() + (fallback is null ? "" : "\n\nA plain template version, for reference only:\n" + fallback);
         foreach (var p in Providers)
         {
             var sw = global::System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var text = p switch { "gemini" => await GeminiAsync(user, ct), "anthropic" => await AnthropicAsync(user, ct), "openai" => await OpenAiAsync(user, ct), _ => null };
+                var text = p switch { "gemini" => await GeminiAsync(user, ct, sys), "anthropic" => await AnthropicAsync(user, ct, sys), "openai" => await OpenAiAsync(user, ct, sys), _ => null };
                 text = text?.Trim();
                 if (!string.IsNullOrEmpty(text)) { Tally(p, true); _log.LogInformation("briefing written by {Provider} in {Ms} ms", p, sw.ElapsedMilliseconds); return (text, p); }
                 _log.LogWarning("briefing provider {Provider} returned no text", p); errors?.Add(p + ": returned no text");
@@ -93,14 +107,14 @@ public sealed class BriefingWriter
     private HttpClient Client(string name) => _f.CreateClient(name);
 
     // ---- Google Gemini: POST generateContent with a system instruction ----
-    private async Task<string?> GeminiAsync(string user, CancellationToken ct)
+    private async Task<string?> GeminiAsync(string user, CancellationToken ct, string sys)
     {
         var model = _cfg["Gemini:Model"] ?? "gemini-3.5-flash-lite";
         // thinkingBudget 0 = answer straight away (2.5 family); other models take the plain config
         object gen = model.Contains("2.5") ? new { maxOutputTokens = 600, temperature = 0.6, thinkingConfig = new { thinkingBudget = 0 } } : new { maxOutputTokens = 600, temperature = 0.6 };
         var body = new
         {
-            system_instruction = new { parts = new[] { new { text = System } } },
+            system_instruction = new { parts = new[] { new { text = sys } } },
             contents = new[] { new { role = "user", parts = new[] { new { text = user } } } },
             generationConfig = gen
         };
@@ -119,9 +133,9 @@ public sealed class BriefingWriter
     }
 
     // ---- Anthropic Messages API ----
-    private async Task<string?> AnthropicAsync(string user, CancellationToken ct)
+    private async Task<string?> AnthropicAsync(string user, CancellationToken ct, string sys)
     {
-        var body = new { model = _cfg["Anthropic:Model"] ?? "claude-haiku-5-5", max_tokens = 400, system = System, messages = new[] { new { role = "user", content = user } } };
+        var body = new { model = _cfg["Anthropic:Model"] ?? "claude-haiku-5-5", max_tokens = 400, system = sys, messages = new[] { new { role = "user", content = user } } };
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages");
         req.Headers.Add("x-api-key", _cfg["Anthropic:ApiKey"]); req.Headers.Add("anthropic-version", "2023-06-01");
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
@@ -135,10 +149,10 @@ public sealed class BriefingWriter
     }
 
     // ---- OpenAI-compatible chat completions (OpenAI, Groq, OpenRouter, Cloudflare, Mistral…) ----
-    private async Task<string?> OpenAiAsync(string user, CancellationToken ct)
+    private async Task<string?> OpenAiAsync(string user, CancellationToken ct, string sys)
     {
         var baseUrl = (_cfg["OpenAI:BaseUrl"] ?? "https://api.openai.com/v1").TrimEnd('/');
-        var body = new { model = _cfg["OpenAI:Model"] ?? "gpt-4o-mini", max_tokens = 400, temperature = 0.6, messages = new object[] { new { role = "system", content = System }, new { role = "user", content = user } } };
+        var body = new { model = _cfg["OpenAI:Model"] ?? "gpt-4o-mini", max_tokens = 400, temperature = 0.6, messages = new object[] { new { role = "system", content = sys }, new { role = "user", content = user } } };
         using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/chat/completions");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _cfg["OpenAI:ApiKey"]);
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");

@@ -147,7 +147,7 @@ app.MapPost("/brief", async (HttpRequest http, EntitlementStore ent, [FromBody] 
     if (RequirePro(http, ent) is { } gate) return gate;
     if (!w.Enabled) return Results.StatusCode(503);
     if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
-    var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct);
+    var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct, null, req.Style == "now" ? "now" : "briefing");
     return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend", provider });
 });
 
@@ -577,7 +577,7 @@ public sealed record PushSub(string Endpoint, PushKeys? Keys);
 public sealed record PushKeys(string P256dh, string Auth);
 public sealed record LocationRequest(double Lat, double Lon);
 public sealed record SnoozeRequest(long UntilMs);
-public sealed record BriefRequest(JsonElement Facts, string? Fallback);
+public sealed record BriefRequest(JsonElement Facts, string? Fallback, string? Style);
 public sealed record RedeemRequest(string Code, string DeviceId);
 public sealed record InviteRequest(string? Email, string? MyName);
 public sealed record JoinRequest(string Code, string? MyName);

@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08d';
+const APP_VERSION = '2026.11.08e';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1359,6 +1359,9 @@ async function refreshObs() {
         wDir = o.windDirection && o.windDirection.value != null ? compass(o.windDirection.value) : null;
         text = o.textDescription || null;
         st.wx.visMi = o.visibility && o.visibility.value != null ? o.visibility.value / 1609.344 : null;
+        const v = k => o[k] && o[k].value != null ? o[k].value : null;
+        st.wx.obs = { at: Date.parse(o.timestamp), station: st.wx.stationName, tempF: cToF(v('temperature')), dewF: cToF(v('dewpoint')), rh: v('relativeHumidity'), windMph: kmhToMph(v('windSpeed')), gustMph: kmhToMph(v('windGust')), dirDeg: v('windDirection'),
+          pressureInHg: v('barometricPressure') != null ? v('barometricPressure') / 3386.39 : v('seaLevelPressure') != null ? v('seaLevelPressure') / 3386.39 : null, visMi: st.wx.visMi, heatIndexF: cToF(v('heatIndex')), windChillF: cToF(v('windChill')), text, precip1hIn: v('precipitationLastHour') != null ? v('precipitationLastHour') / 25.4 : null };
       }
     }
   } catch (e) { /* fall back to hourly forecast below */ }
@@ -2238,6 +2241,57 @@ document.addEventListener('click', e => { if (!e.target.closest('#snoozeMenu') &
 /* ------------------------------ day view --------------------------- */
 const ACTIVITIES = { camping: 'Camping', rv: 'RV', hunting: 'Hunting', fishing: 'Fishing & boating', trail: 'Hiking / running / cycling', beach: 'Beach', skiing: 'Skiing', sentinel: 'Sentinel (fixed display watching one spot)' };
 $('#days').addEventListener('click', e => { const d = e.target.closest('.day'); if (d && d.dataset.date) openDay(d.dataset.date); });
+$('#now').addEventListener('click', () => openNow()); $('#now').style.cursor = 'pointer';
+// "Right now": everything measured and seen at this moment, and (Pro) the model's explanation of what is going on and why
+function nowFacts() {
+  const o = st.wx.obs || {}, h0 = st.wx.hourly0, now = Date.now(), g = st.wx.grid, tH = Math.floor(now / 3600e3) * 3600e3;
+  const gv = (k, t) => g && g[k] ? g[k][t] : undefined;
+  const nxt = (st.wx.hourly || []).filter(p => Date.parse(p.startTime) + 3600e3 > now).slice(0, 4).map(p => ({ at: sayTime(Date.parse(p.startTime)), tempF: p.temperature, pop: p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value, wind: p.windSpeed, dir: p.windDirection, sky: p.shortForecast, gust: gv('gust', Date.parse(p.startTime)), thunder: gv('thunder', Date.parse(p.startTime)) }));
+  const nc = st.nc && st.nc.res, m = st.nc && st.nc.motion;
+  const sun = st.loc ? sunTimes(st.loc.lat, st.loc.lon, localDate(now)) : null;
+  return {
+    language: lang() === 'es' ? 'es-US' : 'en-US', activity: S.activity, place: st.wx.place || $('#nowPlace').textContent, time: sayTime(now),
+    station: o.at ? { name: o.station, ageMin: Math.round((now - o.at) / 60000), tempF: rnd(o.tempF), dewF: rnd(o.dewF), rh: rnd(o.rh), windMph: rnd(o.windMph), gustMph: rnd(o.gustMph), dir: o.dirDeg != null ? compass(o.dirDeg) : null, pressureInHg: o.pressureInHg != null ? +o.pressureInHg.toFixed(2) : null, visMi: o.visMi != null ? +o.visMi.toFixed(1) : null, heatIndexF: rnd(o.heatIndexF), windChillF: rnd(o.windChillF), sky: o.text, precipLastHourIn: o.precip1hIn } : null,
+    dewSpreadF: o.tempF != null && o.dewF != null ? rnd(o.tempF - o.dewF) : null,
+    pressureTrend: st.wx.pressure ? { inHg: +st.wx.pressure.inHg.toFixed(2), change3h: +st.wx.pressure.change3h.toFixed(2), word: st.wx.pressure.word, fast: st.wx.pressure.fast } : null,
+    radar: nc ? { status: $('#statusMain').textContent, detail: $('#statusSub').textContent, nearest: nc.nearest ? { distMi: rnd(nc.nearest.distMi), bearing: compass(nc.nearest.bearing), dbz: rnd(nc.nearest.dbz) } : null, faint: nc.faint ? { distMi: rnd(nc.faint.distMi), bearing: compass(nc.faint.bearing), dbz: rnd(nc.faint.dbz) } : null, hit: nc.hit ? { etaMin: rnd(Math.max(0, nc.hit.etaMin - radarLag())), from: compass(nc.hit.fromBearing), maxDbz: rnd(nc.hit.maxDbz), distMi: rnd(nc.hit.distMi) } : null, motion: m && m.ok ? { heading: compass(m.headingDeg), mph: rnd(m.speedMph), confidence: +m.global.conf.toFixed(2) } : { ok: false }, scanAgeMin: rnd(radarLag()), thresholdDbz: S.threshDbz } : null,
+    lightning: st.lightning ? { within10: st.lightning.within10, within30: st.lightning.within30, nearestMi: st.lightning.nearestMi != null ? rnd(st.lightning.nearestMi) : null, trend: st.lightning.trend } : null,
+    nwsNow: h0 ? { sky: h0.shortForecast, pop: h0.probabilityOfPrecipitation && h0.probabilityOfPrecipitation.value, tempF: h0.temperature, wind: h0.windSpeed, dir: h0.windDirection } : null,
+    next: nxt, alerts: (st.alerts || []).map(a => a.event), sun: sun ? { rise: sayTime(sun.rise), set: sayTime(sun.set), daylightLeftMin: sun.set > now ? rnd((sun.set - now) / 60000) : 0 } : null
+  };
+}
+const rnd = v => v == null || isNaN(v) ? null : Math.round(v);
+async function openNow() {
+  const sh = $('#sheet'); sh.innerHTML = '<h2>Right now</h2><div class="muted">Loading…</div>'; openModal();
+  try { await Promise.all([fetchPressure().catch(() => null), st.wx.obsAt && Date.now() - st.wx.obsAt < 5 * 60000 ? null : refreshObs().catch(() => null)]); } catch (e) {}
+  const f = nowFacts(), o = f.station, es = lang() === 'es';
+  const tile = (k, v, n, cls) => '<div class="tile ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div>' + (n ? '<div class="n">' + n + '</div>' : '') + '</div>';
+  const feels = o && (o.heatIndexF != null ? o.heatIndexF : o.windChillF != null ? o.windChillF : null);
+  const tiles = [
+    o ? tile('Temperature', o.tempF + '°', (feels != null && feels !== o.tempF ? 'Feels like ' + feels + '° · ' : '') + (o.sky || '')) : tile('Temperature', $('#nowTemp').textContent, 'From the hourly forecast'),
+    o && o.dewF != null ? tile('Dew point', o.dewF + '°', (o.rh != null ? o.rh + '% humidity · ' : '') + (f.dewSpreadF >= 15 ? 'very dry air' : f.dewSpreadF >= 8 ? 'dry air' : f.dewSpreadF >= 4 ? 'moist' : 'near saturation — fog or drizzle possible'), f.dewSpreadF < 4 ? 'warn' : '') : '',
+    o && o.windMph != null ? tile('Wind', (o.dir ? o.dir + ' ' : '') + o.windMph + '<small> mph</small>', o.gustMph ? 'Gusts ' + o.gustMph : 'No gusts reported', o.gustMph >= 30 ? 'bad' : o.gustMph >= 20 ? 'warn' : '') : '',
+    f.pressureTrend ? tile('Pressure', f.pressureTrend.inHg.toFixed(2) + '<small> inHg</small>', (f.pressureTrend.word === 'steady' ? 'Steady' : (f.pressureTrend.word === 'rising' ? 'Rising' : 'Falling') + (f.pressureTrend.fast ? ' fast' : '')) + ' · ' + (f.pressureTrend.change3h >= 0 ? '+' : '') + f.pressureTrend.change3h.toFixed(2) + ' in 3 h', f.pressureTrend.word === 'falling' && f.pressureTrend.fast ? 'warn' : '') : (o && o.pressureInHg != null ? tile('Pressure', o.pressureInHg.toFixed(2) + '<small> inHg</small>', 'Trend not available yet') : ''),
+    o && o.visMi != null ? tile('Visibility', o.visMi >= 10 ? '10+<small> mi</small>' : o.visMi + '<small> mi</small>', o.visMi < 1 ? 'Fog or heavy precipitation' : o.visMi < 3 ? 'Reduced' : 'Clear', o.visMi < 1 ? 'bad' : o.visMi < 3 ? 'warn' : '') : '',
+    f.radar ? tile('Radar', f.radar.nearest ? f.radar.nearest.distMi + '<small> mi ' + f.radar.nearest.bearing + '</small>' : f.radar.faint ? f.radar.faint.distMi + '<small> mi ' + f.radar.faint.bearing + '</small>' : 'Clear', f.radar.nearest ? 'Nearest rain · ' + f.radar.nearest.dbz + ' dBZ' + (f.radar.motion.ok ? ' · moving ' + f.radar.motion.heading + ' ' + f.radar.motion.mph + ' mph' : '') : f.radar.faint ? 'Only faint returns (' + f.radar.faint.dbz + ' dBZ) — likely not reaching the ground' : 'Nothing within 50 mi', f.radar.hit ? 'warn' : '') : '',
+    f.lightning ? tile('Lightning', f.lightning.within30 ? (f.lightning.nearestMi != null ? f.lightning.nearestMi + '<small> mi</small>' : f.lightning.within30 + '<small> strikes</small>') : 'None', f.lightning.within30 ? f.lightning.within10 + ' within 10 mi, ' + f.lightning.within30 + ' within 30 · ' + f.lightning.trend : 'None within 30 mi in 30 min', f.lightning.within10 ? 'bad' : f.lightning.within30 ? 'warn' : 'good') : '',
+    f.nwsNow ? tile('NWS this hour', (f.nwsNow.pop != null ? f.nwsNow.pop : '—') + '<small>% rain</small>', f.nwsNow.sky + ' · ' + f.nwsNow.wind + ' ' + (f.nwsNow.dir || '')) : '',
+    f.sun ? tile(f.sun.daylightLeftMin > 0 ? 'Daylight left' : 'Sunrise', f.sun.daylightLeftMin > 0 ? fmtDur(f.sun.daylightLeftMin) : f.sun.rise, 'Sunrise ' + f.sun.rise + ' · sunset ' + f.sun.set) : ''
+  ].filter(Boolean).join('');
+  sh.innerHTML = '<h2>' + (es ? 'Ahora mismo' : 'Right now') + '</h2>' +
+    '<div class="muted" style="font-size:13px;margin-bottom:8px">' + (o ? (es ? 'Medido en ' : 'Measured at ') + escapeHtml(o.name || 'the nearest station') + ' · ' + o.ageMin + ' min ' + (es ? 'atrás' : 'ago') : (es ? 'Sin estación cercana; del pronóstico horario' : 'No station report yet; from the hourly forecast')) + '</div>' +
+    '<div class="tiles">' + tiles + '</div>' +
+    '<div id="nowAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:12px">' + (isPro() && BE() ? '<span class="muted">' + (es ? 'Analizando…' : 'Working out what is going on…') + '</span>' : '<span class="muted">' + (es ? 'Con LeadTime Pro, aquí aparece una explicación escrita de lo que está pasando y por qué.' : 'With LeadTime Pro, a written explanation of what is happening and why appears here.') + ' <button class="mini" data-act="go-account">' + (es ? 'Cuenta' : 'Account') + '</button></span>') + '</div>' +
+    '<button class="done" data-act="close">' + (es ? 'Listo' : 'Done') + '</button>';
+  if (isPro() && BE()) {
+    try {
+      const r = await fetchT(BE() + '/brief', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ facts: f, style: 'now' }) }, 25000);
+      const el = $('#nowAnalysis'); if (!el) return;
+      if (r.ok) { const j = await r.json(); el.innerHTML = escapeHtml(j.text).replace(/\n+/g, '<br><br>') + '<div class="muted" style="font-size:12px;margin-top:6px">' + (es ? 'Escrito por el modelo a partir de las mediciones y el radar de arriba.' : 'Written by the model from the measurements and radar above.') + '</div>'; }
+      else el.innerHTML = '<span class="muted">' + (es ? 'El análisis no está disponible ahora.' : 'The written analysis is not available right now.') + '</span>';
+    } catch (e) { const el = $('#nowAnalysis'); if (el) el.innerHTML = '<span class="muted">' + (es ? 'El análisis no está disponible ahora.' : 'The written analysis is not available right now.') + '</span>'; }
+  }
+}
 
 // NWS gridpoint data adds gusts, thunder chance and feels-like temperatures that the hourly forecast lacks.
 async function fetchGrid(P) {
