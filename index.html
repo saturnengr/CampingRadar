@@ -774,7 +774,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08p';
+const APP_VERSION = '2026.11.08q';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1987,6 +1987,60 @@ const HU_ADVICE = {
   lightning: { fishing: 'Lightning nearby — off the water now, away from the shoreline and the boat; wait 30 minutes after the last strike.', camping: 'Lightning nearby — into vehicles, away from tall trees and water.', rv: 'Lightning nearby — stay inside the rig; it is safe shelter.', trail: 'Lightning nearby — off ridges, away from lone trees, spread the group out.', beach: 'Lightning nearby — out of the water and off the sand.', hunting: 'Lightning nearby — out of the stand and off the ridge.', skiing: 'Lightning nearby — off the lift and the slopes.', sentinel: 'Lightning nearby.' },
   uv: { fishing: 'Very high UV — water doubles the exposure; sunscreen, hat, sleeves.', beach: 'Very high UV — sunscreen every two hours, hats, shade at midday.', trail: 'Very high UV — sunscreen, hat, long sleeves.', camping: 'Very high UV.', rv: 'Very high UV.', hunting: 'Very high UV.', skiing: 'Very high UV — snow reflects it; sunscreen and goggles.', sentinel: 'Very high UV.' }
 };
+/* ---- What to bring: the ordinary case where the day is fine but the evening will not be. Built from the next ten hours of
+   the NWS hourly forecast, the live radar and the current observation. Returns items with short pill text and a reason. ---- */
+function computeBring() {
+  if (!st.loc) return null;
+  const act = S.activity in ACTIVITIES ? S.activity : 'camping', now = Date.now(), g = st.wx.grid, hp = st.wx.hourly || [], ob = st.wx.obs;
+  const hours = hp.map(p => ({ t: Date.parse(p.startTime), p })).filter(h => h.t + 3600e3 > now && h.t < now + 10 * 3600e3);
+  if (!hours.length) return null;
+  const pop = h => (h.p.probabilityOfPrecipitation && h.p.probabilityOfPrecipitation.value) || 0;
+  const temp = h => h.p.temperature, feels = h => g && g.feels && g.feels[h.t] != null ? g.feels[h.t] : temp(h);
+  const dewF = h => h.p.dewpoint && h.p.dewpoint.value != null ? cToF(h.p.dewpoint.value) : (ob && ob.dewF != null ? ob.dewF : null);
+  const nowT = ob && ob.tempF != null && now - ob.at < 2 * 3600e3 ? ob.tempF : temp(hours[0]);
+  const hit = st.nc && st.nc.res && st.nc.res.hit, fresh = st.ncAt && now - st.ncAt < 15 * 60000;
+  const items = [];
+  // rain gear
+  const wet = hours.find(h => pop(h) >= 40);
+  if (fresh && hit && hit.distMi <= 50) items.push({ key: 'rain', short: 'rain gear', when: 'now', detail: 'Radar has rain tracked toward you' + (hit.etaMin > 5 ? ' in about ' + fmtDur(Math.max(0, hit.etaMin - radarLag())) : '') + '.' });
+  else if (wet) items.push({ key: 'rain', short: 'rain gear' + (wet.t > now + 3600e3 ? ' after ' + clock(wet.t) : ''), when: wet.t > now + 3600e3 ? clock(wet.t) : 'now', detail: pop(wet) + '% chance of rain ' + (wet.t > now + 3600e3 ? 'from around ' + clock(wet.t) : 'this hour') + (wet.p.shortForecast ? ' (' + wet.p.shortForecast.toLowerCase() + ')' : '') + '.' });
+  // a layer: the coolest point in the window versus now
+  let cold = null; for (const h of hours) if (!cold || feels(h) < feels(cold)) cold = h;
+  if (cold) {
+    const minF = feels(cold), drop = nowT - minF, by = cold.t > now + 3600e3 ? ' by ' + clock(cold.t) : '';
+    if (minF <= 45 && (drop >= 8 || nowT > 50)) items.push({ key: 'coat', short: 'a warm coat, hat and gloves (' + deg(minF) + '°' + by + ')', detail: (g && g.feels ? 'Feels like ' : 'Down to ') + deg(minF) + '°' + by + ', ' + deg(Math.round(drop)) + '° below now.' });
+    else if (minF <= 60 && drop >= 10) items.push({ key: 'jacket', short: 'a jacket (' + deg(minF) + '°' + by + ')', detail: 'Cooling from ' + deg(nowT) + '° now to ' + deg(minF) + '°' + by + '.' });
+    else if (minF <= 52 && drop >= 4) items.push({ key: 'jacket', short: 'a jacket (' + deg(minF) + '°' + by + ')', detail: deg(minF) + '°' + by + '.' });
+  }
+  // wind: a shell / hat that stays on
+  const windy = hours.find(h => (g && g.gust && g.gust[h.t] >= 25) || windMph(h.p) >= 20);
+  if (windy && !items.some(i => i.key === 'coat')) items.push({ key: 'wind', short: 'a windproof layer' + (windy.t > now + 3600e3 ? ' after ' + clock(windy.t) : ''), detail: 'Wind ' + windMph(windy.p) + ' mph' + (g && g.gust && g.gust[windy.t] ? ', gusts to ' + Math.round(g.gust[windy.t]) + ' mph' : '') + (windy.t > now + 3600e3 ? ' from around ' + clock(windy.t) : '') + '.' });
+  // bugs: warm, humid and calm around dusk (a suggestion, not a measurement)
+  const sun = sunTimes(st.loc.lat, st.loc.lon, localDate(now));
+  if (sun && sun.set && act !== 'skiing') {
+    const dusk = hours.find(h => h.t + 3600e3 > sun.set - 3600e3 && h.t < sun.set + 2 * 3600e3);
+    if (dusk && temp(dusk) >= 60 && temp(dusk) <= 85 && (dewF(dusk) || 0) >= 60 && windMph(dusk.p) < 8) items.push({ key: 'bugs', short: 'bug spray at dusk', detail: 'Warm, humid and calm around sunset (' + clock(sun.set) + ') — mosquito weather. A guess from the forecast, not a measurement.' });
+  }
+  if (!items.length) return null;
+  const flavour = { camping: { jacket: 'a layer for the fire and the bag tonight', coat: 'warm layers for the bag tonight — it is a cold one', rain: 'rain gear and a dry bag for the bedding' },
+    rv: { jacket: 'a jacket for the campfire', coat: 'a warm coat; run the furnace tonight', rain: 'rain gear; bring the awning in before it starts' },
+    fishing: { jacket: 'a jacket — it turns cold on the water after sunset', coat: 'a warm coat and gloves; a dunking tonight is dangerous', rain: 'rain gear in the boat' },
+    trail: { jacket: 'a shell and a layer — cooler at the turnaround', coat: 'warm layers and a hat — cold at the turnaround', rain: 'a shell in the pack' },
+    hunting: { jacket: 'a layer for the evening sit', coat: 'warm layers for the evening sit', rain: 'rain gear for the sit' },
+    beach: { jacket: 'a sweater for the evening', coat: 'a warm coat for the evening', rain: 'a rain jacket' },
+    skiing: { jacket: 'an extra layer for the afternoon', coat: 'face cover and a heavier layer this afternoon', rain: 'a shell — wet snow or rain later' },
+    sentinel: {} }[act] || {};
+  for (const i of items) i.advice = flavour[i.key] || '';
+  const list = items.map(i => i.short), joined = list.length === 1 ? list[0] : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+  const sentence = (act === 'sentinel' ? 'Heading out? Bring ' : 'Bring ') + joined + '.';
+  const sentenceES = (act === 'sentinel' ? '¿Sales? Lleva ' : 'Lleva ') + bringES(items) + '.';
+  return { items, sentence, sentenceES, title: 'Bring: ' + list.join(' · ') };
+}
+function bringES(items) {
+  const one = i => i.key === 'rain' ? ('impermeable' + (i.when !== 'now' ? ' después de las ' + i.when : '')) : i.key === 'coat' ? i.short.replace(/a warm coat, hat and gloves \((.*)\)/, 'abrigo, gorro y guantes ($1)').replace(' by ', ' hacia las ')
+    : i.key === 'jacket' ? i.short.replace(/a jacket \((.*)\)/, 'una chaqueta ($1)').replace(' by ', ' hacia las ') : i.key === 'wind' ? 'una capa cortaviento' : i.key === 'bugs' ? 'repelente para el anochecer' : i.short;
+  const l = items.map(one); return l.length === 1 ? l[0] : l.slice(0, -1).join(', ') + ' y ' + l[l.length - 1];
+}
 function computeHeadsUp() {
   const out = [], act = S.activity in ACTIVITIES ? S.activity : 'camping', now = Date.now(), g = st.wx.grid, hp = st.wx.hourly || [];
   const adv = key => (HU_ADVICE[key] && (HU_ADVICE[key][act] || HU_ADVICE[key].camping)) || '';
@@ -2041,6 +2095,8 @@ function computeHeadsUp() {
   }
   // UV (when known)
   if (st.beach && st.beach.uv) { const uvNow = st.beach.uv.hourly.find(x => Math.abs(x.t - now) < 1800e3); if (uvNow && uvNow.v >= 8) out.push({ key: 'uv', sev: 'warn', title: 'UV ' + uvWord(uvNow.v) + ' (' + Math.round(uvNow.v) + ')', detail: 'UV index now.', advice: adv('uv') }); }
+  // what to bring (info pill; the detail sheet gives the reasons)
+  try { const br = computeBring(); if (br) out.push({ key: 'bring', sev: 'info', title: br.title, detail: br.items.map(i => i.short[0].toUpperCase() + i.short.slice(1) + ' — ' + i.detail).join(' '), advice: br.items.map(i => i.advice).filter(Boolean).join(' ') }); } catch (e) {}
   const rank = { sev: 0, warn: 1, info: 2 };
   return out.sort((a, b) => rank[a.sev] - rank[b.sev]);
 }
@@ -2996,7 +3052,8 @@ function outlookSentences(f) {
 }
 function composeBriefingEN(f) {
   const body = { camping: campingBody, rv: rvBody, hunting: huntingBody, fishing: fishingBody, trail: trailBody, beach: beachBody, skiing: skiingBody, sentinel: sentinelBody }[f.activity] || campingBody;
-  return precipify([...leadSentences(f), ...body(f), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
+  const br = computeBring();
+  return precipify([...leadSentences(f), ...body(f), ...(br ? [br.sentence] : []), ...outlookSentences(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'));
 }
 
 // --- Spanish word lists ---
@@ -3190,7 +3247,8 @@ function outlookSentencesES(f) {
 }
 function composeBriefingES(f) {
   const body = { camping: campingBodyES, rv: rvBodyES, hunting: huntingBodyES, fishing: fishingBodyES, trail: trailBodyES, beach: beachBodyES, skiing: skiingBodyES, sentinel: sentinelBodyES }[f.activity] || campingBodyES;
-  return precipifyES([...leadSentencesES(f), ...body(f), ...outlookSentencesES(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'), f.precipType);
+  const br = computeBring();
+  return precipifyES([...leadSentencesES(f), ...body(f), ...(br ? [br.sentenceES] : []), ...outlookSentencesES(f)].filter(Boolean).join(' ').replace(/\s+/g, ' ').replace(/\s([.,;])/g, '$1'), f.precipType);
 }
 function composeBriefing(f) { return lang() === 'es' ? composeBriefingES(f) : composeBriefingEN(f); }
 // Text for the speech engine in the selected language (status lines and alerts are built in English)
