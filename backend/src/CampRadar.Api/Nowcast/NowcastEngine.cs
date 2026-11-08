@@ -288,7 +288,7 @@ public static class NowcastEngine
     {
         double cellMi = cellKm * 0.621371, R = hitRadiusMi + 0.7 * cellMi, R2 = R * R;
         var p = new Prediction();
-        int hits = 0, hitBlob = 0; double eta = double.PositiveInfinity, end = 0, maxDbz = -99, from = 0;
+        int hits = 0, hitBlob = 0; double eta = double.PositiveInfinity, end = 0, maxDbz = -99, from = 0, hitDist = 0;
         var blobCells = new Dictionary<int, int>();
         for (int y = 0; y < grid.H; y++)
             for (int x = 0; x < grid.W; x++)
