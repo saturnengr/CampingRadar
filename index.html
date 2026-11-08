@@ -626,18 +626,18 @@ function labelBlobs(grid, thresh, minCells) {
   const stack = [];
   for (let i = 0; i < d.length; i++) {
     if (d[i] < thresh || labels[i]) continue;
-    const id = blobs.length + 1; let n = 0, peak = -99, vol = 0, sx = 0, sy = 0;
+    const id = blobs.length + 1; let n = 0, peak = -99, vol = 0, sx = 0, sy = 0, edge = false;
     labels[i] = id; stack.push(i);
     while (stack.length) {
       const k = stack.pop(), x = k % w, y = (k / w) | 0, v = d[k];
-      n++; vol += v - thresh + 1; sx += x; sy += y; if (v > peak) peak = v;
+      n++; vol += v - thresh + 1; sx += x; sy += y; if (v > peak) peak = v; if (x < 2 || y < 2 || x >= w - 2 || y >= h - 2) edge = true;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue;
         const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
         const kk = yy * w + xx; if (d[kk] >= thresh && !labels[kk]) { labels[kk] = id; stack.push(kk); }
       }
     }
-    blobs.push({ id, n, peak, vol, cx: sx / n, cy: sy / n });
+    blobs.push({ id, n, peak, vol, cx: sx / n, cy: sy / n, edge });
   }
   // drop tiny blobs from the label map (they still count as rain for arrival, just not for trends)
   for (const b of blobs) if (b.n < minCells) b.tiny = true;
@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08i';
+const APP_VERSION = '2026.11.08j';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1506,7 +1506,8 @@ async function runNowcast() {
   try {
     const z = NC.zoom, center = lonLatToPx(st.loc.lon, st.loc.lat, z);
     const mpp = 156543.03392 * Math.cos(st.loc.lat * Math.PI / 180) / 2 ** z;
-    const R = Math.round(NC.radiusMi * MI / mpp);
+    const radiusMi = S.rangeSet === '50-100-150' ? 200 : NC.radiusMi;   // the overview rings look 150 mi out, so track that far too
+    const R = Math.round(radiusMi * MI / mpp);
     if (!st.frames || (S.source === 'mrms' && !st.radarTimes)) await updateFrameTimes();
     // frames ~30 min ago, ~15 min ago and latest, with their real time gaps
     let fr;
@@ -1846,7 +1847,7 @@ function drawMotion() {
   const conf = Math.max(0.25, Math.min(1, motion.global.conf * 2)), op = 0.35 + 0.65 * conf;
   const hitBlob = res && res.hit ? res.hit.blob : null;
   // cells by blob, for the significant areas only (and always the one that hits you)
-  const keep = new Set(blobs.filter(b => b.n >= 12 || b.id === hitBlob).sort((a, b) => b.vol - a.vol).slice(0, 8).map(b => b.id));
+  const keep = new Set(blobs.filter(b => (b.n >= 12 || b.id === hitBlob) && !b.edge).sort((a, b) => b.vol - a.vol).slice(0, 8).map(b => b.id));   // storms cut by the window edge are not drawn: their motion cannot be measured honestly
   const cells = new Map(); for (const id of keep) cells.set(id, []);
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) { const lb = labels[y * grid.w + x]; if (lb && keep.has(lb)) cells.get(lb).push([x, y]); }
   for (const b of blobs) {
