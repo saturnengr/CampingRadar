@@ -790,7 +790,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08u';
+const APP_VERSION = '2026.11.08v';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -917,6 +917,8 @@ const DIRS_LONG = ['north','northeast','northeast','east','east','southeast','so
 const compass = d => DIRS[Math.round(((d % 360) + 360) % 360 / 22.5) % 16];
 const compassLong = d => DIRS_LONG[Math.floor(((d % 360) + 360) % 360 / 22.5) % 16];
 const clock = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+// Arrival and ending times: exact inside 30 minutes, rounded to the nearest 10 minutes beyond that — the extrapolation is not minute-accurate that far out
+const etaClock = min => { min = Math.max(0, min); const ms = Date.now() + min * 60000; return min <= 30 ? clock(ms) : clock(Math.round(ms / 600000) * 600000); };
 const cToF = c => c == null ? null : c * 9 / 5 + 32;
 const kmhToMph = k => k == null ? null : k * 0.621371;
 function distMi(a, b) {
@@ -1936,7 +1938,7 @@ function drawMotion() {
     const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
     const eta = Math.max(0, res.hit.etaMin - radarLag());
     L.circleMarker([lat, lon], { pane: 'hazards', radius: 7, color: '#fff', weight: 2, fillColor: '#ff9100', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
-    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + clock(Date.now() + eta * 60000)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + etaClock(eta)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
   } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
     const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
     const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
@@ -2296,7 +2298,7 @@ function computeStatus() {
   if (hit && hit.fizzles && !lowConf && hit.etaMin - lat > 10 && hit.maxDbz < 40) {
     out.cls = 'yellow'; out.level = 'low';
     out.main = 'Rain to the ' + compassLong(hit.fromBearing) + ' is weakening — may fizzle before it reaches you';
-    out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000) + (moving ? ' · ' + moving : '');
+    out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + etaClock(hit.etaMin - lat) + (moving ? ' · ' + moving : '');
     out.rings = Object.assign({}, res.rings); return overlayLightning(out);
   }
   if (hit && !lowConf && hit.distMi > ALERT_RANGE_MI) {
@@ -2304,24 +2306,24 @@ function computeStatus() {
     const eta = Math.max(0, hit.etaMin - lat);
     out.cls = 'blue'; out.level = 'watch';
     out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + ' is heading this way';
-    out.sub = 'About ' + fmtDur(eta) + ' out at current speed (' + clock(Date.now() + eta * 60000) + ')' + (moving ? ' · ' + moving : '') + ' · alerts start inside ' + ALERT_RANGE_MI + ' mi';
+    out.sub = 'About ' + fmtDur(eta) + ' out at current speed (' + etaClock(eta) + ')' + (moving ? ' · ' + moving : '') + ' · alerts start inside ' + ALERT_RANGE_MI + ' mi';
   } else if (hit && !lowConf) {
     // when the rain's edge is closing more slowly than its cells move, the edge decides the arrival time
     const etaRaw = edgeSlow ? Math.min(NC.horizonMin, edge.etaMin) : hit.etaMin, eta = Math.max(0, etaRaw - lat), word = intensityWord(hit.maxDbz) + trendWord;
     const edgeNote = edgeSlow ? ' · edge closing at ' + Math.max(1, Math.round(edge.rate)) + ' mph' : '';
     if (hit.etaMin <= 0.5) {
       out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';
-      out.sub = hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + clock(Date.now() + Math.max(0, hit.endMin - lat) * 60000) : 'May continue for a while';
+      out.sub = hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + etaClock(hit.endMin - lat) : 'May continue for a while';
     } else if (eta <= 10) {
       out.cls = 'red'; out.level = 'imminent'; out.main = 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min';
       out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + (moving ? ' · ' + moving : '');
     } else {
-      out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + clock(Date.now() + eta * 60000) + ' (in ' + fmtDur(eta) + ')';
+      out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')';
       out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + (moving ? ' · ' + moving : '') + edgeNote;
     }
   } else if (hit && lowConf) {
     out.cls = 'yellow'; out.level = 'low';
-    out.main = 'Light rain may reach you ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000);
+    out.main = 'Light rain may reach you ≈ ' + etaClock(hit.etaMin - lat);
     out.sub = 'Low confidence — NWS shows ' + st.wx.pop2h + '% chance in the next 2 hours' + (dryAir ? ' and the air is dry (dew point ' + Math.round(dewSpread) + '° below the temperature), so it may evaporate before reaching the ground' : '');
   } else if (!motion.ok && res.nearest && res.nearest.distMi <= 10) {
     out.cls = 'orange'; out.level = 'incoming';
