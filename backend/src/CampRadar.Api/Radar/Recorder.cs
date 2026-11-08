@@ -95,13 +95,13 @@ public sealed class Recorder
         File.Move(tmp, zip, overwrite: true);   // a download in flight keeps its open handle on the old file
         return zip;
     }
-    /// <summary>Keep disk in check on shared hosting: at most the newest 4 recordings, and no zips older than a day.</summary>
+    /// <summary>Keep disk in check on shared hosting: at most the newest 8 finished recordings (running ones are never pruned), and no zips older than a day.</summary>
     public void Prune()
     {
         try
         {
             foreach (var z in Directory.EnumerateFiles(_dir, "*.zip").Where(f => DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromDays(1))) File.Delete(z);
-            var dirs = Directory.EnumerateDirectories(_dir).OrderByDescending(Directory.GetCreationTimeUtc).Skip(4).ToList();
+            var dirs = Directory.EnumerateDirectories(_dir).OrderByDescending(Directory.GetCreationTimeUtc).Skip(8).ToList();
             foreach (var d in dirs) if (!(_jobs.TryGetValue(Path.GetFileName(d), out var j) && j.Running)) Directory.Delete(d, true);
         }
         catch (Exception ex) { _log.LogDebug(ex, "recording prune"); }
