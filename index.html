@@ -795,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09a';
+const APP_VERSION = '2026.11.09b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1934,7 +1934,10 @@ function drawMotion() {
   const conf = Math.max(0.25, Math.min(1, motion.global.conf * 2)), op = 0.35 + 0.65 * conf;
   const hitBlob = res && res.hit ? res.hit.blob : null;
   // cells by blob, for the significant areas only (and always the one that hits you)
-  const keep = new Set(blobs.filter(b => (b.n >= 12 || b.id === hitBlob) && !b.edge).sort((a, b) => b.vol - a.vol).slice(0, 8).map(b => b.id));   // storms cut by the window edge are not drawn: their motion cannot be measured honestly
+  // every significant rain area gets an arrow (up to 14). A storm cut by the window edge is drawn from the part we can see once that
+  // part is large enough to carry its own motion estimate; small edge fragments are skipped. Only the largest few carry a text label.
+  const ranked = blobs.filter(b => b.id === hitBlob || (b.edge ? b.n >= 40 : b.n >= 12)).sort((a, b) => b.vol - a.vol).slice(0, 14);
+  const keep = new Set(ranked.map(b => b.id)), labelled = new Set(ranked.slice(0, 6).map(b => b.id)); if (hitBlob) labelled.add(hitBlob);
   const cells = new Map(); for (const id of keep) cells.set(id, []);
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) { const lb = labels[y * grid.w + x]; if (lb && keep.has(lb)) cells.get(lb).push([x, y]); }
   for (const b of blobs) {
@@ -1955,6 +1958,7 @@ function drawMotion() {
     L.polyline([a0, a1], { pane: 'hazards', color: '#fff', weight: 2.5, opacity: op, interactive: false }).addTo(motionLayer);
     const head = L.divIcon({ className: '', html: '<div style="transform:rotate(' + hdg + 'deg);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #fff;filter:drop-shadow(0 0 2px #000);opacity:' + op + '"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
     L.marker(a1, { icon: head, pane: 'hazards', interactive: false }).addTo(motionLayer);
+    if (!labelled.has(b.id)) continue;
     const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (b.id === hitBlob ? ' · toward you' : '') + '</div>', iconSize: null, iconAnchor: [0, -6] });
     L.marker(a0, { icon: lbl, pane: 'hazards', interactive: false }).addTo(motionLayer);
   }
