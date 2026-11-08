@@ -84,9 +84,22 @@ public sealed class BriefingWriter
         Output only the text.
         """;
 
+    private const string DaySystem = """
+        You are a meteorologist talking one person through a single day's forecast at the given spot, in 90 to 160 words of plain prose, no markdown,
+        no lists. You are given facts as JSON: which day it is (today, tomorrow or the day after), the NWS day and night periods with their text, the
+        hourly forecast for that day (temperature, feels-like, rain and thunder chances, wind and gusts, sky), sun and moon times, the overnight low,
+        any NWS alerts, the person's activity, and for today what the radar currently shows.
+        Describe how the day unfolds in order: morning, afternoon, evening and night, naming the hours when things change (rain starting or ending,
+        wind picking up, the temperature turning). Say what is driving it when the facts make that clear (a front, daytime heating, a sea breeze,
+        clearing skies overnight). Be honest about uncertainty: a 30 percent chance is a chance, not a plan, and a forecast two days out is a sketch.
+        If the hourly numbers and the written NWS text disagree, say which you would trust. Keep numbers rounded. End with one or two sentences of
+        practical advice for the activity on that day: when to do the thing, what to bring, what to avoid. Language: English, or US Spanish when
+        "language" is "es-US". Output only the text.
+        """;
+
     public async Task<(string? Text, string? Provider)> WriteAsync(JsonElement facts, string? fallback, CancellationToken ct, List<string>? errors = null, string style = "briefing")
     {
-        var sys = style == "now" ? NowSystem : System;
+        var sys = style == "now" ? NowSystem : style == "day" ? DaySystem : System;
         var user = "Facts:\n" + facts.GetRawText() + (fallback is null ? "" : "\n\nA plain template version, for reference only:\n" + fallback);
         foreach (var p in Providers)
         {

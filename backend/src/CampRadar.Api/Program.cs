@@ -154,7 +154,7 @@ app.MapPost("/brief", async (HttpRequest http, EntitlementStore ent, [FromBody] 
     if (req.Facts.ValueKind != JsonValueKind.Object || req.Facts.GetRawText().Length > 20000) return Results.BadRequest("facts object required");
     var bq = ipCodes.GetOrAdd("brief:" + (Bearer(http) ?? "anon"), _ => new Queue<long>()); long bnow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     lock (bq) { while (bq.Count > 0 && bnow - bq.Peek() > 3600_000) bq.Dequeue(); if (bq.Count >= 40) return Results.Json(new { error = "That is a lot of briefings in an hour — try again later." }, statusCode: 429); bq.Enqueue(bnow); }
-    var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct, null, req.Style == "now" ? "now" : "briefing");
+    var (text, provider) = await w.WriteAsync(req.Facts, req.Fallback is { Length: < 4000 } ? req.Fallback : null, ct, null, req.Style is "now" or "day" ? req.Style : "briefing");
     return text is null ? Results.StatusCode(503) : Results.Ok(new { text, source = "backend", provider });
 });
 

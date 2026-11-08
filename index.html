@@ -144,7 +144,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 .alert{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
 .alert h3{margin:4px 0;font-size:19px}
 /* ---- day view ---- */
-.dayhead{display:flex;align-items:center;gap:14px;margin:2px 0 8px}
+.dayhead{display:flex;align-items:center;gap:14px;margin:2px 0 8px;flex-wrap:wrap}.dayhead>div:nth-child(2){flex:1 1 150px;min-width:0}
 .dayhead svg{width:56px;height:56px;flex:none}
 .dayhead .hl{font-size:30px;font-weight:300;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dayhead .hl b{font-weight:700}
@@ -216,6 +216,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   .sheet{width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:12px 14px 18px}
   #modal{align-items:flex-end}
   #snoozeMenu .opts button{min-width:56px}
+  .dayhead .hl{font-size:24px}.dayhead svg{width:44px;height:44px}.dayhead h2{font-size:19px}
 }
 /* phone held sideways: keep the banner on one short row */
 @media (max-height:520px) and (orientation:landscape){
@@ -807,7 +808,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09x';
+const APP_VERSION = '2026.11.09y';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2811,12 +2812,33 @@ async function openDay(dateStr) {
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="color:var(--muted);font-size:13px">What matters for <b style="color:var(--text)">' + ACTIVITIES[act] + '</b></div>' +
     '<div class="seg" style="gap:4px">' + Object.entries(ACTIVITIES).map(([k, v]) => '<button data-actv="' + k + '" class="' + (k === act ? 'on' : '') + '" style="min-height:36px;padding:0 10px;font-size:13px">' + v.split(' /')[0] + '</button>').join('') + '</div></div>' +
     '<div class="tiles">' + tilesByActivity[act].filter(Boolean).join('') + '</div>' +
+    '<div id="dayAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:10px">' + (isPro() && BE() ? '<span class="muted">' + (lang() === 'es' ? 'Redactando el resumen del día…' : 'Writing up the day…') + '</span>' : '<span class="muted">' + (lang() === 'es' ? 'Con LeadTime Pro, aquí aparece una explicación escrita de cómo se desarrolla el día.' : 'With LeadTime Pro, a written walk-through of how the day unfolds appears here.') + '</span>') + '</div>' +
     (sun && sun.rise ? '<div class="sunline"><span>Dawn <b>' + clock(sun.dawn) + '</b></span><span>Sunrise <b>' + clock(sun.rise) + '</b></span><span>Sunset <b>' + clock(sun.set) + '</b></span><span>Dusk <b>' + clock(sun.dusk) + '</b></span><span>Moon <b>' + moon.ill + '% ' + moon.name.toLowerCase() + '</b></span></div>' : '') +
     (hours.length ? '<div style="max-height:46vh;overflow:auto;margin-top:8px"><table class="hrs"><thead><tr><th>Hour</th><th>Temp (feels)</th><th>Rain</th>' + (hasTh ? '<th>Thunder</th>' : '') + '<th>Wind mph</th><th>Sky</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="fctext">Hour-by-hour detail is not available this far out.</div>') +
     '<div class="fctext">' + (dayP ? '<b>' + dayP.name + '</b>' + dayP.detailedForecast : '') + (nightP ? '<b>' + nightP.name + '</b>' + nightP.detailedForecast : '') + '</div>' +
     '<button class="done" data-act="close">Close</button>';
   sh.scrollTop = 0;
   sh.querySelectorAll('[data-actv]').forEach(b => b.addEventListener('click', () => { S.activity = b.dataset.actv; save(); openDay(dateStr); }));
+  // Pro: the model walks through the day from the same facts the tiles are built from (one request per day view; cached for the forecast's life)
+  if (isPro() && BE()) {
+    const es = lang() === 'es', el = () => $('#dayAnalysis'), key = dateStr + '|' + act + '|' + (st.wx.fcAt || 0) + '|' + lang();
+    st.dayText = st.dayText || {};
+    const show = txt => { const e = el(); if (e) e.innerHTML = escapeHtml(txt).replace(/\n+/g, '<br><br>') + '<div class="muted" style="font-size:12px;margin-top:6px">' + (es ? 'Escrito por el modelo a partir del pronóstico del NWS de arriba.' : 'Written by the model from the NWS forecast above.') + '</div>'; };
+    if (st.dayText[key]) { show(st.dayText[key]); return; }
+    const todayStr = localDate(Date.now()), which = dateStr === todayStr ? 'today' : dateStr === localDate(Date.now() + 86400e3) ? 'tomorrow' : 'the day after tomorrow';
+    const facts = {
+      language: es ? 'es-US' : 'en-US', activity: act, place: st.wx.place || ($('#nowPlace').textContent || '').replace(/^Near /, ''), day: which, date: dateStr, time_now: clock(Date.now()),
+      day_period: dayP ? { name: dayP.name, text: dayP.detailedForecast, high: dayP.temperature, pop: popOf(dayP), wind: dayP.windSpeed, dir: dayP.windDirection } : null,
+      night_period: nightP ? { name: nightP.name, text: nightP.detailedForecast, low: nightP.temperature, pop: popOf(nightP), wind: nightP.windSpeed, dir: nightP.windDirection } : null,
+      hourly: hours.map(h => ({ at: clock(h.t), temp: h.temp, feels: h.feels, rain: h.pop, thunder: h.thunder, wind: h.wind, gust: h.gust, dir: h.dir, sky: h.text })),
+      sun: sun && sun.rise ? { dawn: clock(sun.dawn), rise: clock(sun.rise), set: clock(sun.set), dusk: clock(sun.dusk) } : null, moon: moon.ill + '% ' + moon.name,
+      alerts: (st.alerts || []).map(a => a.event),
+      radar_now: which === 'today' && st.nc && st.nc.res ? { status: ($('#statusMain').textContent || ''), detail: ($('#statusSub').textContent || '') } : null
+    };
+    fetchT(BE() + '/brief', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ facts, style: 'day' }) }, 25000)
+      .then(async r => { if (!r.ok) throw new Error(r.status); const j = await r.json(); st.dayText[key] = j.text; if ($('#dayAnalysis')) show(j.text); })
+      .catch(() => { const e = el(); if (e) e.innerHTML = '<span class="muted">' + (es ? 'El resumen escrito no está disponible ahora.' : 'The written walk-through is not available right now.') + '</span>'; });
+  }
 }
 
 /* ------------------------------ beach: tides, water temperature, UV ------------------- */
