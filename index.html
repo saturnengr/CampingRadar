@@ -17,7 +17,7 @@
 :root{--navpad:env(safe-area-inset-bottom,0px);--chrome:#0d141b;--chrome2:#16212c;--text:#eef3f7;--muted:#9fb0bf;--line:#2a3846;--accent:#2f7dd1;--accent2:#7cc4ff}
 html,body{margin:0;height:100%;background:var(--chrome);color:var(--text);
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent;overflow:hidden;user-select:none}
-body{display:flex;flex-direction:column;height:100vh;height:100dvh}
+body{display:flex;flex-direction:column;height:100vh;height:100dvh;height:var(--vh,100dvh)}   /* --vh = the real window height: an installed Android app reports 100dvh as the full screen, navigation bar included */
 [hidden]{display:none!important}
 button{font:inherit;color:inherit;background:var(--chrome2);border:1px solid var(--line);border-radius:12px;min-height:48px;padding:0 14px;cursor:pointer}
 button:active{filter:brightness(1.3)}
@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09j';
+const APP_VERSION = '2026.11.09k';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1162,7 +1162,10 @@ function applyBottomGap() {
   // drawing over (navigation bar, or the bar plus a gesture inset after a reload); it is added on top of whatever was chosen
   const vv = window.visualViewport, layoutH = document.documentElement.clientHeight, visibleH = vv ? Math.round(vv.height) : layoutH;
   const hidden = Math.max(0, layoutH - visibleH);
-  let px = S.bottomGap === 'auto' ? Math.max(inset, hidden, standalone && android ? 48 : 0) : Math.max(+S.bottomGap, hidden);
+  // size the page from the window itself, not from 100dvh: in the installed app 100dvh is the whole screen (880) while the window is 800,
+  // which pushed the bottom toolbar under the navigation bar on some loads and not others
+  if (window.innerHeight > 200) document.documentElement.style.setProperty('--vh', window.innerHeight + 'px');
+  let px = S.bottomGap === 'auto' ? Math.max(inset, hidden) : Math.max(+S.bottomGap, hidden);
   document.documentElement.style.setProperty('--navpad', px + 'px');
   st.navpad = { setting: S.bottomGap, px, inset, hidden, layoutH, visibleH, innerH: window.innerHeight, screenH: screen.height, standalone: !!standalone, at: Date.now() };
   setTimeout(checkMapSize, 50);
