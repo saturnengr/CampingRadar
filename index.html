@@ -251,7 +251,13 @@ body.side #side::after{content:"";flex:1;order:9}
 #wwWrap{background:rgba(198,40,40,.12)}
 #huWrap{background:rgba(255,183,77,.08)}
 #msgWrap{background:rgba(124,77,255,.12)}#msgRow{display:block}.msg{font-size:15px;padding:2px 0}.msg.mine{opacity:.75}
-body.side #msgWrap{order:5}
+body.side #msgWrap{order:6}body.side #olWrap{order:5}
+#olWrap{background:rgba(79,195,247,.07)}#olRow{display:flex;gap:3px;align-items:flex-end;height:54px}
+.ol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;height:100%;background:none;border:0;padding:0;color:var(--text);font:inherit;min-width:0}
+.ol .bar{border-radius:3px 3px 0 0;background:var(--line);min-height:3px;position:relative}.ol .bar.pop{background:#4fc3f7}.ol .bar.wet{background:#1e88e5}.ol .bar.thu{background:#ffb74d}
+.ol .bar.radar{box-shadow:0 0 0 2px var(--rc) inset;background:var(--rc)}.ol .bar.clear{box-shadow:0 0 0 2px #43a047 inset;background:transparent}
+.ol .lbl{font-size:10px;color:var(--muted);line-height:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-align:center}.ol .pct{font-size:10px;line-height:12px;text-align:center;color:var(--muted)}
+#olNote{font-size:12px;color:var(--muted);margin-top:4px}
 body.side .pillsec{border-bottom:0;padding:8px 14px 10px}
 body.side #wwWrap{order:3}body.side #huWrap{order:4}
 .hu{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:700;background:var(--chrome2);border:1px solid var(--line);border-left:5px solid #ffb74d}
@@ -259,7 +265,7 @@ body.side #wwWrap{order:3}body.side #huWrap{order:4}
 .ww{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:750;color:#fff;border:2px solid transparent;background:#555;text-shadow:0 1px 2px rgba(0,0,0,.6)}
 .ww.watch{background:transparent;border-style:dashed}
 .ww.here{box-shadow:0 0 0 2px #fff inset}
-@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}}
+@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}#olRow{height:46px}.ol .pct{display:none}}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
@@ -282,6 +288,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
 </header>
 <div id="wwWrap" class="pillsec" hidden><div class="pillhdr">NWS watches &amp; warnings</div><div id="wwRow"></div></div>
 <div id="huWrap" class="pillsec" hidden><div class="pillhdr" id="huHdr">Heads-up</div><div id="huRow"></div></div>
+<div id="olWrap" class="pillsec" hidden><div class="pillhdr" id="olHdr">Outlook · next 12 hours</div><div id="olRow"></div><div id="olNote"></div></div>
 <div id="msgWrap" class="pillsec" hidden><div class="pillhdr">Messages</div><div id="msgRow"></div></div>
 
 <div id="warnbar" hidden>
@@ -767,7 +774,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08n';
+const APP_VERSION = '2026.11.08p';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -811,7 +818,7 @@ setInterval(() => {   // quiet auto-restart: idle 10 min, no sheet open, not spe
 
 /* ---- account / Pro ---- */
 const PRO_LAYERS = ['tropical', 'trails', 'topo'];
-const PRO_FEATURES = { push: 'Alerts with the screen off', lightning: 'Lightning', brief: 'Model-written briefings', layers: 'Tides, snow depth, tropical tracks, trails and topo layers', range: 'Storm tracking to 200 miles with the 50 · 100 · 150 mi overview rings (free tracks 100 miles)' };
+const PRO_FEATURES = { push: 'Alerts with the screen off', lightning: 'Lightning', brief: 'Model-written briefings', layers: 'Tides, snow depth, tropical tracks, trails and topo layers', range: 'Storm tracking to 200 miles with the 50 · 100 · 150 mi overview rings (free tracks 100 miles)', outlook: 'The 12-hour outlook strip: radar for the next two hours, the NWS hourly forecast beyond' };
 const isPro = () => !!(S.account && S.account.pro && (!S.account.expiresMs || S.account.expiresMs > Date.now()));
 const authHeaders = () => S.account && S.account.token ? { Authorization: 'Bearer ' + S.account.token } : {};
 async function refreshAccount() {
@@ -883,7 +890,7 @@ async function signOut() {
 function applyProState() {
   if (!isPro()) { for (const k of PRO_LAYERS) if (S.layers[k]) S.layers[k] = false; st.lightning = null; if (typeof ltLayer !== 'undefined') ltLayer.clearLayers();
     if (S.rangeSet === '50-100-150') { S.rangeSet = '10-30-50'; S.range = 30; if (typeof renderRangeButtons === 'function') { renderRangeButtons(); drawRings(); } } }
-  save(); if (typeof applyLayers === 'function') applyLayers(); if (typeof refreshLightning === 'function') refreshLightning(); if (typeof renderStatus === 'function') renderStatus();
+  save(); if (typeof applyLayers === 'function') applyLayers(); if (typeof refreshLightning === 'function') refreshLightning(); if (typeof renderStatus === 'function') renderStatus(); if (typeof renderOutlook === 'function') renderOutlook();
 }
 setInterval(refreshAccount, 60 * 60000);
 
@@ -1368,6 +1375,7 @@ async function refreshForecast() {
   }).join('');
   $('#days').innerHTML = html;
   if (typeof renderHeadsUp === 'function') { renderHeadsUp(); setTimeout(renderHeadsUp, 4000); }
+  if (typeof renderOutlook === 'function') { renderOutlook(); setTimeout(renderOutlook, 4000); }
   st.wx.fcAt = Date.now();
 }
 async function refreshObs() {
@@ -1588,6 +1596,7 @@ async function runNowcast() {
   finally { st.ncBusy = false; }
   const s = renderStatus();
   handleRainEvent(s.level);
+  if (typeof renderOutlook === 'function') renderOutlook();
 }
 
 /* ------------------------------ lightning -------------------------- */
@@ -2050,6 +2059,62 @@ $('#huRow').addEventListener('click', e => {
   openModal();
 });
 setInterval(renderHeadsUp, 60000);
+/* ---- Outlook (Pro): the next 12 hours in one strip. Hours 0–2 come from the radar tracker (honest range of extrapolation);
+   beyond that the NWS hourly forecast (rain chance, thunder chance) gives the longer lead the radar cannot. ---- */
+function computeOutlook() {
+  if (!isPro() || !st.loc) return null;
+  const hp = st.wx.hourly || [], g = st.wx.grid, now = Date.now(), h0 = Math.floor(now / 3600e3) * 3600e3;
+  const byHour = new Map(hp.map(p => [Date.parse(p.startTime), p]));
+  if (!byHour.size) return null;
+  const nc = st.nc, res = nc && nc.res, hit = res && res.hit, lag = radarLag(), fresh = st.ncAt && now - st.ncAt < 15 * 60000;
+  const st_ = typeof computeStatus === 'function' ? computeStatus() : null;
+  const etaMs = hit && fresh ? now + Math.max(0, hit.etaMin - lag) * 60000 : null, endMs = hit && fresh ? now + Math.max(0, hit.endMin - lag) * 60000 : null;
+  const radarColor = st_ ? { red: '#e53935', orange: '#fb8c00', yellow: '#fdd835', blue: '#4fc3f7' }[st_.cls] : null;
+  const hours = [];
+  for (let i = 0; i < 12; i++) {
+    const t = h0 + i * 3600e3, p = byHour.get(t);
+    const pop = p && p.probabilityOfPrecipitation ? p.probabilityOfPrecipitation.value || 0 : null;
+    const thu = g && g.thunder && g.thunder[t] != null ? g.thunder[t] : 0;
+    const h = { t, pop, thu, sky: p ? p.shortForecast : '', temp: p ? p.temperature : null, wind: p ? p.windSpeed : '', dir: p ? p.windDirection : '', gust: g && g.gust && g.gust[t] != null ? Math.round(g.gust[t]) : null, radar: null };
+    // radar covers the first two hours: an arrival inside this hour, rain continuing through it, or a clear verdict
+    if (fresh && t < now + NC.horizonMin * 60000) {
+      if (etaMs != null && etaMs < t + 3600e3 && endMs > t) h.radar = { kind: 'rain', color: radarColor || '#fb8c00', level: st_.level, main: st_.main, maxDbz: hit.maxDbz, arrives: etaMs >= t };
+      else if (nc.motion && nc.motion.ok && !hit && (!res.nearest || res.passing)) h.radar = { kind: 'clear', main: st_ ? st_.main : '' };
+    }
+    hours.push(h);
+  }
+  return { hours, any: hours.some(h => (h.pop || 0) >= 20 || h.thu >= 10 || (h.radar && h.radar.kind === 'rain')) };
+}
+function renderOutlook() {
+  const wrap = $('#olWrap'); if (!wrap) return;
+  let o = null; try { o = computeOutlook(); } catch (e) { o = null; }
+  st.outlook = o; if (!o) { wrap.hidden = true; return; }
+  const hrLbl = t => { const d = new Date(t), h = d.getHours(); return h === 0 ? '12a' : h < 12 ? h + 'a' : h === 12 ? '12p' : (h - 12) + 'p'; };
+  $('#olRow').innerHTML = o.hours.map((h, i) => {
+    const v = Math.max(h.pop || 0, h.thu || 0), ht = Math.max(3, Math.round(v / 100 * 30));
+    let cls = v >= 50 ? 'wet' : v >= 20 ? 'pop' : '', style = 'height:' + ht + 'px';
+    if (h.thu >= 20 && h.thu >= (h.pop || 0) - 10) cls = 'thu';
+    if (h.radar && h.radar.kind === 'rain') { cls = 'radar'; style = 'height:30px;--rc:' + h.radar.color; }
+    else if (h.radar && h.radar.kind === 'clear') { cls = 'clear'; style = 'height:' + Math.max(8, ht) + 'px'; }
+    return '<button class="ol" data-ol="' + i + '" title="' + esc(h.sky) + '"><div class="pct">' + (h.radar && h.radar.kind === 'rain' ? '◉' : h.radar && h.radar.kind === 'clear' ? '✓' : v >= 10 ? v + '%' : '') + '</div><div class="bar ' + cls + '" style="' + style + '"></div><div class="lbl">' + (i === 0 ? 'now' : hrLbl(h.t)) + '</div></button>';
+  }).join('');
+  const first = o.hours.find(h => (h.pop || 0) >= 40 || h.thu >= 20), rad = o.hours.find(h => h.radar && h.radar.kind === 'rain');
+  $('#olNote').textContent = rad ? 'Radar: ' + rad.radar.main : first ? 'Radar clear for the next 2 hours · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? 'Radar clear for the next 2 hours' : 'Radar clear for the next 2 hours · forecast dry through ' + clock(o.hours[11].t + 3600e3);
+  wrap.hidden = false;
+}
+$('#olRow').addEventListener('click', e => {
+  const b = e.target.closest('[data-ol]'); if (!b || !st.outlook) return;
+  const h = st.outlook.hours[+b.dataset.ol]; if (!h) return;
+  const lines = [];
+  if (h.radar && h.radar.kind === 'rain') lines.push('Radar: ' + h.radar.main + (h.radar.arrives ? '' : ' (continuing through this hour)') + ' — ' + intensityWord(h.radar.maxDbz).toLowerCase() + ' rain on the latest scan.');
+  else if (h.radar && h.radar.kind === 'clear') lines.push('Radar: nothing tracked toward you within this hour.');
+  if (h.pop != null) lines.push('NWS forecast: ' + h.pop + '% chance of rain' + (h.thu ? ', ' + h.thu + '% chance of thunder' : '') + (h.sky ? ' · ' + h.sky : '') + '.');
+  if (h.temp != null) lines.push(deg(h.temp) + (h.wind ? ' · wind ' + h.wind + (h.dir ? ' ' + h.dir : '') : '') + (h.gust ? ', gusts to ' + h.gust + ' mph' : '') + '.');
+  lines.push(h.t < Date.now() + NC.horizonMin * 60000 ? 'Within radar range: the arrival estimate is extrapolated from the last 30 minutes of radar; the forecast line is the NWS hourly product.' : 'Beyond what radar extrapolation can see: this hour is the NWS hourly forecast only. The radar will take over as it gets within about two hours.');
+  $('#sheet').innerHTML = '<h2>' + clock(h.t) + ' – ' + clock(h.t + 3600e3) + '</h2>' + lines.map(l => '<div class="row" style="font-size:15px;line-height:1.4">' + esc(l) + '</div>').join('');
+  openModal();
+});
+setInterval(renderOutlook, 60000);
 function summarizeHazards() {
   const n = {}; if (!st.loc) { st.hz.nearest = n; return; }
   const here = { lat: st.loc.lat, lon: st.loc.lon }, pt = L.latLng(st.loc.lat, st.loc.lon);
