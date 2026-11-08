@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09e';
+const APP_VERSION = '2026.11.09f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1021,8 +1021,14 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
     this.on('tileload', () => { st.tileStats.ok++; });
     this.on('tileerror', e => {
       st.tileStats.err++; const src = e.tile && e.tile.src || ''; st.tileStats.lastErr = src.slice(0, 120);
-      // a cached-tile request that fails is retried once straight from the network, bypassing the service worker's cache path
-      if (e.tile && /[?&]keep=1\b/.test(src) && !e.tile.dataset.retried) { e.tile.dataset.retried = '1'; st.tileStats.retried = (st.tileStats.retried || 0) + 1; setTimeout(() => { e.tile.src = src.replace(/([?&])keep=1\b/, '$1retry=' + Date.now()); }, 300); }
+      // a failed tile is retried once from the *other* source: a backend tile falls back to NOAA's renderer and vice versa, so a stalled
+      // connection to one host (Android keeps reusing a dead connection for a while after a network change) does not blank the radar
+      if (!e.tile || e.tile.dataset.retried) return; e.tile.dataset.retried = '1'; st.tileStats.retried = (st.tileStats.retried || 0) + 1;
+      const m = /\/mrms\/tile\/(\d+)\/(\d+)\/(\d+)\/(\d+)\.png/.exec(src);
+      let alt = null;
+      if (m) { const t = +m[1], z = +m[2], x = +m[3], y = +m[4], size = 2 * MERC / (256 * 2 ** z / 512), minx = -MERC + x * size, maxy = MERC - y * size; alt = mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, t); }
+      else if (/[?&]keep=1\b/.test(src)) alt = src.replace(/([?&])keep=1\b/, '$1retry=' + Date.now());
+      if (alt) setTimeout(() => { e.tile.src = alt; }, 300);
     });
   },
   setTime(f) { if (f.t !== this._t || !!f.live !== this._live) { this._t = f.t; this._live = !!f.live; this.redraw(); } },
