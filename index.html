@@ -265,7 +265,21 @@ body.side #wwWrap{order:3}body.side #huWrap{order:4}
 .ww{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:750;color:#fff;border:2px solid transparent;background:#555;text-shadow:0 1px 2px rgba(0,0,0,.6)}
 .ww.watch{background:transparent;border-style:dashed}
 .ww.here{box-shadow:0 0 0 2px #fff inset}
-@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}#olRow{height:62px}.ol .pct{font-size:9px}}
+@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}#olRow{height:62px}.ol .pct{font-size:9px}
+  /* phones: watches, heads-ups and messages share one scrolling row; the bands are for tablets */
+  #wwWrap,#huWrap,#msgWrap{display:none!important}
+  #pillRow{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:5px 8px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.03)}#pillRow::-webkit-scrollbar{display:none}
+  #pillRow .ww,#pillRow .hu{flex:none;white-space:nowrap;max-width:72vw;overflow:hidden;text-overflow:ellipsis;min-height:32px}
+  #pillRow .hu.msg{border-left-color:#b388ff}
+  /* when the status is anything but green, it leads the screen and the banner shrinks to one line */
+  body.urgent #warnbar{order:-4}body.urgent #statusbar{order:-3;border-bottom:1px solid rgba(0,0,0,.25)}
+  body.urgent #banner{padding:4px 10px;gap:8px;flex-wrap:nowrap;align-items:center}
+  body.urgent #now{gap:10px}body.urgent #nowTemp{font-size:28px;letter-spacing:0}body.urgent #nowCond{font-size:15px;font-weight:600}body.urgent #nowWind{font-size:13px}body.urgent #nowPlace{display:none}
+  body.urgent #days{display:none}body.urgent.daysOpen #days{display:flex;width:100%;order:5}body.urgent.daysOpen #banner{flex-wrap:wrap}
+  body.urgent #daysToggle{display:block;flex:none;min-height:32px;padding:0 10px;font-size:13px;color:var(--muted)}
+  body.urgent #olRow{height:40px}body.urgent .ol .tmp,body.urgent .ol .pct{display:none}body.urgent .ol .lbl{font-size:9px}body.urgent #olNote{font-size:11px;margin-top:2px}body.urgent #olWrap{padding:3px 8px 4px}
+  /* one toast at a time: the sound prompt steps above a location hint instead of covering it */
+  #pickHint:not([hidden])~#soundChip{bottom:auto;top:44px}}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
@@ -285,11 +299,13 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     </div>
   </div>
   <div id="days"></div>
+  <button id="daysToggle" hidden>3-day ▾</button>
 </header>
 <div id="wwWrap" class="pillsec" hidden><div class="pillhdr">NWS watches &amp; warnings</div><div id="wwRow"></div></div>
 <div id="huWrap" class="pillsec" hidden><div class="pillhdr" id="huHdr">Heads-up</div><div id="huRow"></div></div>
 <div id="olWrap" class="pillsec" hidden><div class="pillhdr" id="olHdr">Outlook · next 12 hours</div><div id="olRow"></div><div id="olNote"></div></div>
 <div id="msgWrap" class="pillsec" hidden><div class="pillhdr">Messages</div><div id="msgRow"></div></div>
+<div id="pillRow" hidden></div>
 
 <div id="warnbar" hidden>
   <div id="warnText"></div>
@@ -774,7 +790,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08t';
+const APP_VERSION = '2026.11.08u';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1958,6 +1974,7 @@ function renderWwPills() {
   st.wwPills = items;
   row.innerHTML = items.slice(0, 12).map((a, i) => '<button class="ww' + (/Warning/.test(a.event) ? '' : ' watch') + (a.here ? ' here' : '') + '" data-ww="' + i + '" style="' + (/Warning/.test(a.event) ? 'background:' + a.color : 'border-color:' + a.color) + '">' + esc(a.event) + (a.here ? ' · here' : '') + '</button>').join('');
   $('#wwWrap').hidden = items.length === 0;
+  if (typeof renderPillRow === 'function') renderPillRow();
 }
 $('#wwRow').addEventListener('click', e => {
   const b = e.target.closest('[data-ww]'); if (!b) return;
@@ -1990,7 +2007,8 @@ const HU_ADVICE = {
 };
 /* ---- What to bring: the ordinary case where the day is fine but the evening will not be. Built from the next ten hours of
    the NWS hourly forecast, the live radar and the current observation. Returns items with short pill text and a reason. ---- */
-function computeBring() {
+function computeBring(opts) {
+  opts = opts || {};
   if (!st.loc) return null;
   const act = S.activity in ACTIVITIES ? S.activity : 'camping', now = Date.now(), g = st.wx.grid, hp = st.wx.hourly || [], ob = st.wx.obs;
   const hours = hp.map(p => ({ t: Date.parse(p.startTime), p })).filter(h => h.t + 3600e3 > now && h.t < now + 10 * 3600e3);
@@ -2015,7 +2033,7 @@ function computeBring() {
   }
   // wind: a shell / hat that stays on
   const windy = hours.find(h => (g && g.gust && g.gust[h.t] >= 25) || windMph(h.p) >= 20);
-  if (windy && !items.some(i => i.key === 'coat')) items.push({ key: 'wind', short: 'a windproof layer' + (windy.t > now + 3600e3 ? ' after ' + clock(windy.t) : ''), detail: 'Wind ' + windMph(windy.p) + ' mph' + (g && g.gust && g.gust[windy.t] ? ', gusts to ' + Math.round(g.gust[windy.t]) + ' mph' : '') + (windy.t > now + 3600e3 ? ' from around ' + clock(windy.t) : '') + '.' });
+  if (windy && !opts.skipWind && !items.some(i => i.key === 'coat')) items.push({ key: 'wind', short: 'a windproof layer' + (windy.t > now + 3600e3 ? ' after ' + clock(windy.t) : ''), detail: 'Wind ' + windMph(windy.p) + ' mph' + (g && g.gust && g.gust[windy.t] ? ', gusts to ' + Math.round(g.gust[windy.t]) + ' mph' : '') + (windy.t > now + 3600e3 ? ' from around ' + clock(windy.t) : '') + '.' });
   // bugs: warm, humid and calm around dusk (a suggestion, not a measurement)
   const sun = sunTimes(st.loc.lat, st.loc.lon, localDate(now));
   if (sun && sun.set && act !== 'skiing') {
@@ -2097,7 +2115,7 @@ function computeHeadsUp() {
   // UV (when known)
   if (st.beach && st.beach.uv) { const uvNow = st.beach.uv.hourly.find(x => Math.abs(x.t - now) < 1800e3); if (uvNow && uvNow.v >= 8) out.push({ key: 'uv', sev: 'warn', title: 'UV ' + uvWord(uvNow.v) + ' (' + Math.round(uvNow.v) + ')', detail: 'UV index now.', advice: adv('uv') }); }
   // what to bring (info pill; the detail sheet gives the reasons)
-  try { const br = computeBring(); if (br) out.push({ key: 'bring', sev: 'info', title: br.title, detail: br.items.map(i => i.short[0].toUpperCase() + i.short.slice(1) + ' — ' + i.detail).join(' '), advice: br.items.map(i => i.advice).filter(Boolean).join(' ') }); } catch (e) {}
+  try { const br = computeBring({ skipWind: out.some(a => a.key === 'gust' || a.key === 'highwind') }); if (br) out.push({ key: 'bring', sev: 'info', title: br.title, detail: br.items.map(i => i.short[0].toUpperCase() + i.short.slice(1) + ' — ' + i.detail).join(' '), advice: br.items.map(i => i.advice).filter(Boolean).join(' ') }); } catch (e) {}
   const rank = { sev: 0, warn: 1, info: 2 };
   return out.sort((a, b) => rank[a.sev] - rank[b.sev]);
 }
@@ -2108,6 +2126,7 @@ function renderHeadsUp() {
   $('#huHdr').textContent = 'Heads-up · ' + (ACTIVITIES[S.activity] || 'Camping').replace(/ \(.*\)/, '');
   $('#huRow').innerHTML = items.map((a, i) => '<button class="hu ' + a.sev + '" data-hu="' + i + '">' + esc(a.title) + '</button>').join('');
   wrap.hidden = items.length === 0;
+  renderPillRow();
 }
 $('#huRow').addEventListener('click', e => {
   const b = e.target.closest('[data-hu]'); if (!b) return;
@@ -2116,6 +2135,31 @@ $('#huRow').addEventListener('click', e => {
   openModal();
 });
 setInterval(renderHeadsUp, 60000);
+/* ---- Phones: one scrolling row of pills (watches first, then heads-ups, then the latest group message). Taps are forwarded to
+   the original pills in their hidden bands, so each sheet keeps working from one place. ---- */
+function isPhone() { return matchMedia('(max-width:600px)').matches; }
+function renderPillRow() {
+  const row = $('#pillRow'); if (!row) return;
+  if (!isPhone()) { row.hidden = true; return; }
+  let html = $('#wwWrap').hidden ? '' : $('#wwRow').innerHTML;
+  if (!$('#huWrap').hidden) html += $('#huRow').innerHTML;
+  let m = null; try { m = (fam.recent || []).filter(x => Date.now() - x.ms < 2 * 3600e3).slice(-1)[0]; } catch (e) { m = null; }   // the family module loads later in the file
+  if (m && !$('#msgWrap').hidden) html += '<button class="hu info msg" data-msgpill="1">💬 ' + esc(msgFrom(m)) + ': ' + esc(m.text || '') + '</button>';
+  row.innerHTML = html; row.hidden = !html;
+}
+$('#pillRow').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.ww != null) { const o = $('#wwRow').querySelector('[data-ww="' + b.dataset.ww + '"]'); if (o) o.click(); return; }
+  if (b.dataset.hu != null) { const o = $('#huRow').querySelector('[data-hu="' + b.dataset.hu + '"]'); if (o) o.click(); return; }
+  if (b.dataset.msgpill) { $('#sheet').innerHTML = '<h2>Messages</h2><div id="sheetMsgs">' + $('#msgRow').innerHTML + '</div><div class="btns"><button data-act="go-family">All messages</button><button class="done" data-act="close">Done</button></div>'; openModal(); }
+});
+$('#sheet').addEventListener('click', e => {   // reply chips inside the messages sheet act on the originals
+  const r = e.target.closest('#sheetMsgs [data-msg-reply]'); if (!r) return;
+  const o = $('#msgRow').querySelector('[data-msg-reply="' + r.dataset.msgReply.replace(/"/g, '&quot;') + '"]'); if (o) { o.click(); r.textContent = '✓'; }
+  e.stopPropagation();
+}, true);
+window.addEventListener('resize', () => { renderPillRow(); if (typeof renderStatus === 'function' && st.nc) renderStatus(); });
+$('#daysToggle').addEventListener('click', () => { const open = document.body.classList.toggle('daysOpen'); $('#daysToggle').textContent = open ? '3-day ▴' : '3-day ▾'; });
 /* ---- Outlook (Pro): the next 12 hours in one strip. Hours 0–2 come from the radar tracker (honest range of extrapolation);
    beyond that the NWS hourly forecast (rain chance, thunder chance) gives the longer lead the radar cannot. ---- */
 function computeOutlook() {
@@ -2156,7 +2200,8 @@ function renderOutlook() {
     return '<button class="ol" data-ol="' + i + '" title="' + esc(h.sky) + '"><div class="pct">' + (h.radar && h.radar.kind === 'rain' ? '◉' : h.radar && h.radar.kind === 'clear' ? '✓' : v >= 10 ? v + '%' : '') + '</div><div class="bar ' + cls + '" style="' + style + '"></div><div class="tmp">' + (h.temp != null ? h.temp + '°' : '') + '</div><div class="lbl">' + (i === 0 ? 'now' : hrLbl(h.t)) + '</div></button>';
   }).join('');
   const first = o.hours.find(h => (h.pop || 0) >= 40 || h.thu >= 20), rad = o.hours.find(h => h.radar && h.radar.kind === 'rain');
-  $('#olNote').textContent = rad ? 'Radar: ' + rad.radar.main : first ? 'Radar clear for the next 2 hours · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? 'Radar clear for the next 2 hours' : 'Radar clear for the next 2 hours · forecast dry through ' + clock(o.hours[11].t + 3600e3);
+  const barShowsRadar = document.body.classList.contains('urgent');
+  $('#olNote').textContent = rad && !barShowsRadar ? 'Radar: ' + rad.radar.main : rad && first && first.t > Date.now() + 2 * 3600e3 ? 'Later: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : rad ? '' : first ? 'Radar clear for the next 2 hours · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? 'Radar clear for the next 2 hours' : 'Radar clear for the next 2 hours · forecast dry through ' + clock(o.hours[11].t + 3600e3);
   wrap.hidden = false;
 }
 $('#olRow').addEventListener('click', e => {
@@ -2297,6 +2342,8 @@ function renderStatus() {
   const s = computeStatus();
   const bar = $('#statusbar');
   bar.className = s.cls;
+  const urgent = isPhone() && s.cls !== 'green' && s.cls !== 'grey';
+  if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); document.body.classList.remove('daysOpen'); $('#daysToggle').hidden = !urgent; $('#daysToggle').textContent = '3-day ▾'; setTimeout(checkMapSize, 60); }
   s.main = precipify(s.main); s.sub = precipify(s.sub);
   $('#statusMain').textContent = s.main;
   let sub = s.sub;
@@ -3451,7 +3498,7 @@ const peopleLayer = L.layerGroup().addTo(map);
 // Which of your devices sent a message (one email can be on a phone, a tablet and a PC)
 function deviceName() { if (S.deviceName) return S.deviceName; const ua = navigator.userAgent, small = Math.min(screen.width, screen.height) < 600; return /Android|iPhone|iPad|Mobile/i.test(ua) ? (small ? 'Phone' : 'Tablet') : 'PC'; }
 function msgMine(m) { return m.mine && (!m.data || !m.data._device || m.data._device === deviceName()); }
-function msgFrom(m) { return m.fromName + (m.data && m.data._device ? ' · ' + m.data._device : ''); }
+function msgFrom(m) { return (m.fromName || m.name || (m.from ? String(m.from).split('@')[0] : 'Someone')) + (m.data && m.data._device ? ' · ' + m.data._device : ''); }
 const QUICK_MESSAGES = {
   en: ['Dinner in 10', 'Come back to camp', 'On my way', 'Running late', 'Need a hand', 'All good here'],
   es: ['Cena en 10', 'Vuelvan al campamento', 'Voy en camino', 'Llego tarde', 'Necesito ayuda', 'Todo bien aquí']
@@ -3529,11 +3576,11 @@ async function pollMessages() {
 function renderMsgStrip() {
   const wrap = $('#msgWrap'); if (!wrap) return;
   const list = (fam.recent || []).filter(m => Date.now() - m.ms < 2 * 3600e3).slice(-6).reverse();
-  if (!list.length) { wrap.hidden = true; return; }
+  if (!list.length) { wrap.hidden = true; renderPillRow(); return; }
   const es = lang() === 'es', latestIn = list.find(m => !msgMine(m));
   $('#msgRow').innerHTML = list.map(m => '<div class="msg' + (msgMine(m) ? ' mine' : '') + '"><span class="muted">' + new Date(m.ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</span> <b>' + escapeHtml(msgFrom(m)) + ':</b> ' + escapeHtml(m.text) + '</div>').join('') +
     (latestIn ? '<div class="btns" style="margin-top:4px">' + REPLY_CHIPS[es ? 'es' : 'en'].map(t => '<button class="mini" data-msg-reply="' + escapeHtml(t) + '" data-id="' + latestIn.id + '">' + escapeHtml(t) + '</button>').join('') + '<button class="mini" data-msg-open="1">' + (es ? 'Más…' : 'More…') + '</button></div>' : '');
-  wrap.hidden = false;
+  wrap.hidden = false; renderPillRow();
 }
 $('#msgRow').addEventListener('click', async e => {
   const r = e.target.closest('[data-msg-reply]'); if (r) { try { await sendMessage(r.dataset.msgReply, 'preset', null, +r.dataset.id); r.textContent = '✓'; } catch (err) { alert(err.message); } return; }
@@ -3592,6 +3639,7 @@ async function familyAction(b) {
   const say_ = (id, t) => { const m = $(id); if (m) m.textContent = t; };
   try {
     if (act === 'go-account') { openSettings('account'); return true; }
+    if (act === 'go-family') { openSettings('family'); return true; }
     if (act === 'fam-invite') {
       if (!isPro()) { openSettings('account'); return true; }
       const name = ($('#famName') && $('#famName').value.trim()) || S.account.name || ''; if (name) { S.account.name = name; save(); }
@@ -3935,6 +3983,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 /* -------------------------------- start ---------------------------- */
 $('#soundChip').addEventListener('click', () => { const a = audio(); if (a) a.resume().then(updateSoundChip); });
+document.addEventListener('pointerdown', () => { const a = audio(); if (a && a.state !== 'running') a.resume().then(updateSoundChip).catch(() => {}); }, { capture: true, passive: true });
 setAnim(S.animate);
 refreshRadarTiles(true);
 applyNight();
