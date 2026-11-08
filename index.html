@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09p';
+const APP_VERSION = '2026.11.09q';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1955,10 +1955,11 @@ function hull(pts) {   // monotone chain convex hull on [x,y] pairs
   for (const p of pts.slice().reverse()) { while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
   return lo.slice(0, -1).concat(up.slice(0, -1));
 }
-// A point for a map label near the location: along the given bearing, at least `minPx` screen pixels away so it never sits on the dot
+// A point for a map label near the location: on the side AWAY from where the rain is coming (rain from the south-west → label to the
+// north-east), at least `minPx` screen pixels from the dot, so the label never crowds the storm side of the display
 function labelPointNear(bearingDeg, distMi, minPx) {
-  const a = (bearingDeg || 0) * Math.PI / 180;
-  let lat = st.loc.lat + distMi * Math.cos(a) / 69, lon = st.loc.lon + distMi * Math.sin(a) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+  const away = ((bearingDeg || 0) + 180) * Math.PI / 180;
+  let lat = st.loc.lat + distMi * Math.cos(away) / 69, lon = st.loc.lon + distMi * Math.sin(away) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
   try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]), d = c.distanceTo(q); if (d < minPx) { const k = minPx / Math.max(1, d); const ll = map.containerPointToLatLng(L.point(c.x + (q.x - c.x) * k, c.y + (q.y - c.y) * k)); lat = ll.lat; lon = ll.lng; } } catch (e) {}
   return [lat, lon];
 }
@@ -2013,8 +2014,8 @@ function drawMotion() {
   } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
     const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
     let lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
-    // zoomed out, the closest-approach point sits on top of the location dot: push the label out along the same bearing until it clears it
-    try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]), d = c.distanceTo(q); if (d < 56) { const k = 56 / Math.max(1, d); const pt = L.point(c.x + (q.x - c.x) * k, c.y + (q.y - c.y) * k); const ll = map.containerPointToLatLng(pt); lat = ll.lat; lon = ll.lng; } } catch (e) {}
+    // zoomed out, the closest-approach point sits on top of the location dot: the label then moves to the side away from the storm
+    try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]); if (c.distanceTo(q) < 56) [lat, lon] = labelPointNear(res.passing.bearing, dMi, 56); } catch (e) {}
     // when the status bar is about a different storm (one that could reach you later), say whose closest approach this is
     const other = res.far && res.far.blob && res.far.blob !== res.nearestBlob;
     L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">' + (other ? 'nearer rain passes here · ' : 'closest approach · ') + Math.max(1, Math.round(dMi)) + ' mi</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
