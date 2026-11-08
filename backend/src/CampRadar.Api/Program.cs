@@ -384,15 +384,17 @@ app.MapGet("/group/messages", (HttpRequest r, EntitlementStore ent, GroupStore g
     return Results.Ok(groups.Messages(g.Id, since).Select(m => new { m.Id, from = m.FromEmail, fromName = m.FromName, m.Kind, m.Text, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), m.Ms, m.ReplyTo, mine = m.FromEmail == t.Email }));
 });
 // Send a short message to the group: pushed to every member's devices (not the sender's), with reply chips.
-async Task<int> FanOutMessage(GroupStore groups, SpotStore spots, PushSender push, GroupInfo g, Message m, string senderEmail, CancellationToken ct)
+async Task<int> FanOutMessage(GroupStore groups, SpotStore spots, PushSender push, GroupInfo g, Message m, string senderEmail, CancellationToken ct, string? senderSpotId = null)
 {
     int sent = 0; var replyToken = groups.ReplyToken(m.Id) ?? "";
-    var memberEmails = groups.Members(g.Id).Select(x => x.Email).Where(x => x != senderEmail).ToHashSet();
+    // every member device gets it, including the sender's *other* devices (one email can be a phone and a tablet); only the sending device is skipped
+    var memberEmails = groups.Members(g.Id).Select(x => x.Email).ToHashSet();
+    string device = ""; try { using var dd = JsonDocument.Parse(m.DataJson); if (dd.RootElement.TryGetProperty("_device", out var dv)) device = dv.GetString() ?? ""; } catch { }
     foreach (var spot in spots.All())
     {
         string email = ""; try { using var d = JsonDocument.Parse(spot.Prefs); email = d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { }
-        if (!memberEmails.Contains(email)) continue;
-        var ok = await push.SendAsync(spot, new { title = m.FromName, body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, toEmail = email, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
+        if (!memberEmails.Contains(email) || spot.Id == senderSpotId) continue;
+        var ok = await push.SendAsync(spot, new { title = m.FromName + (device.Length > 0 ? " · " + device : ""), body = m.Text, tag = "msg", level = "info", msgId = m.Id, replyToken, toEmail = email, kind = m.Kind, data = JsonDocument.Parse(m.DataJson).RootElement.Clone(), lang = "", at = m.Ms }, "msg", m.Kind == "weather", ct);
         if (ok) sent++; else spots.RecordFailure(spot.Id, gone: true);
     }
     return sent;
@@ -406,7 +408,7 @@ app.MapPost("/group/message", async (HttpRequest r, [FromBody] MessageRequest re
     if (groups.RecentMessageCount(t.Email, 10) >= 20) return Results.Json(new { error = "Slow down — that's a lot of messages in ten minutes." }, statusCode: 429);
     var me = groups.MemberOf(g.Id, t.Email);
     var m = groups.AddMessage(g.Id, t.Email, DisplayName(me?.Name, t.Email), req.Kind is "preset" or "weather" ? req.Kind : "text", text, req.Data is { ValueKind: JsonValueKind.Object } d && d.GetRawText().Length < 2000 ? d.GetRawText() : "{}", req.ReplyTo);
-    var sent = await FanOutMessage(groups, spots, push, g, m, t.Email, ct);
+    var sent = await FanOutMessage(groups, spots, push, g, m, t.Email, ct, req.FromSpot);
     return Results.Ok(new { id = m.Id, delivered = sent });
 });
 // Reply from a notification button: no sign-in token in the service worker, so the message's own reply token authorises it.
@@ -581,7 +583,7 @@ public sealed record InviteRequest(string? Email, string? MyName);
 public sealed record JoinRequest(string Code, string? MyName);
 public sealed record ShareRequest(bool On, int Hours, string? MyName);
 public sealed record PositionRequest(double Lat, double Lon, double? AccM);
-public sealed record MessageRequest(string Text, string? Kind, JsonElement? Data, long? ReplyTo);
+public sealed record MessageRequest(string Text, string? Kind, JsonElement? Data, long? ReplyTo, string? FromSpot);
 public sealed record ReplyRequest(string ReplyToken, string FromEmail, string Text);
 public sealed record StartRequest(string Email);
 public sealed record MailTestRequest(string To);

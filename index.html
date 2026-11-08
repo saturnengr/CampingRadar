@@ -250,6 +250,8 @@ body.side #side::after{content:"";flex:1;order:9}
 #wwRow,#huRow{display:flex;flex-wrap:wrap;gap:6px}
 #wwWrap{background:rgba(198,40,40,.12)}
 #huWrap{background:rgba(255,183,77,.08)}
+#msgWrap{background:rgba(124,77,255,.12)}#msgRow{display:block}.msg{font-size:15px;padding:2px 0}.msg.mine{opacity:.75}
+body.side #msgWrap{order:5}
 body.side .pillsec{border-bottom:0;padding:8px 14px 10px}
 body.side #wwWrap{order:3}body.side #huWrap{order:4}
 .hu{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:700;background:var(--chrome2);border:1px solid var(--line);border-left:5px solid #ffb74d}
@@ -280,6 +282,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
 </header>
 <div id="wwWrap" class="pillsec" hidden><div class="pillhdr">NWS watches &amp; warnings</div><div id="wwRow"></div></div>
 <div id="huWrap" class="pillsec" hidden><div class="pillhdr" id="huHdr">Heads-up</div><div id="huRow"></div></div>
+<div id="msgWrap" class="pillsec" hidden><div class="pillhdr">Messages</div><div id="msgRow"></div></div>
 
 <div id="warnbar" hidden>
   <div id="warnText"></div>
@@ -743,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08c';
+const APP_VERSION = '2026.11.08d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -770,7 +773,7 @@ async function checkForUpdate(force) {
     if (live !== upd.startHash) { upd.pending = true; $('#updateChip').hidden = false; }
   } catch (e) {}
 }
-function applyUpdate() { try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then(r => r && r.update()); } catch (e) {} location.reload(); }
+function applyUpdate() { try { if (st.lastTouch) { const c = map.getCenter(); localStorage.setItem('campRadar.view', JSON.stringify({ lat: c.lat, lon: c.lng, zoom: map.getZoom(), at: Date.now() })); } } catch (e) {} try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then(r => r && r.update()); } catch (e) {} location.reload(); }
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => { upd.lastActivity = Date.now(); }, { passive: true }));
 $('#updateChip').addEventListener('click', applyUpdate);
 setTimeout(() => checkForUpdate(false), 8000);
@@ -1087,7 +1090,7 @@ function checkMapSize() {
   const el = $('#map'), h = el.clientHeight, w = el.clientWidth, sz = map.getSize();
   if (!h || (h === sz.y && w === sz.x)) return;
   map.invalidateSize({ pan: false });
-  if (st.loc && Date.now() - (st.lastTouch || 0) > 5000) fitRange();
+  if (st.loc && !st.lastTouch) fitRange();   // only re-fit a view the person has not adjusted
 }
 if (window.ResizeObserver) new ResizeObserver(checkMapSize).observe($('#map'));
 setInterval(checkMapSize, 1500);   // ResizeObserver callbacks are skipped while a page is in the background; the poll catches up
@@ -1158,7 +1161,7 @@ function setLocation(lat, lon, src) {
   st.loc = { lat, lon, src };
   S.lastLoc = { lat, lon, src }; save();
   drawRings();
-  if (moved) { fitRange(); refreshWeather(true); refreshAlerts(); runNowcast(); refreshLightning(); pushUpdateLocation(); scheduleHazards(); }
+  if (moved) { if (!st.lastTouch || !st.restoreView) fitRange(); refreshWeather(true); refreshAlerts(); runNowcast(); refreshLightning(); pushUpdateLocation(); scheduleHazards(); }
   updatePickHint();
 }
 function updatePickHint() {
@@ -1689,7 +1692,7 @@ function applyLayers() {
 function renderLegend() {
   const L_ = S.layers, items = [];
   if (L_.storms) { const seen = new Set((st.hz.storms || []).map(a => a.event)); for (const ev of Object.keys(STORM_COLORS)) if (seen.has(ev)) items.push('<span><i style="background:' + STORM_COLORS[ev] + (/Warning/.test(ev) ? '' : ';opacity:.6;border:1px dashed #fff') + '"></i>' + ev + '</span>'); if (!seen.size) items.push('<span><i style="background:#ff9100;opacity:.5"></i>Watches &amp; warnings (none in view)</span>'); }
-  if (L_.motion !== false) items.push('<span><i style="background:transparent;border:2px dashed #fff"></i>Storm motion: arrow = next 30 min, outlines = +15/+30/+60 min' + (st.nc && st.nc.motion && !st.nc.motion.ok ? ' (motion unclear right now)' : '') + '</span>');
+  if (L_.motion !== false) items.push('<span><i style="background:transparent;border:2px dashed #fff"></i>Storm motion: arrow = next 30 min · outlines <i style="background:transparent;border:2px dotted ' + GHOST_COLORS[15] + '"></i>+15 <i style="background:transparent;border:2px dashed ' + GHOST_COLORS[30] + '"></i>+30 <i style="background:transparent;border:2px dashed ' + GHOST_COLORS[60] + '"></i>+60 min' + (st.nc && st.nc.motion && !st.nc.motion.ok ? ' (motion unclear right now)' : '') + '</span>');
   if (L_.hail) items.push('<span><i style="background:#e1f5fe;border:2px solid #0277bd;border-radius:50%"></i>Hail-capable core / NWS hail size</span>');
   if (L_.flood) items.push('<span><i style="background:#1e88e5"></i>Flood alert</span>');
   if (L_.gauges) items.push('<span><i style="background:#ff8f00;border-radius:50%"></i>River gauge (colour = flood stage)</span>');
@@ -1812,6 +1815,7 @@ async function loadHazardAlerts(b) {
 }
 // Pills under the forecast: every watch/warning drawn in view (storms, floods, fire weather) plus any alert for your spot. Tap for the full text.
 // Storm-motion layer: the tracker's own picture — per-area arrows with speed, ghost outlines at +15/+30/+60 min, and the hit-zone entry point with ETA.
+const GHOST_COLORS = { 15: '#fff176', 30: '#ffb74d', 60: '#f48fb1' };   // +15 yellow, +30 orange, +60 pink
 function hull(pts) {   // monotone chain convex hull on [x,y] pairs
   pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (pts.length < 3) return pts;
   const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
@@ -1838,10 +1842,10 @@ function drawMotion() {
     const hdg = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360, dirWord = compass(hdg);
     const pts = cells.get(b.id), step = Math.max(1, Math.floor(pts.length / 400)), sample = pts.filter((_, i) => i % step === 0);
     // ghost outlines
-    [[60, 0.18], [30, 0.3], [15, 0.45]].forEach(([min, alpha]) => {
+    [[60, GHOST_COLORS[60], 0.55], [30, GHOST_COLORS[30], 0.7], [15, GHOST_COLORS[15], 0.85]].forEach(([min, col, alpha]) => {
       const dx = v.vx * min / fineKm, dy = v.vy * min / fineKm;
       const h = hull(sample.map(([x, y]) => [x + dx, y + dy])); if (h.length < 3) return;
-      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: '#fff', weight: 1.5, dashArray: '5 5', opacity: alpha * op, fillColor: '#fff', fillOpacity: alpha * 0.25 * op, interactive: false }).addTo(motionLayer);
+      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: col, weight: 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op, fillColor: col, fillOpacity: 0.06 * op, interactive: false }).addTo(motionLayer);
     });
     // arrow = 30 minutes of travel from the centroid
     const a0 = toLL(b.cx, b.cy), a1 = toLL(b.cx + v.vx * 30 / fineKm, b.cy + v.vy * 30 / fineKm);
@@ -3204,6 +3208,10 @@ const SETTINGS = {
 /* ------------------------------ family & friends: household, location sharing, people on the map, quick messages ------------------- */
 const fam = { info: null, positions: [], lastMsgMs: 0, seen: new Set(), lastPosSent: 0, lastPos: null, timer: null };
 const peopleLayer = L.layerGroup().addTo(map);
+// Which of your devices sent a message (one email can be on a phone, a tablet and a PC)
+function deviceName() { if (S.deviceName) return S.deviceName; const ua = navigator.userAgent, small = Math.min(screen.width, screen.height) < 600; return /Android|iPhone|iPad|Mobile/i.test(ua) ? (small ? 'Phone' : 'Tablet') : 'PC'; }
+function msgMine(m) { return m.mine && (!m.data || !m.data._device || m.data._device === deviceName()); }
+function msgFrom(m) { return m.fromName + (m.data && m.data._device ? ' · ' + m.data._device : ''); }
 const QUICK_MESSAGES = {
   en: ['Dinner in 10', 'Come back to camp', 'On my way', 'Running late', 'Need a hand', 'All good here'],
   es: ['Cena en 10', 'Vuelvan al campamento', 'Voy en camino', 'Llego tarde', 'Necesito ayuda', 'Todo bien aquí']
@@ -3271,19 +3279,35 @@ async function pollMessages() {
   for (const m of list) {
     fam.lastMsgMs = Math.max(fam.lastMsgMs, m.ms);
     if (fam.seen.has(m.id)) continue; fam.seen.add(m.id);
-    if (m.mine || Date.now() - m.ms > 20 * 60000) continue;
+    fam.recent = (fam.recent || []).filter(x => x.id !== m.id).concat([m]).slice(-12);
+    if (msgMine(m) || Date.now() - m.ms > 20 * 60000) continue;
     showMessage(m);
   }
+  renderMsgStrip();
 }
+// Strip under the forecast: the last couple of hours of group messages, newest first, with reply chips on the latest incoming one
+function renderMsgStrip() {
+  const wrap = $('#msgWrap'); if (!wrap) return;
+  const list = (fam.recent || []).filter(m => Date.now() - m.ms < 2 * 3600e3).slice(-6).reverse();
+  if (!list.length) { wrap.hidden = true; return; }
+  const es = lang() === 'es', latestIn = list.find(m => !msgMine(m));
+  $('#msgRow').innerHTML = list.map(m => '<div class="msg' + (msgMine(m) ? ' mine' : '') + '"><span class="muted">' + new Date(m.ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</span> <b>' + escapeHtml(msgFrom(m)) + ':</b> ' + escapeHtml(m.text) + '</div>').join('') +
+    (latestIn ? '<div class="btns" style="margin-top:4px">' + REPLY_CHIPS[es ? 'es' : 'en'].map(t => '<button class="mini" data-msg-reply="' + escapeHtml(t) + '" data-id="' + latestIn.id + '">' + escapeHtml(t) + '</button>').join('') + '<button class="mini" data-msg-open="1">' + (es ? 'Más…' : 'More…') + '</button></div>' : '');
+  wrap.hidden = false;
+}
+$('#msgRow').addEventListener('click', async e => {
+  const r = e.target.closest('[data-msg-reply]'); if (r) { try { await sendMessage(r.dataset.msgReply, 'preset'); r.textContent = '✓'; } catch (err) { alert(err.message); } return; }
+  if (e.target.closest('[data-msg-open]')) openSettings('family');
+});
 function showMessage(m) {
-  const chip = $('#msgChip'); chip.hidden = false; chip.innerHTML = '<b>' + escapeHtml(m.fromName) + ':</b> ' + escapeHtml(m.text) + ' <span class="x">✕</span>'; chip.dataset.msgId = m.id;
+  const chip = $('#msgChip'); chip.hidden = false; chip.innerHTML = '<b>' + escapeHtml(msgFrom(m)) + ':</b> ' + escapeHtml(m.text) + ' <span class="x">✕</span>'; chip.dataset.msgId = m.id;
   tone(660, 0, 0.12, 'sine', 0.5); tone(990, 0.14, 0.18, 'sine', 0.5);
-  if (S.brief.speakAlerts) speak((lang() === 'es' ? m.fromName + ' dice: ' : m.fromName + ' says: ') + m.text, { queue: true });
+  if (S.brief.speakAlerts) speak((lang() === 'es' ? msgFrom(m) + ' dice: ' : msgFrom(m) + ' says: ') + m.text, { queue: true });
   clearTimeout(fam.chipTimer); fam.chipTimer = setTimeout(() => { chip.hidden = true; }, 5 * 60000);
 }
 async function sendMessage(text, kind, data) {
-  const j = await famApi('/group/message', { method: 'POST', body: JSON.stringify({ text, kind: kind || 'text', data: data || null }) });
-  fam.seen.add(j.id); return j;
+  const j = await famApi('/group/message', { method: 'POST', body: JSON.stringify({ text, kind: kind || 'text', data: Object.assign({}, data || {}, { _device: deviceName() }), fromSpot: S.pushId || null }) });
+  fam.seen.add(j.id); fam.recent = (fam.recent || []).concat([Object.assign({ mine: true }, j, { fromName: j.fromName || (fam.info && fam.info.me && fam.info.me.name) || 'Me', text, ms: j.ms || Date.now(), data: { _device: deviceName() } })]).slice(-12); renderMsgStrip(); return j;
 }
 // "Weather turning — head back": the current status rides along so it reads as a warning, not nagging
 function weatherMessageText() { const main = $('#statusMain').textContent; return (lang() === 'es' ? 'El tiempo cambia, vuelvan: ' : 'Weather turning — head back: ') + localizeSpoken(main); }
@@ -3313,6 +3337,7 @@ function familyPane() {
   const qm = QUICK_MESSAGES[lang()] || QUICK_MESSAGES.en;
   h += '<div class="row"><div class="tl">' + (es ? 'Mensaje rápido al grupo' : 'Quick message to the group') + (fam.info.pro ? '' : ' <span class="pro">PRO</span>') + '</div><div class="btns" style="flex-wrap:wrap">' + qm.map(t => '<button data-fam-quick="' + escapeHtml(t) + '">' + escapeHtml(t) + '</button>').join('') + '<button data-act="fam-weather" style="border-color:#ffb74d">' + (es ? '⚠ El tiempo cambia, vuelvan' : '⚠ Weather turning — head back') + '</button></div>' +
     '<div style="display:flex;gap:8px;margin-top:8px"><input id="famText" maxlength="160" placeholder="' + (es ? 'o escribe algo corto…' : 'or type something short…') + '" ' + inputStyle + '><button data-act="fam-send" style="min-width:90px">' + (es ? 'Enviar' : 'Send') + '</button></div><div id="famSendMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><label style="margin:0;white-space:nowrap">' + (es ? 'Este dispositivo' : 'This device') + '</label><input id="famDevice" maxlength="24" value="' + escapeHtml(deviceName()) + '" ' + inputStyle.replace('width:100%', 'width:140px') + '><span class="muted" style="font-size:13px">' + (es ? 'se muestra junto a tu nombre en los mensajes' : 'shown after your name on messages') + '</span></div>' +
     '<div id="famLog" style="margin-top:10px;max-height:220px;overflow:auto;font-size:14px"></div></div>';
   h += '<div class="row" style="color:var(--muted);font-size:14px"><button class="mini" data-act="fam-leave">' + (g.isOwner ? (es ? 'Disolver el grupo' : 'Disband the group') : (es ? 'Salir del grupo' : 'Leave the group')) + '</button> ' + (es ? 'Los mensajes y las posiciones se borran a las 24 horas; nadie fuera del grupo los ve.' : 'Messages and positions are deleted after 24 hours; nobody outside the group can see them.') + '</div>';
   return h;
@@ -3320,7 +3345,7 @@ function familyPane() {
 async function renderFamLog() {
   const el = $('#famLog'); if (!el || !fam.info || !fam.info.group) return;
   let list = []; try { list = await famApi('/group/messages?since=0'); } catch (e) {}
-  el.innerHTML = list.slice(-30).reverse().map(m => '<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">' + new Date(m.ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</span> <b>' + escapeHtml(m.fromName) + '</b> ' + escapeHtml(m.text) + (m.mine ? '' : ' ' + (REPLY_CHIPS[lang()] || REPLY_CHIPS.en).map(c => '<button class="mini" data-fam-reply="' + m.id + '" data-text="' + escapeHtml(c) + '">' + escapeHtml(c) + '</button>').join(' ')) + '</div>').join('') || '<span class="muted">' + (lang() === 'es' ? 'Sin mensajes en las últimas 24 horas.' : 'No messages in the last 24 hours.') + '</span>';
+  el.innerHTML = list.slice(-30).reverse().map(m => '<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">' + new Date(m.ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</span> <b>' + escapeHtml(msgFrom(m)) + '</b> ' + escapeHtml(m.text) + (m.mine ? '' : ' ' + (REPLY_CHIPS[lang()] || REPLY_CHIPS.en).map(c => '<button class="mini" data-fam-reply="' + m.id + '" data-text="' + escapeHtml(c) + '">' + escapeHtml(c) + '</button>').join(' ')) + '</div>').join('') || '<span class="muted">' + (lang() === 'es' ? 'Sin mensajes en las últimas 24 horas.' : 'No messages in the last 24 hours.') + '</span>';
 }
 async function familyAction(b) {
   const act = b.dataset.act, es = lang() === 'es';
@@ -3638,7 +3663,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
@@ -3672,6 +3697,8 @@ setAnim(S.animate);
 refreshRadarTiles(true);
 applyNight();
 fitRange();
+// a view the person had set before a quiet restart comes back (within 30 min)
+try { const v = JSON.parse(localStorage.getItem('campRadar.view') || 'null'); localStorage.removeItem('campRadar.view'); if (v && Date.now() - v.at < 30 * 60000) { st.restoreView = v; st.lastTouch = Date.now(); setTimeout(() => { map.setView([v.lat, v.lon], v.zoom, { animate: false }); st.lastTouch = Date.now(); }, 1200); } } catch (e) {}
 if (S.locMode === 'manual' && S.manual) setLocation(S.manual.lat, S.manual.lon, 'manual');
 else if (S.lastLoc) setLocation(S.lastLoc.lat, S.lastLoc.lon, S.lastLoc.src);
 startGps();
@@ -3698,7 +3725,7 @@ setInterval(() => { if (st.wx.points) refreshObs().catch(() => {}); }, 15 * 6000
 setInterval(() => { if (st.wx.points) refreshForecast().then(applyNight).catch(() => {}); }, 30 * 60000);
 setInterval(() => {
   renderStatus(); applyNight(); renderDiag();
-  if (st.lastTouch && Date.now() - st.lastTouch > 120000) { st.lastTouch = 0; fitRange(); }   // drift back after 2 min
+  if (S.activity === 'sentinel' && st.lastTouch && Date.now() - st.lastTouch > 120000) { st.lastTouch = 0; fitRange(); }   // Sentinel displays drift back to their rings after 2 min; everyone else keeps the view they set
 }, 30000);
 </script>
 </body>
