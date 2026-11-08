@@ -572,7 +572,8 @@ function hailCores(grid, cellKm, cx, cy, thresh, maxRing, loc) {
 function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
-  const rings = { 10: false, 30: false, 50: false };
+  const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false };
+  const ringR = [2, 5, 10, 30, 50, 100, 120], farRing = Math.max(opts.maxRingMi || 50, 120);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null;
   const hitBlobCells = new Map();
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
@@ -580,10 +581,8 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
     if (d < thresh) continue;
     const e = (x + 0.5 - cx) * cellMi, n = -(y + 0.5 - cy) * cellMi;
     const dist = Math.hypot(e, n);
+    if (dist <= farRing) for (const r of ringR) if (dist <= r) rings[r] = true;
     if (dist <= maxRing) {
-      if (dist <= 10) rings[10] = true;
-      if (dist <= 30) rings[30] = true;
-      rings[50] = true;
       if (!nearest || dist < nearest.distMi) { nearest = { distMi: dist, bearing: bearingDeg(e, n), dbz: d }; nearestBlob = labels ? labels[y * grid.w + x] : null; }
     }
     const v = vel(x, y), ve = v.vx * 0.621371, vn = -v.vy * 0.621371;   // mi/min
@@ -743,7 +742,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07z';
+const APP_VERSION = '2026.11.08a';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1020,11 +1019,12 @@ const radarLag = () => st.latestRadar ? Math.max(0, (Date.now() - st.latestRadar
 const alertLayer = L.layerGroup().addTo(map);
 let meMarker = null, ringLayer = L.layerGroup().addTo(map);
 
-const RANGE_SETS = { '10-30-50': [10, 30, 50], '5-10-30': [5, 10, 30], '2-5-10': [2, 5, 10] };
+const RANGE_SETS = { '10-30-50': [10, 30, 50], '5-10-30': [5, 10, 30], '2-5-10': [2, 5, 10], '50-100-150': [50, 100, 150] };
 const ranges = () => RANGE_SETS[S.rangeSet] || RANGE_SETS['10-30-50'];
 function renderRangeButtons() {
   const rs = ranges(); if (!rs.includes(S.range)) S.range = rs[1];
   const b = $('#btnRange'); b.innerHTML = S.range + '<small>mi · tap</small>'; b.classList.add('on');
+  document.querySelectorAll('.ring').forEach((el, i) => { el.dataset.r = rs[i]; el.textContent = rs[i] + ' mi'; });
 }
 function drawRings() {
   ringLayer.clearLayers();
@@ -2044,7 +2044,7 @@ function computeStatus() {
   if (!st.nc && !st.ncErr) { out.main = 'Checking radar…'; return out; }
   if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return overlayLightning(out); }
   const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
-  out.rings = res.rings;
+  out.rings = Object.assign({}, res.rings, { 150: res.rings[120] });   // the analysis window ends at 120 mi
   const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
     : motion.ok ? 'Rain nearly stationary' : '';
   const lowConf = hit && hit.etaMin > 15 && hit.maxDbz < 30 && st.wx.pop2h != null && st.wx.pop2h < 10;
@@ -2054,7 +2054,7 @@ function computeStatus() {
     out.cls = 'yellow'; out.level = 'low';
     out.main = 'Rain to the ' + compassLong(hit.fromBearing) + ' is weakening — may fizzle before it reaches you';
     out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000) + (moving ? ' · ' + moving : '');
-    out.rings = res.rings; return overlayLightning(out);
+    out.rings = Object.assign({}, res.rings, { 150: res.rings[120] }); return overlayLightning(out);
   }
   if (hit && !lowConf) {
     const eta = Math.max(0, hit.etaMin - lat), word = intensityWord(hit.maxDbz) + trendWord;
@@ -3167,7 +3167,7 @@ const SETTINGS = {
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], ['0', 'None'], ['24', 'Gesture bar'], ['48', '3-button bar']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
-    ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)']]],
+    ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)'], ['50-100-150', '50 · 100 · 150 mi (overview)']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
   ],
@@ -3612,7 +3612,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'layout') applyLayout();
   if (k === 'bottomGap') applyBottomGap();
   if (k === 'lowData' || k === 'activity') applyLowData();
-  if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
+  if (k === 'rangeSet') { S.rangeSetChosen = true; renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
@@ -3632,6 +3632,9 @@ $('#sheet').addEventListener('input', e => {
    near a window does not wander), the screen is kept awake, and the rings re-fit after any pan once things go quiet. */
 function applySentinel() {
   document.body.classList.toggle('sentinel', S.activity === 'sentinel');
+  // Sentinel is an early-warning overview: default it to the 50/100/150 rings, and back again when leaving (a deliberate choice is kept)
+  if (S.activity === 'sentinel' && S.rangeSet === '10-30-50' && !S.rangeSetChosen) { S.rangeSet = '50-100-150'; S.range = 100; renderRangeButtons(); drawRings(); fitRange(); }
+  else if (S.activity !== 'sentinel' && S.rangeSet === '50-100-150' && !S.rangeSetChosen) { S.rangeSet = '10-30-50'; S.range = 30; renderRangeButtons(); drawRings(); fitRange(); }
   if (typeof applyLowData === 'function') applyLowData();
   if (S.activity === 'sentinel') {
     if (S.locMode === 'gps' && lastGps) { S.manual = { lat: lastGps.lat, lon: lastGps.lon }; S.locMode = 'manual'; S.sentinelPinned = true; save(); setLocation(lastGps.lat, lastGps.lon, 'manual'); updatePickHint(); }
