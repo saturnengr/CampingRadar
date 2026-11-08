@@ -94,7 +94,9 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 .windarrow{color:#e8eef3;font-size:11px;font-weight:700;text-shadow:0 0 3px #000,0 0 3px #000;white-space:nowrap;text-align:center;width:44px;margin-left:-22px;margin-top:-22px}
 .maplbl{display:inline-block;color:#fff;font-size:12px;font-weight:700;white-space:nowrap;background:rgba(13,20,27,.8);padding:3px 7px;border-radius:7px;text-shadow:0 0 2px #000}
 .windarrow svg{display:block;margin:0 auto;filter:drop-shadow(0 0 2px #000)}
-#legend{position:absolute;right:12px;bottom:26px;z-index:700;max-height:38vh;overflow:auto;background:rgba(13,20,27,.86);padding:6px 10px;border-radius:10px;font-size:12px;display:flex;flex-direction:column;gap:3px;max-width:180px}
+#legend{position:absolute;right:12px;bottom:26px;z-index:700;max-height:38vh;overflow:auto;background:rgba(13,20,27,.86);padding:6px 10px;border-radius:10px;font-size:11px;display:flex;flex-direction:column;gap:3px;max-width:230px;cursor:pointer}
+#legend span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#legend .lgHdr{font-weight:750;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;font-size:10px}
+#legend.closed{padding:5px 9px;gap:0}#legend.closed span:not(.lgHdr){display:none}
 #legend span{display:flex;align-items:center;gap:6px}#legend i{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
 @media (max-width:860px){#legend{display:none}}
 #zoomCtl{position:absolute;right:82px;top:12px;z-index:900;display:flex;flex-direction:column;gap:8px}
@@ -103,7 +105,7 @@ body.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85
 .dots{display:inline-flex;gap:4px;margin-left:8px;vertical-align:middle}
 .dots i{width:8px;height:8px;border-radius:50%;background:#56636f}.dots i.on{background:var(--accent2)}
 #updated{position:absolute;left:12px;top:12px;z-index:800;background:rgba(13,20,27,.8);padding:5px 9px;border-radius:8px;font-size:13px;color:var(--muted)}
-#pickHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:850;background:var(--accent);padding:6px 8px 6px 16px;border-radius:12px;font-size:17px;font-weight:750;display:flex;gap:12px;align-items:center;white-space:nowrap}
+#pickHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:850;background:var(--accent);padding:6px 8px 6px 16px;border-radius:12px;font-size:17px;font-weight:750;display:flex;gap:12px;align-items:center;white-space:normal;max-width:calc(100% - 24px);box-sizing:border-box}
 #pickHint button{background:rgba(0,0,0,.25);min-height:40px}
 #soundChip{position:absolute;left:12px;bottom:74px;z-index:850;background:#6a2fb0;border-color:#b48cff;font-weight:700}
 #updateChip{position:absolute;left:12px;bottom:118px;z-index:850;background:#1e6b3a;border-color:#6fd39a;font-weight:700}
@@ -231,6 +233,13 @@ body.side.side-right{flex-direction:row-reverse}
 body.side #side{display:flex;flex-direction:column;flex:none;width:clamp(340px,34vw,420px);overflow:hidden auto;border-right:1px solid var(--line);background:var(--chrome)}
 /* the sidebar scrolls when its content is taller than the screen; nothing in it is allowed to squash (a squashed status bar drew its ring pills over the banner) */
 body.side #side>*{flex-shrink:0}
+/* when the column is taller than the screen, step down in size until it fits (set by fitSidebar) */
+body.side.compact #statusbar{padding:8px 12px;gap:6px 8px}body.side.compact #statusMain{font-size:19px}body.side.compact #statusSub{font-size:14px}
+body.side.compact #banner{padding:8px 12px;gap:6px}body.side.compact #nowTemp{font-size:40px}body.side.compact #nowCond{font-size:16px}body.side.compact #nowWind{font-size:14px}body.side.compact #nowPlace{display:none}
+body.side.compact .day{padding:4px 4px 3px}body.side.compact .day svg{width:30px;height:30px}body.side.compact .day .t{font-size:15px}body.side.compact .day .nm{font-size:12px}body.side.compact .day .p{font-size:11px;min-height:13px}
+body.side.compact .pillsec{padding:5px 12px 6px}body.side.compact .pillhdr{display:none}body.side.compact .ww,body.side.compact .hu{min-height:30px;font-size:13px;padding:0 10px}
+body.side.compact #olRow{height:50px}body.side.compact .ol .pct{display:none}body.side.compact #olNote{font-size:11px}body.side.compact .msg{font-size:13px}
+body.side.compact2 #days{display:none}body.side.compact2 #statusMain{font-size:17px}body.side.compact2 #statusSub{font-size:13px}body.side.compact2 #nowTemp{font-size:32px}body.side.compact2 #olRow{height:40px}body.side.compact2 .ol .tmp{display:none}
 body.side.side-right #side{border-right:0;border-left:1px solid var(--line)}
 body.side #statusbar{order:0;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 14px;min-height:0}
 body.side #statusText{flex:1 0 100%}
@@ -798,7 +807,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09v';
+const APP_VERSION = '2026.11.09x';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1187,8 +1196,19 @@ function applyLayout() {
   setTimeout(checkMapSize, 50);
 }
 window.addEventListener('resize', applyLayout);
+// Sidebar fit: a Sentinel display is never scrolled, so when the column overflows, shrink it in two steps rather than hide the bottom
+let sidebarFitBusy = false;
+function fitSidebar() {
+  if (sidebarFitBusy || !document.body.classList.contains('side')) return; sidebarFitBusy = true;
+  try {
+    const el = $('#side'), b = document.body; b.classList.remove('compact', 'compact2');
+    if (el.scrollHeight > el.clientHeight + 2) { b.classList.add('compact'); if (el.scrollHeight > el.clientHeight + 2) b.classList.add('compact2'); }
+    if (el.scrollHeight <= el.clientHeight + 2 && el.scrollTop) el.scrollTop = 0;   // a column that now fits must not stay scrolled
+  } finally { sidebarFitBusy = false; }
+}
 function checkMapSize() {
   if (typeof assertBottomGap === 'function') assertBottomGap();
+  fitSidebar();
   const el = $('#map'), h = el.clientHeight, w = el.clientWidth, sz = map.getSize();
   if (!h || (h === sz.y && w === sz.x)) return;
   map.invalidateSize({ pan: false });
@@ -1829,8 +1849,10 @@ function renderLegend() {
   if (L_.wind) items.push('<span><i style="background:#e8eef3;border-radius:50%"></i>Wind (mph, g = gust)</span>');
   if (L_.clouds) items.push('<span><i style="background:#fff"></i>Satellite clouds (white = cloud)</span>');
   if (L_.tropical || map.hasLayer(tropicalLayer)) items.push('<span><i style="background:#d500f9"></i>Tropical cyclone track & cone</span>');
-  const el = $('#legend'); el.innerHTML = items.join(''); el.hidden = !items.length;
+  const el = $('#legend'); let open = false; try { open = localStorage.getItem('campRadar.legendOpen') === '1'; } catch (e) {}
+  el.innerHTML = '<span class="lgHdr">Legend ' + (open ? '▾' : '▸') + '</span>' + items.join(''); el.hidden = !items.length; el.classList.toggle('closed', !open);
 }
+$('#legend').addEventListener('click', () => { let open = false; try { open = localStorage.getItem('campRadar.legendOpen') === '1'; localStorage.setItem('campRadar.legendOpen', open ? '0' : '1'); } catch (e) {} renderLegend(); });
 
 let hzTimer = null;
 function scheduleHazards() { clearTimeout(hzTimer); hzTimer = setTimeout(() => { refreshHazards(); refreshWind(); }, 700); }
@@ -1972,8 +1994,9 @@ function awayLabel(bearingDeg, html) {
   return L.divIcon({ className: '', html: '<div class="maplbl" style="transform:translate(' + tx + ',' + ty + ')">' + html + '</div>', iconSize: null, iconAnchor: [east ? -8 : west ? 8 : 0, north ? 6 : -6] });
 }
 // Place such a label: on the far side from the storm, close to the dot, and nudged back inside the map when the text would run off the edge
+let awayLabelCount = 0;
 function addAwayLabel(bearingDeg, distMi, html) {
-  let ll = labelPointNear(bearingDeg, distMi, 34);
+  let ll = labelPointNear(bearingDeg, distMi, 34 + 24 * awayLabelCount++);   // a second label near the dot steps further out
   try {
     const away = ((bearingDeg || 0) + 180) % 360, east = Math.sin(away * Math.PI / 180) > 0.05, west = Math.sin(away * Math.PI / 180) < -0.05;
     const W = map.getSize().x, est = html.replace(/<[^>]+>/g, '').length * 6.6 + 16, q = map.latLngToContainerPoint(ll); let x = q.x;
@@ -1983,7 +2006,7 @@ function addAwayLabel(bearingDeg, distMi, html) {
   L.marker(ll, { icon: awayLabel(bearingDeg, html), pane: 'hazards', interactive: false }).addTo(motionLayer);
 }
 function drawMotion() {
-  motionLayer.clearLayers();
+  motionLayer.clearLayers(); awayLabelCount = 0;
   if (S.layers.motion === false || !st.nc || !st.nc.geo || !st.nc.motion || !st.nc.motion.ok) return;
   const { geo, grid, labels, blobs, vel, motion, res } = st.nc, { center, R, z, cellPx, fineKm } = geo;
   const toLL = (cx, cy) => { const p = pxToLonLat(center.x - R + (cx + 0.5) * cellPx, center.y - R + (cy + 0.5) * cellPx, z); return [p.lat, p.lon]; };
