@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09n';
+const APP_VERSION = '2026.11.09p';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1955,6 +1955,13 @@ function hull(pts) {   // monotone chain convex hull on [x,y] pairs
   for (const p of pts.slice().reverse()) { while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
   return lo.slice(0, -1).concat(up.slice(0, -1));
 }
+// A point for a map label near the location: along the given bearing, at least `minPx` screen pixels away so it never sits on the dot
+function labelPointNear(bearingDeg, distMi, minPx) {
+  const a = (bearingDeg || 0) * Math.PI / 180;
+  let lat = st.loc.lat + distMi * Math.cos(a) / 69, lon = st.loc.lon + distMi * Math.sin(a) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+  try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]), d = c.distanceTo(q); if (d < minPx) { const k = minPx / Math.max(1, d); const ll = map.containerPointToLatLng(L.point(c.x + (q.x - c.x) * k, c.y + (q.y - c.y) * k)); lat = ll.lat; lon = ll.lng; } } catch (e) {}
+  return [lat, lon];
+}
 function drawMotion() {
   motionLayer.clearLayers();
   if (S.layers.motion === false || !st.nc || !st.nc.geo || !st.nc.motion || !st.nc.motion.ok) return;
@@ -2002,7 +2009,7 @@ function drawMotion() {
     const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
     const eta = Math.max(0, res.hit.etaMin - radarLag());
     L.circleMarker([lat, lon], { pane: 'hazards', radius: 7, color: '#fff', weight: 2, fillColor: '#ff9100', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
-    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + etaClock(eta)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    L.marker(labelPointNear(res.hit.fromBearing, dMi, 60), { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + etaClock(eta)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
   } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
     const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
     let lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
@@ -2015,7 +2022,7 @@ function drawMotion() {
       const a2 = (res.far.fromBearing || 0) * Math.PI / 180, d2 = S.hitMi || 3, la2 = st.loc.lat + d2 * Math.cos(a2) / 69, lo2 = st.loc.lon + d2 * Math.sin(a2) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
       const eta2 = Math.max(0, res.far.etaMin - radarLag());
       L.circleMarker([la2, lo2], { pane: 'hazards', radius: 6, color: '#fff', weight: 2, fillColor: '#4fc3f7', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
-      L.marker([la2, lo2], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">could arrive ≈ ' + etaClock(eta2) + ' (straight-line)</div>', iconSize: null, iconAnchor: [-10, -4] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+      L.marker(labelPointNear(res.far.fromBearing, d2, 60), { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">could arrive ≈ ' + etaClock(eta2) + ' (straight-line)</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
     }
   }
 }
@@ -2411,7 +2418,7 @@ function computeStatus() {
     out.cls = 'blue'; out.level = 'watch';
     // the line that matters most leads; the nearer storm that misses you is still named underneath so the two are not confused
     const p = res.passing, near = p && Math.abs(((p.bearing - f.fromBearing) % 360 + 540) % 360 - 180) > 25 ? ' · nearer rain ' + Math.round(p.distMi) + ' mi ' + compass(p.bearing) + ' passes to the ' + compassLong(p.passBearing) : '';
-    out.main = 'Rain ' + Math.round(f.distMi) + ' mi ' + compass(f.fromBearing) + ' could reach you in about ' + fmtDur(eta);
+    const dur = fmtDur(eta); out.main = 'Rain ' + Math.round(f.distMi) + ' mi ' + compass(f.fromBearing) + ' could reach you in ' + (/^just/.test(dur) ? '' : 'about ') + dur;
     out.sub = 'Straight-line track, ≈ ' + etaClock(eta) + ' — beyond the two hours the tracker trusts' + near + (moving ? ' · ' + moving : '');
   } else if (res.passing) {
     const p = res.passing, nt = res.nearestTrend;
@@ -3227,7 +3234,7 @@ function statusES(t) {
     .replace(/Its cells move (\d+) mph but the edge has held near (\d+) mi for (\d+) min/g, 'Sus celdas se mueven a $1 mph pero el borde se ha mantenido a unas $2 millas durante $3 minutos').replace(/(light|moderate|heavy|very heavy) rain possible if it holds together/g, (m, i) => 'posible lluvia ' + INTENSITY_ES[i[0].toUpperCase() + i.slice(1)] + ' si se mantiene')
     .replace(/edge closing at (\d+) mph/g, 'el borde se acerca a $1 mph').replace(/ and the air is dry \(dew point (\d+)° below the temperature\), so it may evaporate before reaching the ground/g, ' y el aire está seco (punto de rocío $1° por debajo de la temperatura), así que puede evaporarse antes de llegar al suelo')
     .replace(/nearer rain (\d+) mi (\w+) passes to the (\w+)/g, (m, d, dir, p) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir) + ' pasa hacia el ' + dirES(p))
-    .replace(/Rain (\d+) mi (\w+) could reach you in about (.+)/g, (m, d, dir, t) => 'Lluvia a ' + d + ' millas al ' + dirES(dir) + ' podría llegar en unas ' + t.replace('just over', 'poco más de').replace('just under', 'poco menos de')).replace(/Straight-line track, ≈ (\S+ \S+) — beyond the two hours the tracker trusts/g, 'Trayectoria en línea recta, hacia las $1; más allá de las dos horas en que el rastreador es fiable')
+    .replace(/Rain (\d+) mi (\w+) could reach you in (?:about )?(.+)/g, (m, d, dir, t) => 'Lluvia a ' + d + ' millas al ' + dirES(dir) + ' podría llegar en ' + (/^just/.test(t) ? '' : 'unas ') + t.replace('just over', 'poco más de').replace('just under', 'poco menos de')).replace(/Straight-line track, ≈ (\S+ \S+) — beyond the two hours the tracker trusts/g, 'Trayectoria en línea recta, hacia las $1; más allá de las dos horas en que el rastreador es fiable')
     .replace(/Light rain may reach you ≈ (.+)/g, 'Lluvia ligera podría llegar hacia las $1').replace(/Low confidence — NWS shows (\d+)% chance in the next 2 hours/g, 'Poca confianza: el NWS da $1% de probabilidad en las próximas 2 horas')
     .replace(/Rain (\d+) mi (\w+) — passing to the (\w+)/g, (m, n, d, p) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', pasando hacia el ' + dirES(p)).replace(/Rain (\d+) mi (\w+) — not heading your way/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', no viene hacia ti')
     .replace(/Rain (\d+) mi (\w+)/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d)).replace(/Likely ending ≈/g, 'Probablemente termina hacia las').replace(/May continue for a while/g, 'Puede continuar un rato')
