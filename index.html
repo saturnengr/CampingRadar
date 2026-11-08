@@ -795,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08x';
+const APP_VERSION = '2026.11.08y';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1078,8 +1078,14 @@ async function updateFrameTimes() {
 let radarLayers = [];
 function buildRadarLayers() {
   radarLayers.forEach(l => map.removeLayer(l));
-  radarLayers = st.frames.map(f => (S.source === 'mrms' ? new MrmsLayer(f, radarOpts()) : L.tileLayer(iemUrl(f.off), radarOpts())).addTo(map));
-  showFrame(Math.min(frameIdx, radarLayers.length - 1));
+  radarLayers = st.frames.map(f => S.source === 'mrms' ? new MrmsLayer(f, radarOpts()) : L.tileLayer(iemUrl(f.off), radarOpts()));
+  // the newest frame loads first and alone; the older frames join once it is on screen (or after 2.5 s), so on a slow cellular
+  // link the picture you are looking at is not queued behind five frames of history
+  const liveIdx = radarLayers.length - 1, live = radarLayers[liveIdx], mine = radarLayers;
+  live.addTo(map);
+  let added = false; const addRest = () => { if (added || radarLayers !== mine) return; added = true; mine.forEach((l, i) => { if (i !== liveIdx) l.addTo(map); }); showFrame(Math.min(frameIdx, mine.length - 1)); };
+  live.once('load', addRest); setTimeout(addRest, 2500);
+  frameIdx = liveIdx; showFrame(liveIdx);
 }
 async function refreshRadarTiles(rebuild) {
   await updateFrameTimes();
