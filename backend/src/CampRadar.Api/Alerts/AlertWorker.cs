@@ -5,6 +5,8 @@ using CampRadar.Api.Push;
 using CampRadar.Api.Radar;
 using CampRadar.Api.Spots;
 
+using CampRadar.Api.Verify;
+
 namespace CampRadar.Api.Alerts;
 
 /// <summary>
@@ -24,6 +26,7 @@ public sealed class AlertWorker : BackgroundService
     private readonly GroupStore _groups;
     private readonly SiteStore _sites;
     private readonly NwsForecastClient _fc;
+    private readonly Ledger _ledger;
     private long _lastBriefMs;
     private readonly PushSender _push;
     private readonly ILogger<AlertWorker> _log;
@@ -32,8 +35,8 @@ public sealed class AlertWorker : BackgroundService
     public DateTimeOffset LastCycle { get; private set; }
     public string LastCycleNote { get; private set; } = "not yet";
 
-    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, GroupStore groups, SiteStore sites, NwsForecastClient fc, ILogger<AlertWorker> log)
-    { _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _groups = groups; _sites = sites; _fc = fc; _log = log; }
+    public AlertWorker(MrmsClient mrms, GlmIngestor glm, StatusService status, SpotStore spots, EntitlementStore ent, PushSender push, BriefingFactsBuilder facts, BriefingWriter writer, GroupStore groups, SiteStore sites, NwsForecastClient fc, Ledger ledger, ILogger<AlertWorker> log)
+    { _ledger = ledger; _mrms = mrms; _glm = glm; _status = status; _spots = spots; _ent = ent; _push = push; _facts = facts; _writer = writer; _groups = groups; _sites = sites; _fc = fc; _log = log; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -84,6 +87,7 @@ public sealed class AlertWorker : BackgroundService
                 var prefs = Parse(spot.Prefs);
                 var opt = new StatusOptions(prefs.TryGetValue("hitMi", out var h) ? h : 3, prefs.TryGetValue("threshDbz", out var t) ? (float)t : 20);
                 var s = await _status.GetAsync(spot.Lat, spot.Lon, opt, ct);
+                _ledger.Log("spot", "s:" + Ledger.Key(spot.Id), spot.Lat, spot.Lon, s);
                 var prev = JsonSerializer.Deserialize<SentState>(spot.LastState) ?? new SentState();
                 var next = new SentState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs, HailSentMs = prev.HailSentMs };
                 bool snoozed = now < spot.SnoozeUntil;
@@ -219,6 +223,7 @@ public sealed class AlertWorker : BackgroundService
                 if (devices.Count == 0) continue;
                 var thr = SiteStore.ParseThresholds(site.Thresholds);
                 var s = await _status.GetAsync(site.Lat, site.Lon, new StatusOptions(3, 20), ct);
+                _ledger.Log("site", "p:" + Ledger.Key(site.Id), site.Lat, site.Lon, s);
                 var prev = JsonSerializer.Deserialize<SiteState>(site.LastState) ?? new SiteState();
                 var next = new SiteState { Rain = prev.Rain, Lightning = prev.Lightning, Warnings = prev.Warnings, RainSentMs = prev.RainSentMs, LightningSentMs = prev.LightningSentMs, ThrSent = prev.ThrSent };
                 var msgs = new List<(string Tag, string Title, string Body, bool Urgent)>();

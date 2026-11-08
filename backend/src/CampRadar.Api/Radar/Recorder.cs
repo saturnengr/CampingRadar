@@ -53,6 +53,15 @@ public sealed class Recorder
         return job;
     }
 
+    public bool IsRunning(string prefix) => _jobs.Values.Any(j => j.Running && j.Name.StartsWith(prefix, StringComparison.Ordinal));
+    public int RunningCount() => _jobs.Values.Count(j => j.Running);
+    public IEnumerable<string> RunningNames() => _jobs.Values.Where(j => j.Running).Select(j => j.Name).ToList();
+    /// <summary>Append a line to a side file inside a recording (ground-truth observations, notes).</summary>
+    public void AppendAux(string name, string file, string line)
+    {
+        try { var d = Path.Combine(_dir, SafeName(name)); if (Directory.Exists(d)) File.AppendAllText(Path.Combine(d, SafeName(Path.GetFileNameWithoutExtension(file)) + Path.GetExtension(file)), line + "\n"); }
+        catch (Exception ex) { _log.LogDebug(ex, "aux {Name}", name); }
+    }
     public void Stop(string name) { name = SafeName(name); if (_cts.TryRemove(name, out var c)) c.Cancel(); if (_jobs.TryGetValue(name, out var j)) j.Running = false; }
 
     private async Task RunAsync(Job job, string dir, CancellationToken ct)

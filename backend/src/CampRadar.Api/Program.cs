@@ -60,6 +60,9 @@ builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
 builder.Services.AddSingleton<AlertWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertWorker>());
+builder.Services.AddSingleton<CampRadar.Api.Verify.Ledger>();
+builder.Services.AddSingleton<CampRadar.Api.Verify.VerifyWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CampRadar.Api.Verify.VerifyWorker>());
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 {
     var origins = (builder.Configuration["AllowedOrigins"] ?? "https://saturnengr.github.io").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -480,6 +483,10 @@ app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, Cancell
 // Which outside services can this host actually reach? (shared hosts block or black-hole some destinations)
 // ---------- radar recordings for offline verification ----------
 app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Results.Ok(rec.List()) : Results.Unauthorized());
+// Verification: what the tracker said versus what happened (sample airports, subscriptions, saved places)
+app.MapGet("/admin/verify", (HttpRequest r, CampRadar.Api.Verify.Ledger led, CampRadar.Api.Verify.VerifyWorker vw, int days = 30) => IsAdmin(r) ? Results.Ok(new { worker = new { vw.LastCycle, vw.LastNote, points = vw.Points.Select(p => new { p.Id, p.Name }) }, summary = led.Summary(Math.Clamp(days, 1, 400)) }) : Results.Unauthorized());
+app.MapGet("/admin/verify.csv", (HttpRequest r, CampRadar.Api.Verify.Ledger led, int days = 90) => IsAdmin(r) ? Results.Text(led.Csv(Math.Clamp(days, 1, 400)), "text/csv") : Results.Unauthorized());
+app.MapPost("/admin/verify/run", async (HttpRequest r, CampRadar.Api.Verify.VerifyWorker vw, CancellationToken ct) => IsAdmin(r) ? Results.Ok(new { note = await vw.RunOnceAsync(ct) }) : Results.Unauthorized());
 app.MapPost("/admin/record/start", (HttpRequest r, Recorder rec, string name, double lat, double lon, double hours = 6, double radiusMi = 200) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();

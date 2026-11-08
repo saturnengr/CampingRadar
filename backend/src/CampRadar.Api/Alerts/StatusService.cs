@@ -27,6 +27,17 @@ public sealed class RainStatus
     public Passing? Passing { get; set; }
     public object? Edge { get; set; }      // how the nearest rain's edge has really been closing (rate vs what the motion implies)
     public object? Motion { get; set; }
+    // typed copies for the verification ledger
+    public bool RainNow { get; set; }        // rain at or above the threshold inside the hit radius on the latest scan
+    public bool MotionOk { get; set; }
+    public double SpeedMph { get; set; }
+    public double HeadingDeg { get; set; }
+    public double MotionConf { get; set; }
+    public string? EdgeVerdict { get; set; }
+    public double? EdgeRateMph { get; set; }
+    public bool Fizzles { get; set; }
+    public int? Pop2h { get; set; }
+    public double? DewSpread { get; set; }
     public object? Trends { get; set; }
     public long LatestRadarMs { get; set; }
     public double RadarLagMin { get; set; }
@@ -174,6 +185,8 @@ public sealed class StatusService
         r.Ring10 = p.Ring10; r.Ring30 = p.Ring30; r.Ring50 = p.Ring50; r.Nearest = p.Nearest; r.Passing = p.Passing;
         r.Faint = NearestEcho(fine[2], fineKm, c, c, 5, 50);
         r.Motion = new { motion.Ok, motion.Reason, motion.SpeedMph, motion.HeadingDeg, motion.Conf, Regions = motion.Regions.Count(x => x.Ok) };
+        r.RainNow = p.Nearest is not null && p.Nearest.DistMi <= opt.HitMi; r.MotionOk = motion.Ok; r.SpeedMph = motion.SpeedMph; r.HeadingDeg = motion.HeadingDeg; r.MotionConf = motion.Conf;
+        r.EdgeVerdict = edge?.Verdict; r.EdgeRateMph = edge?.RateMph; r.Fizzles = p.Hit?.Fizzles ?? false; r.Pop2h = pop2h; r.DewSpread = dewSpread;
         Describe(r, p, motion, edge, pop2h, dewSpread);
         return r;
     }

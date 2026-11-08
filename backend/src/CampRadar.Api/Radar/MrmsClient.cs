@@ -20,6 +20,7 @@ public sealed class MrmsClient
     private readonly string _cacheDir;
     private readonly ILogger<MrmsClient> _log;
     private readonly ConcurrentDictionary<string, Lazy<Task<byte[]>>> _inflight = new();
+    private readonly ConcurrentDictionary<string, (long At, byte[] Png)> _pngCache = new();
     private readonly SemaphoreSlim _noaaGate = new(6);   // be polite to NOAA
 
     public IReadOnlyList<long> Times { get; private set; } = Array.Empty<long>();
@@ -124,7 +125,19 @@ public sealed class MrmsClient
         double res = 2 * Merc / (256 * Math.Pow(2, zoom));
         double ox = Math.Round(cx) - R, oy = Math.Round(cy) - R;
         var url = ExportUrl(ox * res - Merc, Merc - (oy + size) * res, (ox + size) * res - Merc, Merc - oy * res, size, size, RasterId(t));
-        var bytes = await FetchAsync(url, ct);
+        // Older frames are re-used by every evaluation of the same point for the next half hour (status cache is 150 s), so keep
+        // their PNGs for a while: three times fewer NOAA calls for the alert worker and the sample points. The latest scan is never cached.
+        byte[] bytes;
+        if (t != Latest && _pngCache.TryGetValue(url, out var hit)) bytes = hit.Png;
+        else
+        {
+            bytes = await FetchAsync(url, ct);
+            if (t != Latest)
+            {
+                _pngCache[url] = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), bytes);
+                if (_pngCache.Count > 400) { long old = DateTimeOffset.UtcNow.AddMinutes(-45).ToUnixTimeMilliseconds(); foreach (var k in _pngCache.Where(kv => kv.Value.At < old).Select(kv => kv.Key).ToList()) _pngCache.TryRemove(k, out _); if (_pngCache.Count > 400) _pngCache.Clear(); }
+            }
+        }
         using var img = Image.Load<Rgba32>(bytes);
         var rgba = new byte[img.Width * img.Height * 4];
         img.CopyPixelDataTo(rgba);
