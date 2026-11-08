@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08f';
+const APP_VERSION = '2026.11.08g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -781,7 +781,7 @@ function applyUpdate() { try { if (st.lastTouch) { const c = map.getCenter(); lo
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => { upd.lastActivity = Date.now(); }, { passive: true }));
 $('#updateChip').addEventListener('click', applyUpdate);
 setTimeout(() => checkForUpdate(false), 8000);
-setInterval(() => checkForUpdate(true), 20 * 60000);
+setInterval(() => checkForUpdate(true), 60 * 60000);
 setInterval(() => {   // quiet auto-restart: idle 10 min, no sheet open, not speaking or listening, no active warning
   if (!upd.pending) return;
   const quiet = Date.now() - upd.lastActivity > 10 * 60000 && $('#modal').hidden && !speech.speaking && !voice.listening && $('#warnbar').hidden && !/imminent|atyou/.test((typeof computeStatus === 'function' && st.loc ? computeStatus().level : '') || '');
