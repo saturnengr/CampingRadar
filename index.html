@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08j';
+const APP_VERSION = '2026.11.08k';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -978,7 +978,7 @@ async function updateFrameTimes() {
     st.timesFromBackend = false;
     if (BE()) {   // the backend caches tiles for everyone; prefer it, fall back to NOAA directly
       try {
-        const r = await fetchT(BE() + '/mrms/times', {}, 10000);
+        const r = await fetchT(BE() + '/mrms/times', { cache: 'no-store' }, 10000);
         const j = await r.json();
         if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; }
       } catch (e) { st.backendOk = false; }
@@ -986,12 +986,12 @@ async function updateFrameTimes() {
     // Always learn NOAA's raster ids: asking the image service by *time* returns the wrong scan more often than not (usually the
     // previous one), which mislabels frames by 5–8 minutes and wrecks the speed estimate. Locking by id is exact.
     if (!st.radarIdsAt || Date.now() - st.radarIdsAt > 90000 || (times && !(st.radarIds || {})[times[times.length - 1]])) try {
-      const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", {}, 15000);
+      const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", { cache: 'no-store' }, 15000);
       const j = await r.json(); const ids = {};
       for (const f of j.features || []) { const a = f.attributes || {}; if (a.idp_validtime && a.objectid) ids[a.idp_validtime] = a.objectid; }
       if (Object.keys(ids).length) { st.radarIds = ids; st.radarIdsAt = Date.now(); }
     } catch (e) {}
-    if (!times && st.radarIds) { times = Object.keys(st.radarIds).map(Number).sort((a, b) => a - b); }
+    if (st.radarIds) { const noaa = Object.keys(st.radarIds).map(Number).sort((a, b) => a - b); if (!times || (noaa.length && noaa[noaa.length - 1] > times[times.length - 1] + 10 * 60000)) { times = noaa; st.timesFromBackend = false; } }   // NOAA's own list wins when the backend's is stale
     if (!times) try {
       const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", {}, 15000);
       const j = await r.json();
@@ -1034,6 +1034,7 @@ async function refreshRadarTiles(rebuild) {
   showFrame(frameIdx);
 }
 const radarLag = () => st.latestRadar ? Math.max(0, (Date.now() - st.latestRadar) / 60000) : NC.latencyMin;
+const radarStale = () => radarLag() > 30;   // more than 30 min behind: show it, and do not alert on it
 const alertLayer = L.layerGroup().addTo(map);
 let meMarker = null, ringLayer = L.layerGroup().addTo(map);
 
@@ -1129,8 +1130,9 @@ function showFrame(i) {
   const f = st.frames && st.frames[i]; if (!f) return;
   const off = Math.round((st.latestRadar - f.t) / 60000);
   const dots = FRAMES.map((_, j) => '<i class="' + (j === i ? 'on' : '') + '"></i>').join('');
+  const staleNote = radarStale() ? ' <span style="color:#ffb74d">· radar ' + Math.round(radarLag()) + ' min behind</span>' : '';
   $('#frameInfo').innerHTML = (off > 0 ? '−' + off + ' min' : 'Latest') + ' · ' + (st.timesFromServer ? '' : '≈') + clock(f.t) +
-    '<span class="dots">' + dots + '</span>';
+    '<span class="dots">' + dots + '</span>' + staleNote;
 }
 function animStep() {
   showFrame((frameIdx + 1) % FRAMES.length);
@@ -3648,7 +3650,7 @@ function renderDiag() {
   d.textContent = [
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + (st.timesFromServer ? '' : ' (estimated)') : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
