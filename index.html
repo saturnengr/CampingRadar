@@ -729,7 +729,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07s';
+const APP_VERSION = '2026.11.07t';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -941,8 +941,8 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
   getTileUrl(c) {
     // grid zoom c.z with 512-px tiles: the world is (256 * 2^z / 512) tiles across
     const size = 2 * MERC / (256 * 2 ** c.z / this.options.tileSize), minx = -MERC + c.x * size, maxy = MERC - c.y * size;
-    if (BE() && st.timesFromBackend) return BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png';
-    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t);
+    if (BE() && st.timesFromBackend) return BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png' + (this._live ? '' : '?keep=1');
+    return mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t) + (this._live || !st.radarIds ? '' : '&keep=1');
   }
 });
 const radarOpts = () => S.source === 'mrms'
@@ -977,7 +977,12 @@ async function updateFrameTimes() {
     }
     st.radarTimes = times;
     const latest = times[times.length - 1];
-    st.frames = FRAMES.map(off => { const t = nearestTime(times, latest - off * 60000); return { t, live: t === latest }; });
+    // Older frames snap to the scan nearest each 10-minute wall-clock mark, so as the loop slides forward the same scans keep their
+    // times and come straight back from the browser cache; only the newest frame is new each refresh.
+    const used = new Set();
+    st.frames = FRAMES.map(off => { const t = off === 0 ? latest : nearestTime(times, Math.floor((latest - off * 60000) / 600000) * 600000); return { t, live: t === latest }; })
+      .filter(f => { if (used.has(f.t)) return false; used.add(f.t); return true; });
+    while (st.frames.length < FRAMES.length) st.frames.unshift({ t: st.frames[0].t, live: false, dup: true });
     st.latestRadar = latest;
   } else {
     const latest = bucket() * 300000 - NC.latencyMin * 60000;
@@ -1418,7 +1423,15 @@ function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('tile')); i.src = url; });
 }
 // One frame of radar around the user, as RGBA pixels. f = {t, off} from st.frames-style timing.
+const compositeCache = new Map();   // key → {data,w,h}; the latest scan is never cached (it may be re-rendered as the mosaic fills in)
 async function radarComposite(f, center, R, z) {
+  const key = [f.t, Math.round(center.x), Math.round(center.y), R, z, S.source].join('|');
+  if (!f.live && compositeCache.has(key)) return compositeCache.get(key);
+  const out = await radarCompositeUncached(f, center, R, z);
+  if (!f.live) { compositeCache.set(key, out); if (compositeCache.size > 8) compositeCache.delete(compositeCache.keys().next().value); }
+  return out;
+}
+async function radarCompositeUncached(f, center, R, z) {
   const ox = Math.round(center.x) - R, oy = Math.round(center.y) - R, size = 2 * R;
   if (S.source === 'mrms') {
     const res = 2 * MERC / (256 * 2 ** z);
@@ -1459,7 +1472,9 @@ async function runNowcast() {
     let fr;
     if (S.source === 'mrms') {
       const T = st.radarTimes, latest = T[T.length - 1];
-      fr = [nearestTime(T, latest - 30 * 60000), nearestTime(T, latest - 15 * 60000), latest].map(t => ({ t, live: t === latest }));
+      // older frames snap to 5-minute marks so they stay cached across refreshes (ages 30–34 and 15–19 min; the motion maths uses the real gaps)
+      const snap = ms => nearestTime(T, Math.floor(ms / 300000) * 300000);
+      fr = [snap(latest - 30 * 60000), snap(latest - 15 * 60000), latest].map(t => ({ t, live: t === latest }));
     } else fr = [30, 15, 0].map(off => ({ off, t: st.latestRadar - off * 60000 }));
     const dt1 = (fr[2].t - fr[0].t) / 60000, dt2 = (fr[2].t - fr[1].t) / 60000;
     const raw = await Promise.all(fr.map(f => radarComposite(f, center, R, z)));

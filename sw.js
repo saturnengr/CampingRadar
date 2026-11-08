@@ -2,6 +2,26 @@
 self.addEventListener('install', e => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
+// Radar tiles for past scans never change: keep them (cache-first) so a sliding loop only fetches the newest frame.
+// The page marks such requests with keep=1; the cache is trimmed to ~400 tiles.
+const TILES = 'campradar-tiles';
+self.addEventListener('fetch', e => {
+  const url = e.request.url;
+  if (e.request.method !== 'GET' || !/[?&]keep=1\b/.test(url) || !/\/mrms\/tile\/|lockRasterIds/.test(url)) return;
+  e.respondWith((async () => {
+    const c = await caches.open(TILES);
+    const hit = await c.match(e.request, { ignoreVary: true }); if (hit) return hit;
+    const res = await fetch(e.request);
+    if (res.ok || res.type === 'opaque') { c.put(e.request, res.clone()); trimTiles(c); }
+    return res;
+  })());
+});
+let trimming = false;
+async function trimTiles(c) {
+  if (trimming) return; trimming = true;
+  try { const keys = await c.keys(); if (keys.length > 400) for (const k of keys.slice(0, keys.length - 320)) await c.delete(k); } catch (err) {} finally { trimming = false; }
+}
+
 self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'LeadTime', body: e.data && e.data.text() }; }
   const critical = (d.tag || '').startsWith('warning') || d.level === 'imminent' || d.level === 'atyou';
