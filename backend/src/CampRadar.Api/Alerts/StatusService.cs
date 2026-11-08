@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using CampRadar.Api.Lightning;
 using CampRadar.Api.Nowcast;
 using CampRadar.Api.Nws;
+using CampRadar.Api.Obs;
 using CampRadar.Api.Radar;
 
 namespace CampRadar.Api.Alerts;
@@ -24,6 +25,7 @@ public sealed class RainStatus
     public Nearest? Nearest { get; set; }
     public Nearest? Faint { get; set; }    // nearest echo of any strength (≥5 dBZ) within 50 mi
     public Passing? Passing { get; set; }
+    public object? Edge { get; set; }      // how the nearest rain's edge has really been closing (rate vs what the motion implies)
     public object? Motion { get; set; }
     public object? Trends { get; set; }
     public long LatestRadarMs { get; set; }
@@ -58,11 +60,16 @@ public sealed class StatusService
     private readonly MrmsClient _mrms;
     private readonly LightningStore _lightning;
     private readonly NwsClient _nws;
+    private readonly NwsForecastClient _fc;
+    private readonly StationObsClient _obs;
     private readonly ILogger<StatusService> _log;
     private readonly ConcurrentDictionary<string, (long At, Status S)> _cache = new();
+    // per point: where the nearest rain has been over the last hour, and when a "fizzle" verdict was last given (it flickers on decaying shields)
+    private sealed class PointMemory { public readonly List<(long T, double D, double B)> Edge = new(); public long FizzleSeen; public long Touched; }
+    private readonly ConcurrentDictionary<string, PointMemory> _mem = new();
 
-    public StatusService(MrmsClient mrms, LightningStore lightning, NwsClient nws, ILogger<StatusService> log)
-    { _mrms = mrms; _lightning = lightning; _nws = nws; _log = log; }
+    public StatusService(MrmsClient mrms, LightningStore lightning, NwsClient nws, NwsForecastClient fc, StationObsClient obs, ILogger<StatusService> log)
+    { _mrms = mrms; _lightning = lightning; _nws = nws; _fc = fc; _obs = obs; _log = log; }
 
     public async Task<Status> GetAsync(double lat, double lon, StatusOptions opt, CancellationToken ct, bool allowCached = true)
     {
@@ -138,27 +145,89 @@ public sealed class StatusService
             p.Hit.Trend = tr;
             p.Hit.Fizzles = tr is { Word: "weakening", FizzleMin: not null } && tr.FizzleMin < p.Hit.EtaMin - 2;
         }
+        // edge history and fizzle memory for this point (±0.01°)
+        var mem = _mem.GetOrAdd($"{Math.Round(lat, 2)},{Math.Round(lon, 2)}", _ => new PointMemory());
+        EdgeCheck? edge;
+        lock (mem)
+        {
+            mem.Touched = now;
+            if (p.Nearest is not null && !mem.Edge.Any(e => e.T == latest)) mem.Edge.Add((latest, p.Nearest.DistMi, p.Nearest.Bearing));
+            mem.Edge.RemoveAll(e => latest - e.T > 60 * 60000L);
+            edge = EdgeRate(mem.Edge, latest, p.Nearest, motion);
+            if (p.Hit is not null)
+            {
+                if (p.Hit.Fizzles) mem.FizzleSeen = now;
+                else if (mem.FizzleSeen > 0 && now - mem.FizzleSeen < 20 * 60000L && p.Hit.Trend?.Word != "strengthening" && p.Hit.MaxDbz < 40) p.Hit.Fizzles = true;
+            }
+        }
+        if (_mem.Count > 5000) foreach (var k in _mem.Where(kv => now - kv.Value.Touched > 2 * 3600_000L).Select(kv => kv.Key).ToList()) _mem.TryRemove(k, out _);
+        r.Edge = edge is null ? null : new { edge.RateMph, edge.ClosingMph, edge.SpanMin, edge.Verdict, edge.EtaMin };
+        // light echoes under a dry forecast or dry air mostly evaporate before reaching the ground: only worth two cheap cached lookups when that could matter
+        int? pop2h = null; double? dewSpread = null;
+        if (p.Hit is not null && p.Hit.MaxDbz < 35 && p.Hit.DistMi <= AlertRangeMi)
+        {
+            try { var fc = await _fc.GetAsync(lat, lon, ct); var hrs = fc?.Hours.Where(h => h.T <= DateTimeOffset.UtcNow.AddHours(2) && h.T.AddHours(1) > DateTimeOffset.UtcNow).ToList(); if (hrs is { Count: > 0 }) pop2h = hrs.Max(h => h.Pop); } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "pop lookup"); }
+            try { var ob = (await _obs.NearbyAsync(lat, lon, ct))?.Best; if (ob is { TempF: not null, DewF: not null }) dewSpread = ob.TempF - ob.DewF; } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "obs lookup"); }
+        }
         if (p.NearestBlob != 0 && trends.TryGetValue(p.NearestBlob, out var nt)) p.NearestTrend = nt;
         r.Trends = new { strengthening = trends.Values.Count(t => t.Word == "strengthening"), weakening = trends.Values.Count(t => t.Word == "weakening"), steady = trends.Values.Count(t => t.Word == "steady"), fresh = trends.Values.Count(t => t.Word == "new"), arriving = p.Hit?.Trend?.Word, fizzles = p.Hit?.Fizzles ?? false };
         r.Ring10 = p.Ring10; r.Ring30 = p.Ring30; r.Ring50 = p.Ring50; r.Nearest = p.Nearest; r.Passing = p.Passing;
         r.Faint = NearestEcho(fine[2], fineKm, c, c, 5, 50);
         r.Motion = new { motion.Ok, motion.Reason, motion.SpeedMph, motion.HeadingDeg, motion.Conf, Regions = motion.Regions.Count(x => x.Ok) };
-        Describe(r, p, motion);
+        Describe(r, p, motion, edge, pop2h, dewSpread);
         return r;
     }
 
+    private sealed record EdgeCheck(double RateMph, double ClosingMph, double SpanMin, string Verdict, double? EtaMin);
+    /// <summary>
+    /// Is the nearest rain really closing at the rate the storm motion implies? Broad shields evaporate at their leading edge: the cells
+    /// inside move at 35 mph while the edge creeps or retreats. Mirrors the page's edgeCheck(); null until there is 20 min of history.
+    /// </summary>
+    private static EdgeCheck? EdgeRate(List<(long T, double D, double B)> hist, long now, Nearest? nearest, Motion m)
+    {
+        if (nearest is null || !m.Ok) return null;
+        var same = hist.Where(h => now - h.T <= 40 * 60000L && Math.Abs(((h.B - nearest.Bearing) % 360 + 540) % 360 - 180) <= 60).OrderBy(h => h.T).ToList();
+        if (same.Count < 4 || now - same[0].T < 20 * 60000L) return null;
+        int n = same.Count; long t0 = same[0].T; double st = 0, sd = 0, stt = 0, std = 0;
+        foreach (var h in same) { double u = (h.T - t0) / 60000.0; st += u; sd += h.D; stt += u * u; std += u * h.D; }
+        double den = n * stt - st * st; if (den <= 0) return null;
+        double rate = -(n * std - st * sd) / den * 60;                                                   // mph, positive = getting closer
+        double closing = m.SpeedMph * Math.Cos((m.HeadingDeg - (nearest.Bearing + 180)) * Math.PI / 180);   // mph the motion says it should close at
+        double span = (now - t0) / 60000.0;
+        if (closing >= 12 && rate <= 5) return new EdgeCheck(rate, closing, span, "stalled", null);
+        if (closing > 0 && rate < 0.6 * closing) return new EdgeCheck(rate, closing, span, "slow", nearest.DistMi / Math.Max(rate, 3) * 60);
+        return new EdgeCheck(rate, closing, span, "ok", null);
+    }
+
     /// <summary>Same wording rules as the page's computeStatus().</summary>
-    private static void Describe(RainStatus r, Prediction p, Motion m)
+    private static void Describe(RainStatus r, Prediction p, Motion m, EdgeCheck? edge, int? pop2h, double? dewSpread)
     {
         double lag = r.RadarLagMin;
         string moving = m.Ok && m.SpeedMph >= 3 ? $"Storms moving {Compass(m.HeadingDeg)} at {Math.Round(m.SpeedMph)} mph" : m.Ok ? "Rain nearly stationary" : "";
         var hit = p.Hit;
         string trendWord = hit?.Trend?.Word == "strengthening" ? ", strengthening" : hit?.Trend?.Word == "weakening" ? ", weakening" : "";
+        bool dryAir = dewSpread is >= 15;
+        bool lowConf = hit is not null && pop2h is < 10 && (dryAir ? hit.MaxDbz < 35 : hit.EtaMin > 15 && hit.MaxDbz < 30);
+        bool edgeSlow = hit is not null && edge is { Verdict: "slow", EtaMin: not null } && edge.EtaMin > hit.EtaMin;
         if (hit is not null && hit.Fizzles && hit.EtaMin - lag > 10 && hit.MaxDbz < 40)
         {
             r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             r.Main = $"Rain to the {CompassLong(hit.FromBearing)} is weakening — may fizzle before it reaches you";
             r.Sub = $"If it holds together: {Intensity(hit.MaxDbz).ToLowerInvariant()} rain in {FmtDur(Math.Max(0, hit.EtaMin - lag))}" + (moving.Length > 0 ? " · " + moving : "");
+            return;
+        }
+        if (hit is not null && !lowConf && edge is { Verdict: "stalled" } && hit.MaxDbz < 40 && hit.EtaMin - lag > 5 && p.Nearest is not null)
+        {
+            r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
+            r.Main = $"Rain to the {CompassLong(p.Nearest.Bearing)} is not getting closer — likely evaporating at its edge";
+            r.Sub = $"Its cells move {Math.Round(m.SpeedMph)} mph but the edge has held near {Math.Round(p.Nearest.DistMi)} mi for {Math.Round(edge.SpanMin)} min" + (p.Nearest.DistMi <= 15 ? $" · {Intensity(hit.MaxDbz).ToLowerInvariant()} rain possible if it holds together" : "");
+            return;
+        }
+        if (hit is not null && lowConf)
+        {
+            r.Color = "yellow"; r.Level = "low"; r.EtaMin = Math.Max(0, hit.EtaMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
+            r.Main = $"Light rain may reach you in {FmtDur(Math.Max(0, hit.EtaMin - lag))}";
+            r.Sub = $"Low confidence — NWS shows {pop2h}% chance in the next 2 hours" + (dryAir ? $" and the air is dry (dew point {Math.Round(dewSpread!.Value)}° below the temperature), so it may evaporate before reaching the ground" : "");
             return;
         }
         if (hit is not null && hit.DistMi > AlertRangeMi)
@@ -171,11 +240,13 @@ public sealed class StatusService
         }
         if (hit is not null)
         {
-            double eta = Math.Max(0, hit.EtaMin - lag); string word = Intensity(hit.MaxDbz) + trendWord;
+            // when the rain's edge is closing more slowly than its cells move, the edge decides the arrival time
+            double etaRaw = edgeSlow ? Math.Min(120, edge!.EtaMin!.Value) : hit.EtaMin, eta = Math.Max(0, etaRaw - lag); string word = Intensity(hit.MaxDbz) + trendWord;
+            string edgeNote = edgeSlow ? $" · edge closing at {Math.Max(1, Math.Round(edge!.RateMph))} mph" : "";
             r.EtaMin = eta; r.EndMin = Math.Max(0, hit.EndMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             if (hit.EtaMin <= 0.5) { r.Color = "red"; r.Level = "atyou"; r.Main = $"{word} rain at your location"; r.Sub = hit.EndMin < 115 ? $"Likely ending in about {Math.Round(Math.Max(1, hit.EndMin - lag))} min" : "May continue for a while"; }
             else if (eta <= 10) { r.Color = "red"; r.Level = "imminent"; r.Main = $"Rain arriving in ~{Math.Max(1, Math.Round(eta))} min"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
-            else { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain arriving in {FmtDur(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
+            else { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain arriving in {FmtDur(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : "") + edgeNote; }
         }
         else if (!m.Ok && p.Nearest is not null && p.Nearest.DistMi <= 10)
         { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain {Math.Round(p.Nearest.DistMi)} mi {Compass(p.Nearest.Bearing)}"; r.Sub = $"Movement unclear ({m.Reason ?? "not enough data"}) — keep an eye on it"; }
