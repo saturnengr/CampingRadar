@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09m';
+const APP_VERSION = '2026.11.09n';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2008,7 +2008,15 @@ function drawMotion() {
     let lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
     // zoomed out, the closest-approach point sits on top of the location dot: push the label out along the same bearing until it clears it
     try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]), d = c.distanceTo(q); if (d < 56) { const k = 56 / Math.max(1, d); const pt = L.point(c.x + (q.x - c.x) * k, c.y + (q.y - c.y) * k); const ll = map.containerPointToLatLng(pt); lat = ll.lat; lon = ll.lng; } } catch (e) {}
-    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">closest approach · ' + Math.max(1, Math.round(dMi)) + ' mi</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    // when the status bar is about a different storm (one that could reach you later), say whose closest approach this is
+    const other = res.far && res.far.blob && res.far.blob !== res.nearestBlob;
+    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">' + (other ? 'nearer rain passes here · ' : 'closest approach · ') + Math.max(1, Math.round(dMi)) + ' mi</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    if (res.far && st.loc) {   // and mark where the later storm would arrive, in the status colour
+      const a2 = (res.far.fromBearing || 0) * Math.PI / 180, d2 = S.hitMi || 3, la2 = st.loc.lat + d2 * Math.cos(a2) / 69, lo2 = st.loc.lon + d2 * Math.sin(a2) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+      const eta2 = Math.max(0, res.far.etaMin - radarLag());
+      L.circleMarker([la2, lo2], { pane: 'hazards', radius: 6, color: '#fff', weight: 2, fillColor: '#4fc3f7', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
+      L.marker([la2, lo2], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">could arrive ≈ ' + etaClock(eta2) + ' (straight-line)</div>', iconSize: null, iconAnchor: [-10, -4] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    }
   }
 }
 // Hail layer: radar cores from the nowcast grid, plus hail sizes from NWS severe-weather warning parameters.
