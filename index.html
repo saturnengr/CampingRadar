@@ -743,7 +743,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08b';
+const APP_VERSION = '2026.11.08c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -972,9 +972,18 @@ async function updateFrameTimes() {
       try {
         const r = await fetchT(BE() + '/mrms/times', {}, 10000);
         const j = await r.json();
-        if (j.times && j.times.length) { times = j.times; st.radarIds = null; st.timesFromBackend = true; st.backendOk = true; }
+        if (j.times && j.times.length) { times = j.times; st.timesFromBackend = true; st.backendOk = true; }
       } catch (e) { st.backendOk = false; }
     }
+    // Always learn NOAA's raster ids: asking the image service by *time* returns the wrong scan more often than not (usually the
+    // previous one), which mislabels frames by 5–8 minutes and wrecks the speed estimate. Locking by id is exact.
+    if (!st.radarIdsAt || Date.now() - st.radarIdsAt > 90000 || (times && !(st.radarIds || {})[times[times.length - 1]])) try {
+      const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", {}, 15000);
+      const j = await r.json(); const ids = {};
+      for (const f of j.features || []) { const a = f.attributes || {}; if (a.idp_validtime && a.objectid) ids[a.idp_validtime] = a.objectid; }
+      if (Object.keys(ids).length) { st.radarIds = ids; st.radarIdsAt = Date.now(); }
+    } catch (e) {}
+    if (!times && st.radarIds) { times = Object.keys(st.radarIds).map(Number).sort((a, b) => a - b); }
     if (!times) try {
       const r = await fetchT(MRMS + "/query?where=idp_subset%3D'CONUS'&outFields=objectid,idp_validtime&returnGeometry=false&f=json", {}, 15000);
       const j = await r.json();
@@ -1502,7 +1511,11 @@ async function runNowcast() {
     const coarse = fine.map(g => downsampleMax(g, NC.coarse));
     const fineKm = mpp * NC.fineCellPx / 1000, coarseKm = fineKm * NC.coarse;
     let motion = dt1 >= 10 ? estimateMotion(coarse[0], coarse[2], dt1, coarseKm, { maxKmh: NC.maxKmh }) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
-    if (!motion.ok && dt2 >= 6) { const m2 = estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: NC.maxKmh }); if (m2.ok) motion = m2; }
+    if (dt2 >= 6) {
+      const m2 = estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: NC.maxKmh });
+      // keep whichever baseline is more confident; a clear win for the short one usually means the long one has decorrelated
+      if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1;
+    }
     const vel = makeVelocityField(motion, NC.coarse);
     const c = R / NC.fineCellPx;
     const cleaned = fine.map(g => despeckle(g, S.threshDbz));

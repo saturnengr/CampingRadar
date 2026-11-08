@@ -120,7 +120,7 @@ public sealed class StatusService
         var coarse = fine.Select(g => NowcastEngine.DownsampleMax(g, Coarse)).ToArray();
         double fineKm = frames[2].MetersPerPx * FineCellPx / 1000, coarseKm = fineKm * Coarse;
         Motion motion = dt1 >= 10 ? NowcastEngine.EstimateMotion(coarse[0], coarse[2], (int)Math.Round(dt1), coarseKm) : new Motion { Reason = "radar history too short" };
-        if (!motion.Ok && dt2 >= 6) { var m2 = NowcastEngine.EstimateMotion(coarse[1], coarse[2], (int)Math.Round(dt2), coarseKm); if (m2.Ok) motion = m2; }
+        if (dt2 >= 6) { var m2 = NowcastEngine.EstimateMotion(coarse[1], coarse[2], (int)Math.Round(dt2), coarseKm); if (m2.Ok && (!motion.Ok || m2.Conf > motion.Conf * 1.15)) motion = m2; }   // keep the more confident baseline
         var vel = NowcastEngine.MakeVelocityField(motion, Coarse);
         double c = frames[2].Size / 2.0 / FineCellPx;
         var cleaned = fine.Select(g => NowcastEngine.Despeckle(g, opt.ThreshDbz)).ToArray();
