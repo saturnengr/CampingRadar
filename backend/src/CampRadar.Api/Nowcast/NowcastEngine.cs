@@ -161,6 +161,12 @@ public static class NowcastEngine
     private readonly record struct Shift(double U, double V, double Conf, bool Edge);
 
     /// <summary>Block matching: find (u,v) such that B(x,y) ≈ A(x-u, y-v) within the box.</summary>
+    private static (double X, double Y)? Centroid(float[] F, int w, int x0, int y0, int x1, int y1)
+    {
+        double sx = 0, sy = 0, n = 0;
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) { double v = F[y * w + x]; if (v > 0) { sx += v * x; sy += v * y; n += v; } }
+        return n > 0 ? (sx / n, sy / n) : null;
+    }
     private static Shift BestShift(float[] A, float[] B, int w, int x0, int y0, int x1, int y1, int S)
     {
         // Normalised cross-correlation (see the page's bestShift): absolute difference was biased toward shifts that slide an
@@ -211,7 +217,14 @@ public static class NowcastEngine
         var g = BestShift(A, B, w, x0, y0, x1, y1, S);
         m.Vx = ToV(g.U); m.Vy = ToV(g.V); m.Conf = g.Conf;
         double gSpeed = Math.Sqrt(m.Vx * m.Vx + m.Vy * m.Vy) * 60;
-        m.Ok = g.Conf >= minConf && !g.Edge && gSpeed <= maxKmh;
+        // centre-of-mass sanity check: a clear mass shift opposite to the match means the match is not to be trusted
+        var ca = Centroid(A, w, x0, y0, x1, y1); var cb = Centroid(B, w, x0, y0, x1, y1);
+        if (ca is not null && cb is not null)
+        {
+            double mx = cb.Value.X - ca.Value.X, my = cb.Value.Y - ca.Value.Y, md = Math.Sqrt(mx * mx + my * my), gl = Math.Sqrt(g.U * g.U + g.V * g.V);
+            if (md >= 2.5 && gl >= 1 && (mx * g.U + my * g.V) / (md * gl) < -0.34) m.Conf *= 0.4;
+        }
+        m.Ok = m.Conf >= minConf && !g.Edge && gSpeed <= maxKmh;
         if (!m.Ok) m.Reason = g.Edge ? "motion off scale" : "no clear motion";
         const int nx = 3, ny = 3;
         double rw = (x1 - x0 + 1) / (double)nx, rh = (y1 - y0 + 1) / (double)ny;
@@ -229,7 +242,9 @@ public static class NowcastEngine
                     vx = ToV(r.U); vy = ToV(r.V); conf = r.Conf;
                     double sp = Math.Sqrt(vx * vx + vy * vy) * 60;
                     double devKmh = Math.Sqrt(Sq(vx - m.Vx) + Sq(vy - m.Vy)) * 60;
-                    ok = r.Conf >= minConf && !r.Edge && sp <= maxKmh && (!m.Ok || devKmh <= 60);
+                    double gsp = Math.Sqrt(m.Vx * m.Vx + m.Vy * m.Vy) * 60;
+                    double cosA = gsp > 8 && sp > 8 ? (vx * m.Vx + vy * m.Vy) / (Math.Sqrt(vx * vx + vy * vy) * Math.Sqrt(m.Vx * m.Vx + m.Vy * m.Vy)) : 1;
+                    ok = r.Conf >= Math.Max(minConf, 0.7 * m.Conf) && !r.Edge && sp <= maxKmh && (!m.Ok || (devKmh <= 40 && cosA >= 0.5));
                 }
                 m.Regions.Add(new RegionMotion(cx, cy, ok, vx, vy, conf));
             }
@@ -255,10 +270,10 @@ public static class NowcastEngine
         return (x, y) =>
         {
             double X = x / fineToCoarse, Y = y / fineToCoarse;
-            double sw = 0.1 / s2, vx = gvx * sw, vy = gvy * sw;
+            double sw = Math.Max(0.3, motion.Conf) / s2, vx = gvx * sw, vy = gvy * sw;
             foreach (var r in regs)
             {
-                double dx = X - r.Cx, dy = Y - r.Cy, w = 1 / (dx * dx + dy * dy + s2);
+                double dx = X - r.Cx, dy = Y - r.Cy, w = r.Conf / (dx * dx + dy * dy + s2);
                 sw += w; vx += w * r.Vx; vy += w * r.Vy;
             }
             return (vx / sw, vy / sw);

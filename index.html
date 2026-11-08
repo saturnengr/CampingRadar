@@ -465,6 +465,11 @@ function bestShift(A, B, w, x0, y0, x1, y1, S) {
 
 /* Storm motion between an older grid gA and newer grid gB, dtMin apart.
    Velocities are km/min, x = east, y = south (image orientation). */
+function centroidOf(F, w, x0, y0, x1, y1) {
+  let sx = 0, sy = 0, n = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const v = F[y * w + x]; if (v > 0) { sx += v * x; sy += v * y; n += v; } }
+  return n > 0 ? { x: sx / n, y: sy / n, n } : null;
+}
 function estimateMotion(gA, gB, dtMin, cellKm, opts) {
   opts = opts || {};
   const maxKmh = opts.maxKmh || 110, minCells = opts.minCells || 10, minConf = opts.minConf || 0.25;
@@ -479,8 +484,15 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
   const toV = u => u * cellKm / dtMin;
   const g = bestShift(A, B, w, x0, y0, x1, y1, S);
   out.global = { vx: toV(g.u), vy: toV(g.v), conf: g.conf };
+  // Sanity check against the rain's centre of mass: if the mass clearly moved one way and the match says the opposite, trust neither.
+  const ca = centroidOf(A, w, x0, y0, x1, y1), cb = centroidOf(B, w, x0, y0, x1, y1);
+  if (ca && cb) {
+    const mx = cb.x - ca.x, my = cb.y - ca.y, md = Math.hypot(mx, my);
+    if (md >= 2.5 && Math.hypot(g.u, g.v) >= 1) { const cos = (mx * g.u + my * g.v) / (md * Math.hypot(g.u, g.v)); if (cos < -0.34) { out.global.conf *= 0.4; out.centroidDisagrees = true; } }
+    out.centroid = { dx: mx, dy: my };
+  }
   const gSpeed = Math.hypot(out.global.vx, out.global.vy) * 60;
-  out.ok = g.conf >= minConf && !g.edge && gSpeed <= maxKmh;
+  out.ok = out.global.conf >= minConf && !g.edge && gSpeed <= maxKmh;
   if (!out.ok) out.reason = g.edge ? 'motion off scale' : 'no clear motion';
   const nx = 3, ny = 3, rw = (x1 - x0 + 1) / nx, rh = (y1 - y0 + 1) / ny;
   out.regionSize = Math.max(rw, rh);
@@ -493,7 +505,11 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
       reg.vx = toV(r.u); reg.vy = toV(r.v); reg.conf = r.conf;
       const sp = Math.hypot(reg.vx, reg.vy) * 60;
       const devKmh = Math.hypot(reg.vx - out.global.vx, reg.vy - out.global.vy) * 60;
-      reg.ok = r.conf >= minConf && !r.edge && sp <= maxKmh && (!out.ok || devKmh <= 60);
+      // a region only overrides the whole-window motion when it is at least as sure and broadly agrees with it (broad, featureless
+      // rain gives flat correlation surfaces and random-looking local vectors otherwise)
+      const gsp = Math.hypot(out.global.vx, out.global.vy) * 60;
+      const cosA = gsp > 8 && sp > 8 ? (reg.vx * out.global.vx + reg.vy * out.global.vy) / (Math.hypot(reg.vx, reg.vy) * Math.hypot(out.global.vx, out.global.vy)) : 1;
+      reg.ok = r.conf >= Math.max(minConf, 0.7 * out.global.conf) && !r.edge && sp <= maxKmh && (!out.ok || (devKmh <= 40 && cosA >= 0.5));
     }
     out.regions.push(reg);
   }
@@ -517,9 +533,9 @@ function makeVelocityField(motion, fineToCoarse) {
   const s2 = motion.regionSize * motion.regionSize * 0.25;
   return (x, y) => {
     const X = x / fineToCoarse, Y = y / fineToCoarse;
-    let sw = 0.1 / s2, vx = g.vx * sw, vy = g.vy * sw;     // small pull toward global
+    let sw = Math.max(0.3, motion.global.conf) / s2, vx = g.vx * sw, vy = g.vy * sw;     // pull toward the whole-window motion, stronger when it is confident
     for (const r of regs) {
-      const dx = X - r.cx, dy = Y - r.cy, w = 1 / (dx * dx + dy * dy + s2);
+      const dx = X - r.cx, dy = Y - r.cy, w = r.conf / (dx * dx + dy * dy + s2);
       sw += w; vx += w * r.vx; vy += w * r.vy;
     }
     return { vx: vx / sw, vy: vy / sw };
@@ -727,7 +743,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07y';
+const APP_VERSION = '2026.11.07z';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1803,7 +1819,8 @@ function drawMotion() {
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) { const lb = labels[y * grid.w + x]; if (lb && keep.has(lb)) cells.get(lb).push([x, y]); }
   for (const b of blobs) {
     if (!keep.has(b.id)) continue;
-    const v = vel(Math.round(b.cx), Math.round(b.cy)); const sp = Math.hypot(v.vx, v.vy) * 60 * 0.621371; if (sp < 3) continue;
+    const pts0 = cells.get(b.id); let svx = 0, svy = 0; for (let i = 0; i < pts0.length; i += Math.max(1, Math.floor(pts0.length / 200))) { const q = vel(pts0[i][0], pts0[i][1]); svx += q.vx; svy += q.vy; }
+    const nv = Math.ceil(pts0.length / Math.max(1, Math.floor(pts0.length / 200))), v = { vx: svx / nv, vy: svy / nv }; const sp = Math.hypot(v.vx, v.vy) * 60 * 0.621371; if (sp < 3) continue;
     const hdg = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360, dirWord = compass(hdg);
     const pts = cells.get(b.id), step = Math.max(1, Math.floor(pts.length / 400)), sample = pts.filter((_, i) => i % step === 0);
     // ghost outlines
