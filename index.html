@@ -797,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09q';
+const APP_VERSION = '2026.11.09r';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2001,8 +2001,11 @@ function drawMotion() {
     const head = L.divIcon({ className: '', html: '<div style="transform:rotate(' + hdg + 'deg);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #fff;filter:drop-shadow(0 0 2px #000);opacity:' + op + '"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
     L.marker(a1, { icon: head, pane: 'hazards', interactive: false }).addTo(motionLayer);
     if (!labelled.has(b.id)) continue;
-    const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + (isFocus ? ';border:1.5px solid #fff;font-weight:800' : '') + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (isFocus ? focusWord : '') + '</div>', iconSize: null, iconAnchor: [0, -6] });
-    L.marker(a0, { icon: lbl, pane: 'hazards', interactive: false }).addTo(motionLayer);
+    // the label sits behind the storm, on its trailing side: the arrow and the ghost outlines are all ahead of it, so nothing overlaps
+    let lblAt = a0, anchor = [0, -6];
+    try { const p0 = map.latLngToContainerPoint(a0), p1 = map.latLngToContainerPoint(a1), dx = p1.x - p0.x, dy = p1.y - p0.y, n = Math.hypot(dx, dy) || 1; const back = L.point(p0.x - dx / n * 18, p0.y - dy / n * 18); lblAt = map.containerPointToLatLng(back); anchor = [dx > 0 ? 0 : -0, dy > 0 ? 22 : -4]; if (dx > 0) anchor[0] = 999; } catch (e) {}
+    const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + (isFocus ? ';border:1.5px solid #fff;font-weight:800' : '') + (anchor[0] === 999 ? ';transform:translateX(-100%)' : '') + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (isFocus ? focusWord : '') + '</div>', iconSize: null, iconAnchor: [anchor[0] === 999 ? 0 : anchor[0], anchor[1]] });
+    L.marker(lblAt, { icon: lbl, pane: 'hazards', interactive: false }).addTo(motionLayer);
   }
   // where and when it enters your hit zone
   if (res && res.hit && st.loc) {
