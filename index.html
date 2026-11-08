@@ -795,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08w';
+const APP_VERSION = '2026.11.08x';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1947,7 +1947,9 @@ function drawMotion() {
     L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + etaClock(eta)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
   } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
     const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
-    const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+    let lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+    // zoomed out, the closest-approach point sits on top of the location dot: push the label out along the same bearing until it clears it
+    try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]), d = c.distanceTo(q); if (d < 56) { const k = 56 / Math.max(1, d); const pt = L.point(c.x + (q.x - c.x) * k, c.y + (q.y - c.y) * k); const ll = map.containerPointToLatLng(pt); lat = ll.lat; lon = ll.lng; } } catch (e) {}
     L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">closest approach · ' + Math.max(1, Math.round(dMi)) + ' mi</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
   }
 }
@@ -2192,7 +2194,7 @@ function computeOutlook() {
     }
     hours.push(h);
   }
-  return { hours, any: hours.some(h => (h.pop || 0) >= 20 || h.thu >= 10 || (h.radar && h.radar.kind === 'rain')) };
+  return { hours, status: st_, any: hours.some(h => (h.pop || 0) >= 20 || h.thu >= 10 || (h.radar && h.radar.kind === 'rain')) };
 }
 function renderOutlook() {
   const wrap = $('#olWrap'); if (!wrap) return;
@@ -2209,7 +2211,8 @@ function renderOutlook() {
   }).join('');
   const first = o.hours.find(h => (h.pop || 0) >= 40 || h.thu >= 20), rad = o.hours.find(h => h.radar && h.radar.kind === 'rain');
   const barShowsRadar = document.body.classList.contains('urgent');
-  $('#olNote').textContent = rad && !barShowsRadar ? 'Radar: ' + rad.radar.main : rad && first && first.t > Date.now() + 2 * 3600e3 ? 'Later: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : rad ? '' : first ? 'Radar clear for the next 2 hours · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? 'Radar clear for the next 2 hours' : 'Radar clear for the next 2 hours · forecast dry through ' + clock(o.hours[11].t + 3600e3);
+  const passing = o.status && o.status.level === 'passing' && !barShowsRadar, radarWord = passing ? 'Radar: ' + o.status.main.replace(/^Rain /, 'rain ') + ', nothing heading your way' : 'Radar clear for the next 2 hours';
+  $('#olNote').textContent = rad && !barShowsRadar ? 'Radar: ' + rad.radar.main : rad && first && first.t > Date.now() + 2 * 3600e3 ? 'Later: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : rad ? '' : first ? radarWord + ' · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? radarWord : radarWord + ' · forecast dry through ' + clock(o.hours[11].t + 3600e3);
   wrap.hidden = false;
 }
 $('#olRow').addEventListener('click', e => {
