@@ -729,7 +729,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07u';
+const APP_VERSION = '2026.11.07v';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1849,7 +1849,10 @@ function renderWwPills() {
   for (const a of list) { const k = a.props && a.props.id || a.event + (a.headline || ''); if (!seen.has(k)) seen.set(k, a); }
   for (const a of (st.alerts || [])) { const k = a.id || a.event; if (!seen.has(k)) seen.set(k, { event: a.event, headline: a.headline, props: { headline: a.headline, description: a.desc, instruction: a.instr, ends: a.ends }, color: STORM_COLORS[a.event] || '#1e88e5', here: true }); }
   const here = st.loc ? L.latLng(st.loc.lat, st.loc.lon) : null;
-  const items = [...seen.values()].map(a => ({ ...a, here: a.here || !!(here && a.bounds && a.bounds.contains(here)) }))
+  // pills are about *your* area: products covering your spot, or whose area comes within the selected range ring (the map may show far more)
+  const boxDist = b => { if (!here || !b) return 0; const la = Math.min(Math.max(here.lat, b.getSouth()), b.getNorth()), lo = Math.min(Math.max(here.lng, b.getWest()), b.getEast()); return distMi({ lat: here.lat, lon: here.lng }, { lat: la, lon: lo }); };
+  const items = [...seen.values()].map(a => ({ ...a, here: a.here || !!(here && a.bounds && a.bounds.contains(here)), distMi: a.here ? 0 : boxDist(a.bounds) }))
+    .filter(a => a.here || a.distMi <= Math.max(S.range || 30, 10))
     .sort((a, b) => (b.here - a.here) || ((/Warning/.test(b.event)) - (/Warning/.test(a.event))));
   st.wwPills = items;
   row.innerHTML = items.slice(0, 12).map((a, i) => '<button class="ww' + (/Warning/.test(a.event) ? '' : ' watch') + (a.here ? ' here' : '') + '" data-ww="' + i + '" style="' + (/Warning/.test(a.event) ? 'background:' + a.color : 'border-color:' + a.color) + '">' + esc(a.event) + (a.here ? ' · here' : '') + '</button>').join('');
