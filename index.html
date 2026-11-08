@@ -767,6 +767,11 @@ const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
+// Settings that belong to this device, kept in their own slot so nothing that arrives from the account copy can overwrite them
+const DEVICE_KEYS = ['bottomGap', 'layout', 'lowData'], DEVICE_KEY = 'campRadar.device';
+function loadDeviceSettings() { try { const d = JSON.parse(localStorage.getItem(DEVICE_KEY) || '{}'); for (const k of DEVICE_KEYS) if (d[k] != null) S[k] = d[k]; } catch (e) {} }
+function saveDeviceSettings() { try { const d = {}; for (const k of DEVICE_KEYS) if (S[k] != null) d[k] = S[k]; localStorage.setItem(DEVICE_KEY, JSON.stringify(d)); } catch (e) {} }
+loadDeviceSettings();
 S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {});
 S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {});
 S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
@@ -774,7 +779,7 @@ S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
 if (!S.voice.wakeRetired) { S.voice.enabled = false; S.voice.wakeRetired = true; }
 // Devices set up before the shared backend existed have an empty address saved; adopt the default unless they chose "no backend".
 if (!S.backend && !S.backendOff) S.backend = DEFAULTS.backend;
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} if (typeof scheduleSync === 'function') scheduleSync(); }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} saveDeviceSettings(); if (typeof scheduleSync === 'function') scheduleSync(); }
 
 const $ = s => document.querySelector(s);
 const st = {
@@ -790,7 +795,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08v';
+const APP_VERSION = '2026.11.08w';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -875,9 +880,10 @@ async function pullSettings(force) {
     const j = await r.json(); if (!j.settings) { pushSettings(); return false; }
     if (!force && j.updatedMs <= (S.syncedAt || 0)) return false;
     for (const [k, v] of Object.entries(j.settings)) if (!SYNC_SKIP.has(k)) S[k] = v;
+    loadDeviceSettings();   // this device's own gap, layout and data mode win over anything in the account copy
     S.layers = Object.assign({}, DEFAULTS.layers, S.layers || {}); S.brief = Object.assign({}, DEFAULTS.brief, S.brief || {}); S.voice = Object.assign({}, DEFAULTS.voice, S.voice || {});
     S.syncedAt = j.updatedMs; S.syncedHash = JSON.stringify(syncable()); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
-    if (typeof applyNight === 'function') applyNight(); if (typeof renderRangeButtons === 'function') { renderRangeButtons(); drawRings(); } if (typeof applyLayers === 'function') applyLayers(); if (typeof loadVoices === 'function') loadVoices(); if (typeof refreshAll === 'function') refreshAll();
+    if (typeof applyBottomGap === 'function') applyBottomGap(); if (typeof applyLayout === 'function') applyLayout(); if (typeof applyNight === 'function') applyNight(); if (typeof renderRangeButtons === 'function') { renderRangeButtons(); drawRings(); } if (typeof applyLayers === 'function') applyLayers(); if (typeof loadVoices === 'function') loadVoices(); if (typeof refreshAll === 'function') refreshAll();
     return true;
   } catch (e) { return false; }
 }
