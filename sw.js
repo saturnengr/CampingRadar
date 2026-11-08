@@ -12,7 +12,7 @@ self.addEventListener('fetch', e => {
     const c = await caches.open(TILES);
     const hit = await c.match(e.request, { ignoreVary: true }); if (hit) return hit;
     const res = await fetch(e.request);
-    if (res.ok || res.type === 'opaque') { c.put(e.request, res.clone()); trimTiles(c); }
+    if (res.ok) { try { await c.put(e.request, res.clone()); trimTiles(c); } catch (err) {} }   // only real (CORS) responses: opaque ones cost megabytes of quota each
     return res;
   })());
 });
