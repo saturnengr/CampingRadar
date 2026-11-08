@@ -252,11 +252,11 @@ body.side #side::after{content:"";flex:1;order:9}
 #huWrap{background:rgba(255,183,77,.08)}
 #msgWrap{background:rgba(124,77,255,.12)}#msgRow{display:block}.msg{font-size:15px;padding:2px 0}.msg.mine{opacity:.75}
 body.side #msgWrap{order:6}body.side #olWrap{order:5}
-#olWrap{background:rgba(79,195,247,.07)}#olRow{display:flex;gap:3px;align-items:flex-end;height:54px}
+#olWrap{background:rgba(79,195,247,.07)}#olRow{display:flex;gap:3px;align-items:flex-end;height:68px}
 .ol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;height:100%;background:none;border:0;padding:0;color:var(--text);font:inherit;min-width:0}
-.ol .bar{border-radius:3px 3px 0 0;background:var(--line);min-height:3px;position:relative}.ol .bar.pop{background:#4fc3f7}.ol .bar.wet{background:#1e88e5}.ol .bar.thu{background:#ffb74d}
+.ol .bar{border-radius:3px 3px 0 0;background:rgba(255,255,255,.14);min-height:4px;position:relative}.ol .bar.pop{background:#4fc3f7}.ol .bar.wet{background:#1e88e5}.ol .bar.thu{background:#ffb74d}
 .ol .bar.radar{box-shadow:0 0 0 2px var(--rc) inset;background:var(--rc)}.ol .bar.clear{box-shadow:0 0 0 2px #43a047 inset;background:transparent}
-.ol .lbl{font-size:10px;color:var(--muted);line-height:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-align:center}.ol .pct{font-size:10px;line-height:12px;text-align:center;color:var(--muted)}
+.ol .lbl{font-size:10px;color:var(--muted);line-height:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-align:center}.ol .tmp{font-size:11px;line-height:13px;text-align:center;color:var(--text);font-weight:600}.ol .pct{font-size:10px;line-height:12px;text-align:center;color:var(--muted)}
 #olNote{font-size:12px;color:var(--muted);margin-top:4px}
 body.side .pillsec{border-bottom:0;padding:8px 14px 10px}
 body.side #wwWrap{order:3}body.side #huWrap{order:4}
@@ -265,7 +265,7 @@ body.side #wwWrap{order:3}body.side #huWrap{order:4}
 .ww{min-height:34px;padding:0 12px;border-radius:999px;font-size:14px;font-weight:750;color:#fff;border:2px solid transparent;background:#555;text-shadow:0 1px 2px rgba(0,0,0,.6)}
 .ww.watch{background:transparent;border-style:dashed}
 .ww.here{box-shadow:0 0 0 2px #fff inset}
-@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}#olRow{height:46px}.ol .pct{display:none}}
+@media (max-width:600px){.pillsec{padding:4px 8px 6px}.pillhdr{display:none}.ww,.hu{min-height:30px;font-size:13px;padding:0 10px}#olRow{height:62px}.ol .pct{font-size:9px}}
 
 /* ---- dim / night ---- */
 body.night{--chrome:#06090c;--chrome2:#0e151c}
@@ -774,7 +774,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08q';
+const APP_VERSION = '2026.11.08r';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2152,7 +2152,7 @@ function renderOutlook() {
     if (h.thu >= 20 && h.thu >= (h.pop || 0) - 10) cls = 'thu';
     if (h.radar && h.radar.kind === 'rain') { cls = 'radar'; style = 'height:30px;--rc:' + h.radar.color; }
     else if (h.radar && h.radar.kind === 'clear') { cls = 'clear'; style = 'height:' + Math.max(8, ht) + 'px'; }
-    return '<button class="ol" data-ol="' + i + '" title="' + esc(h.sky) + '"><div class="pct">' + (h.radar && h.radar.kind === 'rain' ? '◉' : h.radar && h.radar.kind === 'clear' ? '✓' : v >= 10 ? v + '%' : '') + '</div><div class="bar ' + cls + '" style="' + style + '"></div><div class="lbl">' + (i === 0 ? 'now' : hrLbl(h.t)) + '</div></button>';
+    return '<button class="ol" data-ol="' + i + '" title="' + esc(h.sky) + '"><div class="pct">' + (h.radar && h.radar.kind === 'rain' ? '◉' : h.radar && h.radar.kind === 'clear' ? '✓' : v >= 10 ? v + '%' : '') + '</div><div class="bar ' + cls + '" style="' + style + '"></div><div class="tmp">' + (h.temp != null ? h.temp + '°' : '') + '</div><div class="lbl">' + (i === 0 ? 'now' : hrLbl(h.t)) + '</div></button>';
   }).join('');
   const first = o.hours.find(h => (h.pop || 0) >= 40 || h.thu >= 20), rad = o.hours.find(h => h.radar && h.radar.kind === 'rain');
   $('#olNote').textContent = rad ? 'Radar: ' + rad.radar.main : first ? 'Radar clear for the next 2 hours · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? 'Radar clear for the next 2 hours' : 'Radar clear for the next 2 hours · forecast dry through ' + clock(o.hours[11].t + 3600e3);
