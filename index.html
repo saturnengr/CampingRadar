@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08e';
+const APP_VERSION = '2026.11.08f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -767,10 +767,14 @@ const upd = { startHash: null, pending: false, lastActivity: Date.now() };
 async function hashText(t) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return Array.from(new Uint8Array(b)).slice(0, 8).map(x => x.toString(16).padStart(2, '0')).join(''); }
 async function checkForUpdate(force) {
   try {
+    // Compare the version string in the live file with the one this page is running; a byte hash against the browser's cached copy
+    // could disagree with the running page (CDN and cache copies drift), which showed "update ready" with nothing new to get.
     const url = location.pathname.replace(/[^/]*$/, '') + 'index.html';
-    if (!upd.startHash) { upd.startHash = await hashText(await (await fetch(url, { cache: 'force-cache' })).text()); if (!force) return; }
-    const live = await hashText(await (await fetch(url, { cache: 'no-store' })).text());
-    if (live !== upd.startHash) { upd.pending = true; $('#updateChip').hidden = false; }
+    const text = await (await fetch(url, { cache: 'no-store' })).text();
+    const m = /const APP_VERSION = '([^']+)'/.exec(text); if (!m) return;
+    upd.liveVersion = m[1];
+    const newer = m[1] !== APP_VERSION;
+    upd.pending = newer; $('#updateChip').hidden = !newer;
   } catch (e) {}
 }
 function applyUpdate() { try { if (st.lastTouch) { const c = map.getCenter(); localStorage.setItem('campRadar.view', JSON.stringify({ lat: c.lat, lon: c.lng, zoom: map.getZoom(), at: Date.now() })); } } catch (e) {} try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then(r => r && r.update()); } catch (e) {} location.reload(); }
