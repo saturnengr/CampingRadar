@@ -774,7 +774,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08s';
+const APP_VERSION = '2026.11.08t';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -840,7 +840,8 @@ async function redeemCode(code) {
   return j;
 }
 // Settings that travel with the account. Device-bound things (push id, device id, token, backend address, last fix) stay local.
-const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash']);
+// per-device settings never sync: the phone's navigation-bar gap, the tablet's sidebar layout and low-data mode would otherwise overwrite each other
+const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash', 'bottomGap', 'layout', 'lowData', 'pushEndpoint']);
 const syncable = () => { const o = {}; for (const k of Object.keys(S)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; return o; };
 let syncTimer = null, syncBusy = false;
 function scheduleSync() { if (!S.account || !S.account.token || !BE()) return; clearTimeout(syncTimer); syncTimer = setTimeout(pushSettings, 4000); }
