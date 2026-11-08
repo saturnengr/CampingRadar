@@ -746,7 +746,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08h';
+const APP_VERSION = '2026.11.08i';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2179,7 +2179,7 @@ async function pushEnable() {
     body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
   if (r.status === 402) throw new Error('Alerts with the screen off are a Pro feature — Settings → Account.');
   if (!r.ok) throw new Error('Backend refused: ' + r.status);
-  S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
+  S.pushId = (await r.json()).id; S.pushEndpoint = sub.endpoint; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
 }
 // Browsers rotate or drop push subscriptions (Chrome key rotation, Android revoking unused permissions, a reinstall), and the server
 // forgets a subscription the push service rejects. Re-register quietly whenever alerts are supposed to be on.
@@ -2188,12 +2188,13 @@ async function ensurePushSubscription(force) {
   try {
     const reg = await swReg(); await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
+    if (sub && S.pushEndpoint && sub.endpoint !== S.pushEndpoint) force = true;   // the browser rotated the subscription behind our back
     if (sub && !force) { const chk = await fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: '{}' }, 10000).catch(() => null); if (chk && chk.ok) return true; }
-    if (sub && force) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }
+    if (sub && force && (!S.pushEndpoint || sub.endpoint === S.pushEndpoint)) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }   // a rotated subscription is kept and simply re-registered
     if (!sub) { const key = (await (await fetchT(BE() + '/push/vapid-public-key', {}, 10000)).text()).trim(); sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) }); }
     const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
     if (!r.ok) return false;
-    S.pushId = (await r.json()).id; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
+    S.pushId = (await r.json()).id; S.pushEndpoint = sub.endpoint; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
     return true;
   } catch (e) { console.warn('push re-register', e); return false; }
 }
