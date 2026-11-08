@@ -80,7 +80,8 @@ public sealed class BriefingWriter
         (light returns of 10 to 20 dBZ with a dry layer below — a dew-point spread of ten degrees or more, or a low NWS rain chance — usually mean
         virga or drizzle evaporating before the ground; say so plainly), what the pressure trend implies, what the wind is doing, and what to expect
         over the next two to three hours. If the facts disagree (radar overhead but no rain reported, forecast rain but radar clear), say which to trust and why.
-        Keep numbers rounded. End with one sentence of practical advice for the activity. Language: English, or US Spanish when "language" is "es-US".
+        Keep numbers rounded. This is read on a screen, not spoken aloud: write times and temperatures as numerals (5:32 PM, 69°, 30 mph), never as
+        words. End with one sentence of practical advice for the activity. Language: English, or US Spanish when "language" is "es-US".
         Output only the text.
         """;
 
@@ -93,7 +94,8 @@ public sealed class BriefingWriter
         wind picking up, the temperature turning). Say what is driving it when the facts make that clear (a front, daytime heating, a sea breeze,
         clearing skies overnight). Be honest about uncertainty: a 30 percent chance is a chance, not a plan, and a forecast two days out is a sketch.
         If the hourly numbers and the written NWS text disagree, say which you would trust. Keep numbers rounded. End with one or two sentences of
-        practical advice for the activity on that day: when to do the thing, what to bring, what to avoid. Language: English, or US Spanish when
+        practical advice for the activity on that day: when to do the thing, what to bring, what to avoid. This is read on a screen, not spoken
+        aloud: write times and temperatures as numerals (5:32 PM, 69°, 30 mph), never as words. Language: English, or US Spanish when
         "language" is "es-US". Output only the text.
         """;
 
