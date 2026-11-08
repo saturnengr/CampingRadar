@@ -90,7 +90,7 @@ public sealed class Recorder
     {
         name = SafeName(name);
         var dir = Path.GetFullPath(Path.Combine(_dir, name)); if (!dir.StartsWith(Path.GetFullPath(_dir) + Path.DirectorySeparatorChar) || !Directory.Exists(dir)) return null;
-        var zip = Path.Combine(_dir, name + ".zip"), tmp = zip + "." + Environment.TickCount64 + ".tmp";
+        string zip = Path.Combine(_dir, name + ".zip"), tmp = zip + "." + Environment.TickCount64 + ".tmp";
         ZipFile.CreateFromDirectory(dir, tmp, CompressionLevel.Fastest, includeBaseDirectory: true);
         File.Move(tmp, zip, overwrite: true);   // a download in flight keeps its open handle on the old file
         return zip;

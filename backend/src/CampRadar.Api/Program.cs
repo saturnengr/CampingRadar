@@ -71,6 +71,7 @@ var app = builder.Build();
 app.UseCors();
 app.Services.GetRequiredService<EntitlementStore>().OwnerResolver = email => app.Services.GetRequiredService<GroupStore>().GroupOf(email)?.OwnerEmail;
 string adminKey = app.Configuration["AdminKey"] ?? "";
+var ipCodes = new System.Collections.Concurrent.ConcurrentDictionary<string, Queue<long>>();   // small per-key rate limiters (codes, verify attempts, briefings)
 static string ExtractEmail(string prefsJson) { try { using var d = JsonDocument.Parse(prefsJson); return d.RootElement.TryGetProperty("email", out var e) ? e.GetString() ?? "" : ""; } catch { return ""; } }
 bool IsAdmin(HttpRequest r) => adminKey.Length > 0 && r.Headers["X-Admin-Key"] == adminKey;
 string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : null; }
@@ -205,7 +206,6 @@ app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
 });
 
 // ---------- account: email sign-in (6-digit code by email), activation codes, settings sync, deletion ----------
-var ipCodes = new System.Collections.Concurrent.ConcurrentDictionary<string, Queue<long>>();
 var EmailRx = new System.Text.RegularExpressions.Regex(@"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 app.MapGet("/auth/config", (Mailer mail) => new { emailSignIn = mail.Enabled });
 app.MapPost("/auth/start", async (HttpRequest http, [FromBody] StartRequest r, EntitlementStore ent, Mailer mail, CancellationToken ct) =>
