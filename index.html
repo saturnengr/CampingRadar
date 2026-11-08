@@ -682,10 +682,24 @@ const CRIT_COLOR = { 'Tornado Warning': '#ff1744', 'Severe Thunderstorm Warning'
   'Blizzard Warning': '#ff5722', 'Ice Storm Warning': '#8b008b', 'Winter Storm Warning': '#ff69b4', 'Extreme Cold Warning': '#1e88e5', 'Avalanche Warning': '#1565c0' };
 const TROPICAL_EVENTS = /Hurricane|Tropical Storm|Storm Surge/;
 const BEACH_EVENTS = /Rip Current|High Surf|Beach Hazards|Coastal Flood|Small Craft|Gale|Marine/;
-const FRAMES = [50, 40, 30, 20, 10, 0];                 // minutes ago, radar loop
+const FRAMES_FULL = [50, 40, 30, 20, 10, 0], FRAMES_LOW = [20, 10, 0];   // minutes ago, radar loop
+let FRAMES = FRAMES_FULL, frameIdx = 2;
+// Low-data mode: half the radar frames, slower refreshes, no raster overlays (topo, trails, smoke, clouds). Auto = on when the browser
+// reports a cellular connection or Data Saver, or in Sentinel mode (a display on a hotspot or a cellular tablet).
+function lowData() {
+  const m = S.lowData || 'auto'; if (m === 'on') return true; if (m === 'off') return false;
+  const c = navigator.connection || {}; return !!(c.saveData || c.type === 'cellular' || S.activity === 'sentinel');
+}
+function applyLowData() {
+  const low = lowData(), want = low ? FRAMES_LOW : FRAMES_FULL;
+  document.body.classList.toggle('lowdata', low);
+  if (FRAMES !== want) { FRAMES = want; frameIdx = FRAMES.length - 1; if (typeof refreshRadarTiles === 'function' && st.frames) refreshRadarTiles(true).then(() => showFrame(FRAMES.length - 1)).catch(() => {}); }
+  if (typeof applyLayers === 'function' && map) applyLayers();
+}
+if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', () => applyLowData());
 const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 const KEY = 'campRadar.v1';
-const DEFAULTS = { layout: 'top', bottomGap: 'auto', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
+const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'auto', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
@@ -715,7 +729,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07r';
+const APP_VERSION = '2026.11.07s';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1068,7 +1082,7 @@ $('#zoomOut').addEventListener('click', () => manualZoom(-1));
 map.getContainer().addEventListener('pointerdown', () => { st.lastTouch = Date.now(); });
 
 /* --------------------------- radar loop ---------------------------- */
-let frameIdx = FRAMES.length - 1, animTimer = null;
+frameIdx = FRAMES.length - 1; let animTimer = null;
 const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></svg>';
 function showFrame(i) {
@@ -1606,7 +1620,8 @@ const CloudLayer = L.GridLayer.extend({
 function cloudWmsLayer() { return new CloudLayer({ pane: 'clouds', opacity: 0.9, maxNativeZoom: 9, maxZoom: 19, updateWhenZooming: false, keepBuffer: 1 }); }
 
 function applyLayers() {
-  const L_ = S.layers;
+  const low = typeof lowData === 'function' && lowData();
+  const L_ = low ? Object.assign({}, S.layers, { topo: false, trails: false, smoke: false, clouds: false }) : S.layers;
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
   set(stormLayer, L_.storms); set(hailLayer, L_.hail); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
@@ -3058,6 +3073,7 @@ const SETTINGS = {
     ['threshDbz', 'Count as rain', [[10, 'Any echo'], [20, 'Light and up'], [30, 'Moderate and up']]],
   ],
   data: [
+    ['lowData', 'Low-data mode — half the radar frames, slower refreshes, no topo, trails, smoke or cloud tiles (roughly a third of the data). Auto turns it on for cellular connections, Data Saver, and Sentinel mode', [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']]],
     ['source', 'Radar data', [['mrms', 'NOAA filtered (MRMS)'], ['iem', 'Raw NEXRAD (backup)']]],
   ],
 };
@@ -3413,7 +3429,7 @@ function renderDiag() {
   const d = $('#diag'); if (!d) return;
   const m = st.nc && st.nc.motion;
   d.textContent = [
-    'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : ''),
+    'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode (' + (S.lowData === 'on' ? 'on' : 'auto') + ')' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + (st.timesFromServer ? '' : ' (estimated)') : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
@@ -3491,6 +3507,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'night') applyNight();
   if (k === 'layout') applyLayout();
   if (k === 'bottomGap') applyBottomGap();
+  if (k === 'lowData' || k === 'activity') applyLowData();
   if (k === 'rangeSet') { renderRangeButtons(); save(); drawRings(); fitRange(); }
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
@@ -3511,6 +3528,7 @@ $('#sheet').addEventListener('input', e => {
    near a window does not wander), the screen is kept awake, and the rings re-fit after any pan once things go quiet. */
 function applySentinel() {
   document.body.classList.toggle('sentinel', S.activity === 'sentinel');
+  if (typeof applyLowData === 'function') applyLowData();
   if (S.activity === 'sentinel') {
     if (S.locMode === 'gps' && lastGps) { S.manual = { lat: lastGps.lat, lon: lastGps.lon }; S.locMode = 'manual'; S.sentinelPinned = true; save(); setLocation(lastGps.lat, lastGps.lon, 'manual'); updatePickHint(); }
     keepAwake();
@@ -3541,10 +3559,10 @@ renderStatus();
 keepAwake();
 setTimeout(updateSoundChip, 800);
 
-setInterval(() => { refreshRadarTiles().then(runNowcast); }, 5 * 60000);
+(function radarTick() { setTimeout(() => { refreshRadarTiles().then(runNowcast).finally(radarTick); }, lowData() ? 10 * 60000 : 5 * 60000); })();
 setInterval(refreshAlerts, 2 * 60000);
-setInterval(refreshLightning, 60000);
-setInterval(() => { refreshHazards(); refreshWind(); if (S.layers.smoke) smokeLayer.redraw(); if (S.layers.clouds) { if (cloudLayer && cloudLayer._night === cloudIsNight()) cloudLayer.redraw(); else applyLayers(); } }, 10 * 60000);
+(function lightningTick() { setTimeout(() => { refreshLightning(); lightningTick(); }, lowData() ? 3 * 60000 : 60000); })();
+(function hazardTick() { setTimeout(() => { hazardTick(); refreshHazards(); refreshWind(); if (S.layers.smoke && !lowData()) smokeLayer.redraw(); if (S.layers.clouds) { if (cloudLayer && cloudLayer._night === cloudIsNight()) cloudLayer.redraw(); else applyLayers(); } }, lowData() ? 20 * 60000 : 10 * 60000); })();
 setTimeout(applyLayers, 1500);
 map.on('moveend', () => { if (BE()) refreshLightning(); });
 setTimeout(refreshLightning, 4000);
