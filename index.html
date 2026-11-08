@@ -575,8 +575,8 @@ function hailCores(grid, cellKm, cx, cy, thresh, maxRing, loc) {
 function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
-  const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false };
-  const ringR = [2, 5, 10, 30, 50, 100, 120], farRing = Math.max(opts.maxRingMi || 50, 120);
+  const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false, 150: false };
+  const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
@@ -732,7 +732,10 @@ function applyLowData() {
   if (typeof applyLayers === 'function' && map) applyLayers();
 }
 const ALERT_RANGE_MI = 50;   // rain is tracked out to the window edge, but "it will reach you" alerts wait until it is this close
-const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
+const NC = { zoom: 7, radiusMi: 120, freeRadiusMi: 100, overviewRadiusMi: 200, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
+// Tracking window: free accounts track ±100 mi (about 1½ h of lead at typical storm speeds); Pro tracks ±120 mi, or ±200 mi with the overview rings
+const overviewAllowed = () => typeof isPro === 'function' && isPro();
+const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
@@ -764,7 +767,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.08m';
+const APP_VERSION = '2026.11.08n';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -808,7 +811,7 @@ setInterval(() => {   // quiet auto-restart: idle 10 min, no sheet open, not spe
 
 /* ---- account / Pro ---- */
 const PRO_LAYERS = ['tropical', 'trails', 'topo'];
-const PRO_FEATURES = { push: 'Alerts with the screen off', lightning: 'Lightning', brief: 'Model-written briefings', layers: 'Tides, snow depth, tropical tracks, trails and topo layers' };
+const PRO_FEATURES = { push: 'Alerts with the screen off', lightning: 'Lightning', brief: 'Model-written briefings', layers: 'Tides, snow depth, tropical tracks, trails and topo layers', range: 'Storm tracking to 200 miles with the 50 · 100 · 150 mi overview rings (free tracks 100 miles)' };
 const isPro = () => !!(S.account && S.account.pro && (!S.account.expiresMs || S.account.expiresMs > Date.now()));
 const authHeaders = () => S.account && S.account.token ? { Authorization: 'Bearer ' + S.account.token } : {};
 async function refreshAccount() {
@@ -878,7 +881,8 @@ async function signOut() {
 }
 // Turn Pro-only things off when Pro is not active; refresh data that depends on it.
 function applyProState() {
-  if (!isPro()) { for (const k of PRO_LAYERS) if (S.layers[k]) S.layers[k] = false; st.lightning = null; if (typeof ltLayer !== 'undefined') ltLayer.clearLayers(); }
+  if (!isPro()) { for (const k of PRO_LAYERS) if (S.layers[k]) S.layers[k] = false; st.lightning = null; if (typeof ltLayer !== 'undefined') ltLayer.clearLayers();
+    if (S.rangeSet === '50-100-150') { S.rangeSet = '10-30-50'; S.range = 30; if (typeof renderRangeButtons === 'function') { renderRangeButtons(); drawRings(); } } }
   save(); if (typeof applyLayers === 'function') applyLayers(); if (typeof refreshLightning === 'function') refreshLightning(); if (typeof renderStatus === 'function') renderStatus();
 }
 setInterval(refreshAccount, 60 * 60000);
@@ -1526,7 +1530,7 @@ async function runNowcast() {
   try {
     const z = NC.zoom, center = lonLatToPx(st.loc.lon, st.loc.lat, z);
     const mpp = 156543.03392 * Math.cos(st.loc.lat * Math.PI / 180) / 2 ** z;
-    const radiusMi = S.rangeSet === '50-100-150' ? 200 : NC.radiusMi;   // the overview rings look 150 mi out, so track that far too
+    const radiusMi = trackRadiusMi();   // 100 free · 120 Pro · 200 with the overview rings (they look 150 mi out, so track that far)
     const R = Math.round(radiusMi * MI / mpp);
     if (!st.frames || (S.source === 'mrms' && !st.radarTimes)) await updateFrameTimes();
     // frames ~30 min ago, ~15 min ago and latest, with their real time gaps
@@ -2106,7 +2110,7 @@ function computeStatus() {
   if (!st.nc && !st.ncErr) { out.main = 'Checking radar…'; return out; }
   if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return overlayLightning(out); }
   const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
-  out.rings = Object.assign({}, res.rings, { 150: res.rings[120] });   // the analysis window ends at 120 mi
+  out.rings = Object.assign({}, res.rings);
   const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
     : motion.ok ? 'Rain nearly stationary' : '';
   // Light echoes with a dry forecast or dry air underneath mostly evaporate before they reach the ground (virga)
@@ -2117,7 +2121,7 @@ function computeStatus() {
     out.cls = 'yellow'; out.level = 'low';
     out.main = 'Rain to the ' + compassLong(res.nearest.bearing) + ' is not getting closer — likely evaporating at its edge';
     out.sub = 'Its cells move ' + Math.round(motion.speedMph) + ' mph but the edge has held near ' + Math.round(res.nearest.distMi) + ' mi for ' + Math.round(edge.spanMin) + ' min' + (res.nearest.distMi <= 15 ? ' · ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain possible if it holds together' : '');
-    out.rings = Object.assign({}, res.rings, { 150: res.rings[120] }); return overlayLightning(out);
+    out.rings = Object.assign({}, res.rings); return overlayLightning(out);
   }
   const edgeSlow = hit && edge && edge.verdict === 'slow' && edge.etaMin > hit.etaMin;
   const tr = hit && hit.trend, trendWord = tr && tr.word === 'strengthening' ? ', strengthening' : tr && tr.word === 'weakening' ? ', weakening' : '';
@@ -2126,7 +2130,7 @@ function computeStatus() {
     out.cls = 'yellow'; out.level = 'low';
     out.main = 'Rain to the ' + compassLong(hit.fromBearing) + ' is weakening — may fizzle before it reaches you';
     out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + clock(Date.now() + Math.max(0, hit.etaMin - lat) * 60000) + (moving ? ' · ' + moving : '');
-    out.rings = Object.assign({}, res.rings, { 150: res.rings[120] }); return overlayLightning(out);
+    out.rings = Object.assign({}, res.rings); return overlayLightning(out);
   }
   if (hit && !lowConf && hit.distMi > ALERT_RANGE_MI) {
     // heading this way but still far out: say so, no alert until it is inside the alert range
@@ -3303,7 +3307,7 @@ const SETTINGS = {
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: keep the toolbar above the Android navigation bar', [['auto', 'Auto'], ['0', 'None'], ['24', 'Gesture bar'], ['48', '3-button bar']]],
     ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
-    ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)'], ['50-100-150', '50 · 100 · 150 mi (overview)']]],
+    ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)'], ['50-100-150', '50 · 100 · 150 mi (overview) · Pro']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
   ],
@@ -3692,7 +3696,7 @@ function renderDiag() {
   d.textContent = [
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
@@ -3761,6 +3765,7 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.loc === 'gps') { useGps(); closeModal(); return; }
   if (b.dataset.loc === 'tap') { closeModal(); setPicking(true); return; }
   const k = b.dataset.k; if (!k) return;
+  if (k === 'rangeSet' && b.dataset.v === '50-100-150' && !overviewAllowed()) { openSettings('account'); const m = $('#acctMsg'); if (m) m.textContent = 'The 50 · 100 · 150 mi overview rings and 200-mile tracking are a Pro feature.'; return; }
   const cur = S[k], raw = b.dataset.v;
   const v = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw;
   S[k] = v; save();
@@ -3791,7 +3796,7 @@ $('#sheet').addEventListener('input', e => {
 function applySentinel() {
   document.body.classList.toggle('sentinel', S.activity === 'sentinel');
   // Sentinel is an early-warning overview: default it to the 50/100/150 rings, and back again when leaving (a deliberate choice is kept)
-  if (S.activity === 'sentinel' && S.rangeSet === '10-30-50' && !S.rangeSetChosen) { S.rangeSet = '50-100-150'; S.range = 100; renderRangeButtons(); drawRings(); fitRange(); }
+  if (S.activity === 'sentinel' && S.rangeSet === '10-30-50' && !S.rangeSetChosen && overviewAllowed()) { S.rangeSet = '50-100-150'; S.range = 100; renderRangeButtons(); drawRings(); fitRange(); }
   else if (S.activity !== 'sentinel' && S.rangeSet === '50-100-150' && !S.rangeSetChosen) { S.rangeSet = '10-30-50'; S.range = 30; renderRangeButtons(); drawRings(); fitRange(); }
   if (typeof applyLowData === 'function') applyLowData();
   if (S.activity === 'sentinel') {
