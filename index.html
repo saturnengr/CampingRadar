@@ -729,7 +729,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07v';
+const APP_VERSION = '2026.11.07w';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1747,21 +1747,30 @@ async function loadHazardAlerts(b) {
     hzAlertsCache = { at: Date.now(), feats: j.features || [] };
   }
   floodLayer.clearLayers(); firewxLayer.clearLayers(); stormLayer.clearLayers();
-  const view = b.pad(0.5); let zoneFetches = 0;
+  const view = b.pad(0.5);
   st.hz.floodAlerts = []; st.hz.firewx = []; st.hz.storms = [];
-  for (const f of hzAlertsCache.feats) {
+  const wanted = hzAlertsCache.feats.filter(f => { const p = f.properties, isFire = /Red Flag|Fire Weather/.test(p.event), isStorm = !!STORM_COLORS[p.event]; return (isStorm ? S.layers.storms : isFire ? S.layers.firewx : S.layers.flood) && !(isStorm && p.ends && Date.parse(p.ends) < Date.now()); });
+  // Zone-based products (watches, flood watches, advisories) have no polygon: fetch every affected zone's outline, in bulk, once.
+  const need = new Set(); for (const f of wanted) if (!f.geometry) for (const z of (f.properties.affectedZones || [])) if (!zoneCache.has(z)) need.add(z);
+  const ids = [...need].map(u => u.split('/').pop()).filter(id => /^[A-Z]{2}[CZ]\d{3}$/.test(id));
+  for (let i = 0; i < ids.length && i < 400; i += 40) {
+    const batch = ids.slice(i, i + 40);
+    try {
+      const zj = await nws(NWS + '/zones?id=' + batch.join(',') + '&include_geometry=true');
+      // one feature per zone *type* (forecast, county, fire…) sharing the id; the feature's id is the same URL the alert lists
+      for (const zf of zj.features || []) if (zf.id && need.has(zf.id)) zoneCache.set(zf.id, zf.geometry || null);
+    } catch (e) {}
+  }
+  let single = 0;   // anything the bulk call did not return: fetch a few individually
+  for (const z of need) if (!zoneCache.has(z)) { if (single++ >= 12) break; try { const zj = await nws(z); zoneCache.set(z, zj.geometry || null); } catch (e) { zoneCache.set(z, null); } }
+  for (const f of wanted) {
     const p = f.properties, isFire = /Red Flag|Fire Weather/.test(p.event), isStorm = !!STORM_COLORS[p.event];
-    if (isStorm ? !S.layers.storms : isFire ? !S.layers.firewx : !S.layers.flood) continue;
-    if (isStorm && p.ends && Date.parse(p.ends) < Date.now()) continue;
-    let geom = f.geometry;
-    if (!geom) {   // zone-based: fetch the first few zone outlines
-      const zones = (p.affectedZones || []).slice(0, 3); const parts = [];
-      for (const z of zones) {
-        if (!zoneCache.has(z)) { if (zoneFetches >= 6) continue; zoneFetches++; try { const zj = await nws(z); zoneCache.set(z, zj.geometry || null); } catch (e) { zoneCache.set(z, null); } }
-        const g = zoneCache.get(z); if (g) parts.push(g);
-      }
+    let geom = f.geometry, partBounds = null;
+    if (!geom) {
+      const parts = (p.affectedZones || []).map(z => zoneCache.get(z)).filter(Boolean);
       if (!parts.length) continue;
       geom = parts.length === 1 ? parts[0] : { type: 'GeometryCollection', geometries: parts };
+      partBounds = parts.map(g => L.geoJSON(g).getBounds()).filter(bb => bb.isValid());
     }
     const warn = /Warning/.test(p.event);
     const lyr = L.geoJSON(geom, { pane: 'hazards', interactive: true, style: isStorm ? { color: STORM_COLORS[p.event], weight: warn ? 3 : 2, fillColor: STORM_COLORS[p.event], fillOpacity: warn ? 0.2 : 0.1, dashArray: warn ? null : '6 6' } : isFire ? { color: '#ff8a65', weight: 1.5, fillColor: '#ff8a65', fillOpacity: 0.12, dashArray: '4 4' } : { color: /Warning/.test(p.event) ? '#1565c0' : '#42a5f5', weight: /Warning/.test(p.event) ? 2.5 : 1.5, fillColor: '#1e88e5', fillOpacity: /Warning/.test(p.event) ? 0.2 : 0.08 } });
@@ -1769,7 +1778,7 @@ async function loadHazardAlerts(b) {
     lyr.bindPopup('<b>' + esc(p.event) + '</b><br>' + esc(p.headline || '') + (p.ends ? '<br><small>Until ' + clock(Date.parse(p.ends)) + ' ' + fmtDate(Date.parse(p.ends)) + '</small>' : ''));
     lyr.addTo(isStorm ? stormLayer : isFire ? firewxLayer : floodLayer);
     const c = lyr.getBounds().getCenter();
-    (isStorm ? st.hz.storms : isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event), props: p, color: isStorm ? STORM_COLORS[p.event] : isFire ? '#ff8a65' : '#1e88e5' });
+    (isStorm ? st.hz.storms : isFire ? st.hz.firewx : st.hz.floodAlerts).push({ event: p.event, headline: p.headline, bounds: lyr.getBounds(), parts: partBounds, lat: c.lat, lon: c.lng, warning: /Warning/.test(p.event), props: p, color: isStorm ? STORM_COLORS[p.event] : isFire ? '#ff8a65' : '#1e88e5' });
   }
 }
 // Pills under the forecast: every watch/warning drawn in view (storms, floods, fire weather) plus any alert for your spot. Tap for the full text.
@@ -1851,7 +1860,7 @@ function renderWwPills() {
   const here = st.loc ? L.latLng(st.loc.lat, st.loc.lon) : null;
   // pills are about *your* area: products covering your spot, or whose area comes within the selected range ring (the map may show far more)
   const boxDist = b => { if (!here || !b) return 0; const la = Math.min(Math.max(here.lat, b.getSouth()), b.getNorth()), lo = Math.min(Math.max(here.lng, b.getWest()), b.getEast()); return distMi({ lat: here.lat, lon: here.lng }, { lat: la, lon: lo }); };
-  const items = [...seen.values()].map(a => ({ ...a, here: a.here || !!(here && a.bounds && a.bounds.contains(here)), distMi: a.here ? 0 : boxDist(a.bounds) }))
+  const items = [...seen.values()].map(a => { const parts = a.parts && a.parts.length ? a.parts : (a.bounds ? [a.bounds] : []); const isHere = a.here || !!(here && parts.some(bb => bb.contains(here))); return { ...a, here: isHere, distMi: isHere ? 0 : (parts.length ? Math.min(...parts.map(boxDist)) : 0) }; })
     .filter(a => a.here || a.distMi <= Math.max(S.range || 30, 10))
     .sort((a, b) => (b.here - a.here) || ((/Warning/.test(b.event)) - (/Warning/.test(a.event))));
   st.wwPills = items;
