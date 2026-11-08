@@ -180,7 +180,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
   #controls svg{width:21px;height:21px}
   #controls #zoomIn,#controls #zoomOut{font-size:24px}
   #zoomCtl:empty{display:none}
-  #legend{right:12px;bottom:26px}
+  #legend{right:76px;bottom:26px}   /* clear of the control column, which runs down the right edge on tablets */
 }
 
 /* ---- phones: portrait (narrow) and landscape (short) ---- */
@@ -228,6 +228,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 body.side{flex-direction:row}
 body.side.side-right{flex-direction:row-reverse}
 body.side #side{display:flex;flex-direction:column;flex:none;width:clamp(340px,34vw,420px);overflow:hidden auto;border-right:1px solid var(--line);background:var(--chrome)}
+/* the sidebar scrolls when its content is taller than the screen; nothing in it is allowed to squash (a squashed status bar drew its ring pills over the banner) */
+body.side #side>*{flex-shrink:0}
 body.side.side-right #side{border-right:0;border-left:1px solid var(--line)}
 body.side #statusbar{order:0;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 14px;min-height:0}
 body.side #statusText{flex:1 0 100%}
@@ -795,7 +797,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.09c';
+const APP_VERSION = '2026.11.09e';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
