@@ -701,7 +701,7 @@ const NC = { zoom: 7, radiusMi: 120, fineCellPx: 2, coarse: 2, horizonMin: 120, 
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'auto', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
-  layers: { storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
+  layers: { motion: true, storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
 
@@ -729,7 +729,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07t';
+const APP_VERSION = '2026.11.07u';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1415,6 +1415,10 @@ $('#warnDetails').addEventListener('click', () => {
 });
 
 /* ------------------------- rain tracking (nowcast) ----------------- */
+function pxToLonLat(x, y, z) {
+  const n = 256 * 2 ** z, lon = x / n * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+  return { lon, lat };
+}
 function lonLatToPx(lon, lat, z) {
   const n = 256 * 2 ** z, s = Math.sin(lat * Math.PI / 180);
   return { x: (lon + 180) / 360 * n, y: (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n };
@@ -1503,8 +1507,9 @@ async function runNowcast() {
       delete res.hit.blobCells;
     }
     if (res.nearestBlob) res.nearestTrend = trends.get(res.nearestBlob) || null;
-    st.nc = { res, motion, trends: [...trends.values()] }; st.ncAt = Date.now(); st.ncErr = null;
-    drawHail();
+    st.nc = { res, motion, trends: [...trends.values()], geo: { center, R, z, cellPx: NC.fineCellPx, fineKm }, grid: cleaned[2], labels: labelled[2].labels, blobs: labelled[2].blobs, vel };
+    st.ncAt = Date.now(); st.ncErr = null;
+    drawHail(); drawMotion();
   } catch (e) { st.ncErr = e.message; console.warn('nowcast', e); }
   finally { st.ncBusy = false; }
   const s = renderStatus();
@@ -1566,6 +1571,7 @@ map.createPane('imagery'); map.getPane('imagery').style.zIndex = 340;
 map.createPane('clouds'); map.getPane('clouds').style.zIndex = 345;
 const LAYER_INFO = {
   storms: ['Watches & warnings', 'NWS tornado, severe thunderstorm, winter storm, blizzard, ice storm, high wind and dust storm watches and warnings, shaded over the affected area. Solid = warning (happening or imminent), dashed = watch (conditions favourable)'],
+  motion: ['Storm motion', 'What the tracker worked out: an arrow and speed for each rain area, ghost outlines where it is projected to be in 15, 30 and 60 minutes, and the point and time it reaches your hit zone. Fades when the motion fit is weak'],
   hail: ['Hail', 'Hail-capable storm cores (58 dBZ and up on the latest scan) and the hail size NWS gives in severe thunderstorm and tornado warnings'],
   flood: ['Flood alerts', 'NWS flood and flash-flood warnings, watches and advisories, drawn where they apply'],
   gauges: ['River gauges', 'NOAA gauges; colour shows action / minor / moderate / major flood stage'],
@@ -1581,7 +1587,7 @@ const LAYER_INFO = {
   trails: ['Hiking trails', 'Marked hiking routes and trail names drawn over the map (Waymarked Trails, from OpenStreetMap)'],
   tropical: ['Hurricanes & tropical storms', 'NHC forecast track, cone and watches/warnings via NOAA nowCOAST; turns itself on when a tropical alert covers your spot'],
 };
-const stormLayer = L.layerGroup(), hailLayer = L.layerGroup(), floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
+const motionLayer = L.layerGroup().addTo(map), stormLayer = L.layerGroup(), hailLayer = L.layerGroup(), floodLayer = L.layerGroup(), gaugeLayer = L.layerGroup(), fireLayer = L.layerGroup(), firewxLayer = L.layerGroup(), windLayer = L.layerGroup();
 const WFIGS = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/';
 const GAUGES = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0/query';
 const SMOKE = 'https://mapservices.weather.noaa.gov/raster/rest/services/air_quality/ndgd_smoke_sfc_1hr_avg_time/ImageServer';
@@ -1638,11 +1644,12 @@ function applyLayers() {
   const low = typeof lowData === 'function' && lowData();
   const L_ = low ? Object.assign({}, S.layers, { topo: false, trails: false, smoke: false, clouds: false }) : S.layers;
   const set = (layer, on) => { if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
-  set(stormLayer, L_.storms); set(hailLayer, L_.hail); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
+  set(motionLayer, L_.motion !== false); set(stormLayer, L_.storms); set(hailLayer, L_.hail); set(floodLayer, L_.flood); set(gaugeLayer, L_.gauges); set(fireLayer, L_.fire || L_.rx); set(firewxLayer, L_.firewx); set(smokeLayer, L_.smoke); set(windLayer, L_.wind);
   set(tropicalLayer, L_.tropical || st.alerts.some(a => TROPICAL_EVENTS.test(a.event)));
   set(trailsLayer, L_.trails);
   if (typeof drawPeople === 'function') drawPeople();
   if (typeof drawSites === 'function') drawSites();
+  if (typeof drawMotion === 'function') drawMotion();
   if (L_.topo && !map.hasLayer(topoBase)) { map.removeLayer(osmBase); topoBase.addTo(map); } else if (!L_.topo && !map.hasLayer(osmBase)) { map.removeLayer(topoBase); osmBase.addTo(map); }
   if (L_.clouds) { if (!cloudLayer || cloudLayer._night !== cloudIsNight()) { if (cloudLayer) map.removeLayer(cloudLayer); cloudLayer = cloudWmsLayer().addTo(map); } }
   else if (cloudLayer) { map.removeLayer(cloudLayer); cloudLayer = null; }
@@ -1653,6 +1660,7 @@ function applyLayers() {
 function renderLegend() {
   const L_ = S.layers, items = [];
   if (L_.storms) { const seen = new Set((st.hz.storms || []).map(a => a.event)); for (const ev of Object.keys(STORM_COLORS)) if (seen.has(ev)) items.push('<span><i style="background:' + STORM_COLORS[ev] + (/Warning/.test(ev) ? '' : ';opacity:.6;border:1px dashed #fff') + '"></i>' + ev + '</span>'); if (!seen.size) items.push('<span><i style="background:#ff9100;opacity:.5"></i>Watches &amp; warnings (none in view)</span>'); }
+  if (L_.motion !== false) items.push('<span><i style="background:transparent;border:2px dashed #fff"></i>Storm motion: arrow = next 30 min, outlines = +15/+30/+60 min' + (st.nc && st.nc.motion && !st.nc.motion.ok ? ' (motion unclear right now)' : '') + '</span>');
   if (L_.hail) items.push('<span><i style="background:#e1f5fe;border:2px solid #0277bd;border-radius:50%"></i>Hail-capable core / NWS hail size</span>');
   if (L_.flood) items.push('<span><i style="background:#1e88e5"></i>Flood alert</span>');
   if (L_.gauges) items.push('<span><i style="background:#ff8f00;border-radius:50%"></i>River gauge (colour = flood stage)</span>');
@@ -1765,6 +1773,59 @@ async function loadHazardAlerts(b) {
   }
 }
 // Pills under the forecast: every watch/warning drawn in view (storms, floods, fire weather) plus any alert for your spot. Tap for the full text.
+// Storm-motion layer: the tracker's own picture — per-area arrows with speed, ghost outlines at +15/+30/+60 min, and the hit-zone entry point with ETA.
+function hull(pts) {   // monotone chain convex hull on [x,y] pairs
+  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (pts.length < 3) return pts;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of pts.slice().reverse()) { while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function drawMotion() {
+  motionLayer.clearLayers();
+  if (S.layers.motion === false || !st.nc || !st.nc.geo || !st.nc.motion || !st.nc.motion.ok) return;
+  const { geo, grid, labels, blobs, vel, motion, res } = st.nc, { center, R, z, cellPx, fineKm } = geo;
+  const toLL = (cx, cy) => { const p = pxToLonLat(center.x - R + (cx + 0.5) * cellPx, center.y - R + (cy + 0.5) * cellPx, z); return [p.lat, p.lon]; };
+  const conf = Math.max(0.25, Math.min(1, motion.global.conf * 2)), op = 0.35 + 0.65 * conf;
+  const hitBlob = res && res.hit ? res.hit.blob : null;
+  // cells by blob, for the significant areas only (and always the one that hits you)
+  const keep = new Set(blobs.filter(b => b.n >= 12 || b.id === hitBlob).sort((a, b) => b.vol - a.vol).slice(0, 8).map(b => b.id));
+  const cells = new Map(); for (const id of keep) cells.set(id, []);
+  for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) { const lb = labels[y * grid.w + x]; if (lb && keep.has(lb)) cells.get(lb).push([x, y]); }
+  for (const b of blobs) {
+    if (!keep.has(b.id)) continue;
+    const v = vel(Math.round(b.cx), Math.round(b.cy)); const sp = Math.hypot(v.vx, v.vy) * 60 * 0.621371; if (sp < 3) continue;
+    const hdg = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360, dirWord = compass(hdg);
+    const pts = cells.get(b.id), step = Math.max(1, Math.floor(pts.length / 400)), sample = pts.filter((_, i) => i % step === 0);
+    // ghost outlines
+    [[60, 0.18], [30, 0.3], [15, 0.45]].forEach(([min, alpha]) => {
+      const dx = v.vx * min / fineKm, dy = v.vy * min / fineKm;
+      const h = hull(sample.map(([x, y]) => [x + dx, y + dy])); if (h.length < 3) return;
+      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: '#fff', weight: 1.5, dashArray: '5 5', opacity: alpha * op, fillColor: '#fff', fillOpacity: alpha * 0.25 * op, interactive: false }).addTo(motionLayer);
+    });
+    // arrow = 30 minutes of travel from the centroid
+    const a0 = toLL(b.cx, b.cy), a1 = toLL(b.cx + v.vx * 30 / fineKm, b.cy + v.vy * 30 / fineKm);
+    L.polyline([a0, a1], { pane: 'hazards', color: '#111', weight: 5, opacity: 0.6 * op, interactive: false }).addTo(motionLayer);
+    L.polyline([a0, a1], { pane: 'hazards', color: '#fff', weight: 2.5, opacity: op, interactive: false }).addTo(motionLayer);
+    const head = L.divIcon({ className: '', html: '<div style="transform:rotate(' + hdg + 'deg);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #fff;filter:drop-shadow(0 0 2px #000);opacity:' + op + '"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
+    L.marker(a1, { icon: head, pane: 'hazards', interactive: false }).addTo(motionLayer);
+    const lbl = L.divIcon({ className: '', html: '<div class="windarrow" style="opacity:' + op + '">' + dirWord + ' ' + Math.round(sp) + ' mph' + (b.id === hitBlob ? ' · toward you' : '') + '</div>', iconSize: null, iconAnchor: [0, -6] });
+    L.marker(a0, { icon: lbl, pane: 'hazards', interactive: false }).addTo(motionLayer);
+  }
+  // where and when it enters your hit zone
+  if (res && res.hit && st.loc) {
+    const ang = (res.hit.fromBearing || 0) * Math.PI / 180, dMi = S.hitMi || 3;
+    const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+    const eta = Math.max(0, res.hit.etaMin - radarLag());
+    L.circleMarker([lat, lon], { pane: 'hazards', radius: 7, color: '#fff', weight: 2, fillColor: '#ff9100', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
+    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + clock(Date.now() + eta * 60000)) + '</div>', iconSize: null, iconAnchor: [-10, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+  } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
+    const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
+    const lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+    L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="windarrow" style="font-size:12px">closest approach · ' + Math.max(1, Math.round(dMi)) + ' mi</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+  }
+}
 // Hail layer: radar cores from the nowcast grid, plus hail sizes from NWS severe-weather warning parameters.
 function drawHail() {
   hailLayer.clearLayers(); if (!S.layers.hail) return;
