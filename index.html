@@ -432,30 +432,33 @@ function countRain(I, w, x0, y0, x1, y1) {
 
 // Block matching: find shift (u,v) such that B(x,y) ~ A(x-u, y-v) within the box.
 function bestShift(A, B, w, x0, y0, x1, y1, S) {
-  const n = 2 * S + 1, errs = new Float64Array(n * n);
-  let best = Infinity, bu = 0, bv = 0, sum = 0;
+  // Normalised cross-correlation of the newer field B with the older field A shifted by (u, v). Plain absolute difference was
+  // biased: when a rain mass sits near the edge of the window, shifts that slide it *out* of the window score well simply
+  // because less unmatched rain remains, which can point the motion the wrong way. NCC compares shape, not mass.
+  const n = 2 * S + 1, scores = new Float64Array(n * n);
+  let bb = 0; for (let y = y0; y <= y1; y++) { const rb = y * w; for (let x = x0; x <= x1; x++) bb += B[rb + x] * B[rb + x]; }
+  if (bb <= 0) return { u: 0, v: 0, conf: 0, edge: false };
+  let best = -Infinity, bu = 0, bv = 0, sum = 0;
   for (let v = -S; v <= S; v++) for (let u = -S; u <= S; u++) {
-    let e = 0;
+    let ab = 0, aa = 0;
     for (let y = y0; y <= y1; y++) {
       const rb = y * w, ra = (y - v) * w - u;
-      for (let x = x0; x <= x1; x++) {
-        const diff = B[rb + x] - A[ra + x];
-        e += diff < 0 ? -diff : diff;
-      }
+      for (let x = x0; x <= x1; x++) { const a = A[ra + x]; if (a > 0) { aa += a * a; ab += a * B[rb + x]; } }
     }
-    errs[(v + S) * n + (u + S)] = e; sum += e;
-    if (e < best || (e === best && Math.abs(u) + Math.abs(v) < Math.abs(bu) + Math.abs(bv))) { best = e; bu = u; bv = v; }
+    const sc = aa > 0 ? ab / Math.sqrt(aa * bb) : 0;
+    scores[(v + S) * n + (u + S)] = sc; sum += sc;
+    if (sc > best || (sc === best && Math.abs(u) + Math.abs(v) < Math.abs(bu) + Math.abs(bv))) { best = sc; bu = u; bv = v; }
   }
   const mean = sum / (n * n);
-  const conf = mean > 0 ? 1 - best / mean : 0;
+  const conf = best > 0 ? Math.max(0, (best - mean) / Math.max(1e-6, 1 - mean)) * best : 0;   // how much the peak stands out, scaled by how good the match is
   const edge = Math.abs(bu) === S || Math.abs(bv) === S;
-  let du = 0, dv = 0;   // sub-cell refinement (parabola fit)
+  let du = 0, dv = 0;   // sub-cell refinement (parabola fit on the peak)
   if (!edge) {
-    const at = (u, v) => errs[(v + S) * n + (u + S)];
+    const at = (u, v) => scores[(v + S) * n + (u + S)];
     const em = at(bu - 1, bv), ep = at(bu + 1, bv), den = em - 2 * best + ep;
-    if (den > 0) du = Math.max(-0.5, Math.min(0.5, (em - ep) / (2 * den)));
+    if (den < 0) du = Math.max(-0.5, Math.min(0.5, (em - ep) / (2 * den)));
     const fm = at(bu, bv - 1), fp = at(bu, bv + 1), den2 = fm - 2 * best + fp;
-    if (den2 > 0) dv = Math.max(-0.5, Math.min(0.5, (fm - fp) / (2 * den2)));
+    if (den2 < 0) dv = Math.max(-0.5, Math.min(0.5, (fm - fp) / (2 * den2)));
   }
   return { u: bu + du, v: bv + dv, conf, edge };
 }
@@ -724,7 +727,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.07x';
+const APP_VERSION = '2026.11.07y';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {

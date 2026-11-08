@@ -163,32 +163,37 @@ public static class NowcastEngine
     /// <summary>Block matching: find (u,v) such that B(x,y) ≈ A(x-u, y-v) within the box.</summary>
     private static Shift BestShift(float[] A, float[] B, int w, int x0, int y0, int x1, int y1, int S)
     {
+        // Normalised cross-correlation (see the page's bestShift): absolute difference was biased toward shifts that slide an
+        // edge-of-window rain mass out of the window, which could reverse the motion.
         int n = 2 * S + 1;
-        var errs = new double[n * n];
-        double best = double.PositiveInfinity, sum = 0; int bu = 0, bv = 0;
+        var scores = new double[n * n];
+        double bb = 0; for (int y = y0; y <= y1; y++) { int rb = y * w; for (int x = x0; x <= x1; x++) bb += (double)B[rb + x] * B[rb + x]; }
+        if (bb <= 0) return new Shift(0, 0, 0, false);
+        double best = double.NegativeInfinity, sum = 0; int bu = 0, bv = 0;
         for (int v = -S; v <= S; v++)
             for (int u = -S; u <= S; u++)
             {
-                double e = 0;
+                double ab = 0, aa = 0;
                 for (int y = y0; y <= y1; y++)
                 {
                     int rb = y * w, ra = (y - v) * w - u;
-                    for (int x = x0; x <= x1; x++) e += Math.Abs(B[rb + x] - A[ra + x]);
+                    for (int x = x0; x <= x1; x++) { double a = A[ra + x]; if (a > 0) { aa += a * a; ab += a * B[rb + x]; } }
                 }
-                errs[(v + S) * n + (u + S)] = e; sum += e;
-                if (e < best || (e == best && Math.Abs(u) + Math.Abs(v) < Math.Abs(bu) + Math.Abs(bv))) { best = e; bu = u; bv = v; }
+                double sc = aa > 0 ? ab / Math.Sqrt(aa * bb) : 0;
+                scores[(v + S) * n + (u + S)] = sc; sum += sc;
+                if (sc > best || (sc == best && Math.Abs(u) + Math.Abs(v) < Math.Abs(bu) + Math.Abs(bv))) { best = sc; bu = u; bv = v; }
             }
         double mean = sum / (n * n);
-        double conf = mean > 0 ? 1 - best / mean : 0;
+        double conf = best > 0 ? Math.Max(0, (best - mean) / Math.Max(1e-6, 1 - mean)) * best : 0;
         bool edge = Math.Abs(bu) == S || Math.Abs(bv) == S;
         double du = 0, dv = 0;
         if (!edge)
         {
-            double At(int u, int v) => errs[(v + S) * n + (u + S)];
+            double At(int u, int v) => scores[(v + S) * n + (u + S)];
             double em = At(bu - 1, bv), ep = At(bu + 1, bv), den = em - 2 * best + ep;
-            if (den > 0) du = Math.Clamp((em - ep) / (2 * den), -0.5, 0.5);
+            if (den < 0) du = Math.Clamp((em - ep) / (2 * den), -0.5, 0.5);
             double fm = At(bu, bv - 1), fp = At(bu, bv + 1), den2 = fm - 2 * best + fp;
-            if (den2 > 0) dv = Math.Clamp((fm - fp) / (2 * den2), -0.5, 0.5);
+            if (den2 < 0) dv = Math.Clamp((fm - fp) / (2 * den2), -0.5, 0.5);
         }
         return new Shift(bu + du, bv + dv, conf, edge);
     }
