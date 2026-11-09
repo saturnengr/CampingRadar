@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10g';
+const APP_VERSION = '2026.11.10h';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -981,20 +981,39 @@ function tone(freq, start, dur, type, vol) {
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   o.connect(g).connect(a.destination); o.start(t0); o.stop(t0 + dur + 0.05);
 }
-function playChime(kind) {
+/* ---- The sound set. Each alert kind has its own voice so a Sentinel display can be understood from the next room:
+   info      one soft note                      heads-up pill appearing (gusts, fog, UV…)
+   rain      rising three-note chime ×2         rain tracked toward you
+   imminent  the same, faster, ×3               rain within ten minutes / on you
+   lightning three sharp high ticks ×2          lightning inside ten miles
+   hail      falling three-note chime ×2        hail-capable core heading your way
+   hazard    low-high "alert" pair ×3           flood, wildfire, whiteout nearby
+   warning   alternating two-tone, 3 s          NWS severe thunderstorm / flash flood warning (repeats every 20 s until acknowledged)
+   tornado   the two-tone, longer and louder    tornado warning (repeats until acknowledged)
+   message   quick two-note pop                 a message from your group
+   clear     soft falling pair                  the threat has passed
+   A Sentinel display plays everything a little louder. ---- */
+const SOUND_KINDS = ['info', 'rain', 'imminent', 'lightning', 'hail', 'hazard', 'warning', 'tornado', 'message', 'clear'];
+function playSound(kind) {
   if (!S.sound) return;
   const a = audio(); if (!a) return;
   if (a.state !== 'running') a.resume().catch(() => {});
-  const notes = [523.25, 659.25, 783.99];
-  const reps = kind === 'imminent' ? 3 : 2, gap = kind === 'imminent' ? 0.9 : 1.4, step = kind === 'imminent' ? 0.16 : 0.25;
-  for (let r = 0; r < reps; r++) notes.forEach((f, i) => tone(f, r * gap + i * step, 0.9, 'sine', 0.7));
+  const v = S.activity === 'sentinel' ? 1.25 : 1, up = [523.25, 659.25, 783.99], down = [783.99, 659.25, 523.25];
+  switch (kind) {
+    case 'info': tone(659.25, 0, 0.5, 'sine', 0.45 * v); break;
+    case 'rain': for (let r = 0; r < 2; r++) up.forEach((f, i) => tone(f, r * 1.4 + i * 0.25, 0.9, 'sine', 0.7 * v)); break;
+    case 'imminent': for (let r = 0; r < 3; r++) up.forEach((f, i) => tone(f, r * 0.9 + i * 0.16, 0.9, 'sine', 0.75 * v)); break;
+    case 'lightning': for (let r = 0; r < 2; r++) for (let i = 0; i < 3; i++) tone(1760, r * 0.9 + i * 0.15, 0.07, 'square', 0.35 * v); break;
+    case 'hail': for (let r = 0; r < 2; r++) down.forEach((f, i) => tone(f, r * 1.2 + i * 0.22, 0.7, 'sine', 0.7 * v)); break;
+    case 'hazard': for (let r = 0; r < 3; r++) { tone(440, r * 0.8, 0.25, 'triangle', 0.7 * v); tone(659.25, r * 0.8 + 0.27, 0.35, 'triangle', 0.7 * v); } break;
+    case 'warning': for (let i = 0; i < 12; i++) tone(i % 2 ? 960 : 853, i * 0.25, 0.24, 'triangle', 0.9 * v); break;
+    case 'tornado': for (let i = 0; i < 24; i++) tone(i % 2 ? 960 : 853, i * 0.25, 0.24, 'sawtooth', 1.0 * v); break;
+    case 'message': tone(660, 0, 0.12, 'sine', 0.5 * v); tone(990, 0.14, 0.18, 'sine', 0.5 * v); break;
+    case 'clear': tone(659.25, 0, 0.45, 'sine', 0.4 * v); tone(523.25, 0.4, 0.7, 'sine', 0.4 * v); break;
+  }
 }
-function playWarning() {
-  if (!S.sound) return;
-  const a = audio(); if (!a) return;
-  if (a.state !== 'running') a.resume().catch(() => {});
-  for (let i = 0; i < 12; i++) tone(i % 2 ? 960 : 853, i * 0.25, 0.24, 'triangle', 0.9);
-}
+function playChime(kind) { playSound(kind === 'imminent' ? 'imminent' : 'rain'); }
+function playWarning() { playSound((st.alerts || []).some(a => /tornado/i.test(a.event || '') && !S.ack[a.id]) ? 'tornado' : 'warning'); }
 document.addEventListener('pointerdown', () => { const a = audio(); if (a && a.state !== 'running') a.resume().then(updateSoundChip).catch(() => {}); }, true);
 
 /* -------------------------------- map ------------------------------ */
@@ -1761,7 +1780,7 @@ function overlayLightning(out) {
 // Lightning within 10 mi chimes even during a rain snooze (once per episode, re-armed after 30 quiet minutes).
 function handleLightningEvent(lvl) {
   const e = st.ltEvt;
-  if (lvl === 'alarm') { if (!e.active && Date.now() - e.sentMs > 30 * 60000) { e.active = true; e.sentMs = Date.now(); playChime('imminent'); speakAlert('Lightning within ten miles. Get to shelter.'); } }
+  if (lvl === 'alarm') { if (!e.active && Date.now() - e.sentMs > 30 * 60000) { e.active = true; e.sentMs = Date.now(); playSound('lightning'); speakAlert('Lightning within ten miles. Get to shelter.'); } }
   else e.active = false;
 }
 
@@ -2277,6 +2296,8 @@ function renderHeadsUp() {
   $('#huHdr').textContent = 'Heads-up · ' + (ACTIVITIES[S.activity] || 'Camping').replace(/ \(.*\)/, '');
   $('#huRow').innerHTML = items.map((a, i) => '<button class="hu ' + a.sev + '" data-hu="' + i + '">' + esc(a.title) + '</button>').join('');
   wrap.hidden = items.length === 0;
+  // a new red heads-up gets one soft note (not on first render, not while snoozed)
+  const sevKeys = items.filter(a => a.sev === 'sev').map(a => a.key); if (st.huSeen && sevKeys.some(k => !st.huSeen.has(k)) && Date.now() >= S.snoozeUntil) playSound('info'); st.huSeen = new Set(sevKeys);
   renderPillRow();
 }
 $('#huRow').addEventListener('click', e => {
@@ -2395,8 +2416,8 @@ function bearingTo(a, b) { const r = Math.PI / 180, dLon = (b.lon - a.lon) * r; 
 function handleHazardEvents() {
   const n = st.hz.nearest || {}, e = st.hzEvt;
   const fireClose = n.fire && n.fire.d <= 10, floodClose = (n.gauge && n.gauge.d <= 10 && n.gauge.rank >= 3) || (n.floodAlert && n.floodAlert.warning && n.floodAlert.bounds.contains(L.latLng(st.loc.lat, st.loc.lon)));
-  if (fireClose && !e.fire) { e.fire = true; playChime('imminent'); speakAlert('Wildfire within ten miles.'); } if (!fireClose) e.fire = false;
-  if (floodClose && !e.flood) { e.flood = true; playChime('imminent'); speakAlert('Flooding nearby.'); } if (!floodClose) e.flood = false;
+  if (fireClose && !e.fire) { e.fire = true; playSound('hazard'); speakAlert('Wildfire within ten miles.'); } if (!fireClose) e.fire = false;
+  if (floodClose && !e.flood) { e.flood = true; playSound('hazard'); speakAlert('Flooding nearby.'); } if (!floodClose) e.flood = false;
 }
 
 // Wind arrows: a grid of points across the view from Open-Meteo (current conditions, mph)
@@ -2532,7 +2553,7 @@ function renderStatus() {
 function chimeIfAllowed(kind) { if (Date.now() >= S.snoozeUntil) playChime(kind); }
 function handleWhiteout() {
   const white = st.wx.visMi != null && st.wx.visMi <= 0.3 && precipType() !== 'rain', e = st.evt;
-  if (white && !e.whiteout) { e.whiteout = true; playChime('imminent'); speakAlert('Whiteout conditions: visibility under a quarter mile in ' + precipType() + '.'); }
+  if (white && !e.whiteout) { e.whiteout = true; playSound('hazard'); speakAlert('Whiteout conditions: visibility under a quarter mile in ' + precipType() + '.'); }
   if (!white) e.whiteout = false;
 }
 function handleRainEvent(level) {
@@ -2542,8 +2563,10 @@ function handleRainEvent(level) {
   if (threat) {
     e.clear = 0;
     if (!e.active) { e.active = true; e.imminentDone = close; if (Date.now() >= S.snoozeUntil) { chimeIfAllowed(close ? 'imminent' : 'rain'); speakAlert($('#statusMain').textContent); } }
+    // a hail-capable core (58 dBZ and up) among the arriving rain gets its own sound once per approach
+    const hit = st.nc && st.nc.res && st.nc.res.hit; if (hit && hit.maxDbz >= 58 && !e.hail) { e.hail = true; if (Date.now() >= S.snoozeUntil) { setTimeout(() => playSound('hail'), 3500); speakAlert('Hail-capable storm heading your way.'); } }
     else if (close && !e.imminentDone) { e.imminentDone = true; if (Date.now() >= S.snoozeUntil) { chimeIfAllowed('imminent'); speakAlert($('#statusMain').textContent); } }
-  } else if (e.active && ++e.clear >= 2) { e.active = false; e.imminentDone = false; }
+  } else if (e.active && ++e.clear >= 2) { e.active = false; e.imminentDone = false; e.hail = false; if (Date.now() >= S.snoozeUntil) playSound('clear'); }
 }
 
 /* ------------------------- alerts on this device (push) ------------ */
@@ -3785,7 +3808,7 @@ $('#msgRow').addEventListener('click', async e => {
 });
 function showMessage(m) {
   const chip = $('#msgChip'); chip.hidden = false; chip.innerHTML = '<b>' + escapeHtml(msgFrom(m)) + ':</b> ' + escapeHtml(m.text) + ' <span class="x">✕</span>'; chip.dataset.msgId = m.id;
-  tone(660, 0, 0.12, 'sine', 0.5); tone(990, 0.14, 0.18, 'sine', 0.5);
+  playSound('message');
   if (S.brief.speakAlerts) speak((lang() === 'es' ? msgFrom(m) + ' dice: ' : msgFrom(m) + ' says: ') + m.text, { queue: true });
   clearTimeout(fam.chipTimer); fam.chipTimer = setTimeout(() => { chip.hidden = true; }, 5 * 60000);
 }
@@ -4006,7 +4029,8 @@ function openSettings(tab) {
       '<div class="row"><label>Radar opacity</label><input type="range" min="0.3" max="1" step="0.05" data-slider="opacity" value="' + S.opacity + '"></div>') +
     pane('alerts', segRows('alerts') +
       '<div class="row"><label>Chime volume</label><input type="range" min="0" max="1" step="0.05" data-slider="volume" value="' + S.volume + '">' +
-      '<div class="btns"><button data-act="rain">Test rain chime</button><button data-act="warn">Test warning alarm</button></div></div>' +
+      '<div class="muted" style="font-size:13px;margin-top:8px">Each kind of alert has its own sound — tap to hear them' + (S.activity === 'sentinel' ? ' (a Sentinel display plays them louder)' : '') + '</div>' +
+      '<div class="btns" style="flex-wrap:wrap">' + SOUND_KINDS.map(k => '<button data-sound="' + k + '" style="min-height:36px;font-size:13px;padding:0 10px">' + { info: 'Heads-up', rain: 'Rain coming', imminent: 'Rain imminent', lightning: 'Lightning', hail: 'Hail', hazard: 'Flood / fire', warning: 'NWS warning', tornado: 'Tornado', message: 'Message', clear: 'All clear' }[k] + '</button>').join('') + '</div></div>' +
       '<div class="row"><label>Alerts on this device (needs the backend)</label><div id="pushRow"></div></div>' +
       '<div class="row" style="color:var(--muted);font-size:14px">Tornado, severe thunderstorm, flash flood, flood, hurricane, tropical storm, storm surge, extreme wind, tsunami, blizzard, ice storm, winter storm, extreme cold and avalanche warnings always sound, even when snoozed. A whiteout (visibility under a quarter mile in snow) chimes once. Lightning within 10 miles, a wildfire within 10 miles and major river flooding nearby chime once each.</div>') +
     pane('brief', '<div class="row"><div class="btns"><button data-act="brief-now">Play a briefing now</button></div></div>' +
@@ -4090,8 +4114,7 @@ $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeM
 $('#sheet').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.act === 'close') return closeModal();
-  if (b.dataset.act === 'rain') return playChime('rain');
-  if (b.dataset.act === 'warn') return playWarning();
+  if (b.dataset.sound) return playSound(b.dataset.sound);
   if (b.dataset.tab) { settingsTab = b.dataset.tab; $('#sheet').querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); $('#sheet').querySelectorAll('.tabpane').forEach(p => p.hidden = p.dataset.pane !== settingsTab); return; }
   if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
   if (b.dataset.act && (b.dataset.act.startsWith('fam-') || b.dataset.act === 'go-account')) { familyAction(b); return; }
