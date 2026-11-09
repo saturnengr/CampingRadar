@@ -27,7 +27,8 @@ LeadTime is three assets wearing one app, and each one spins off products on its
 
 ### Hardware follow-ons
 
-- **Ruggedized cellular Sentinel** — the LTE tablet in an IP65 case with solar panel and mast, for deer camps, remote cabins, ranch gates. The trailer build is where the power and antenna lessons come from.
+- **Outdoor Sentinel display** — the LTE tablet in an IP65 case with solar panel and mast, but only where people actually gather outdoors and want the picture without pulling out a phone: a pool deck, marina office, campground pavilion, ball field, job-site trailer, the porch at a hunting camp. A display nobody stands in front of has no point. Horn and strobe optional. The trailer build is where the power and antenna lessons come from.
+- **Remote sensor node** — no screen. Cellular or LoRa, solar, mounted wherever the *measurement* matters and no airport or radar can see: a rain gauge and wind sensor on the lease, a pressure trend at the deer camp, a water-level float on the stock tank or the low-water crossing. Reports to the phone or the Sentinel at the house (“the north pasture got 1.3 inches overnight and the crossing is up”). This is the weather station from the cross-cutting list in an outdoor package, and each one is a ledger gauge.
 - **Weather tag** — a \~$40 e-ink or LED puck that pairs to the main display and shows green / yellow / red and the ETA, for the kids’ tent or the dock. Cheap, high attach rate per family.
 - **Vehicle integration** — Android Auto card for RVers in motion; arrival math changes when the observer is moving.
 
