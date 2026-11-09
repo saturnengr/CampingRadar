@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10e';
+const APP_VERSION = '2026.11.10f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2309,7 +2309,7 @@ $('#sheet').addEventListener('click', e => {   // reply chips inside the message
   e.stopPropagation();
 }, true);
 window.addEventListener('resize', () => { renderPillRow(); if (typeof renderStatus === 'function' && st.nc) renderStatus(); });
-$('#daysToggle').addEventListener('click', () => { const open = document.body.classList.toggle('daysOpen'); $('#daysToggle').textContent = open ? '3-day ▴' : '3-day ▾'; });
+$('#daysToggle').addEventListener('click', () => { const open = document.body.classList.toggle('daysOpen'); st.daysManual = open; $('#daysToggle').textContent = open ? '3-day ▴' : '3-day ▾'; setTimeout(checkMapSize, 60); });
 /* ---- Outlook (Pro): the next 12 hours in one strip. Hours 0–2 come from the radar tracker (honest range of extrapolation);
    beyond that the NWS hourly forecast (rain chance, thunder chance) gives the longer lead the radar cannot. ---- */
 function computeOutlook() {
@@ -2503,7 +2503,16 @@ function renderStatus() {
   const bar = $('#statusbar');
   bar.className = s.cls;
   const urgent = isPhone();   // phones: the status bar always leads and the banner stays compact, green included, so the screen never rearranges itself
-  if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); document.body.classList.remove('daysOpen'); $('#daysToggle').hidden = !urgent; $('#daysToggle').textContent = '3-day ▾'; setTimeout(checkMapSize, 60); }
+  if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); $('#daysToggle').hidden = !urgent; setTimeout(checkMapSize, 60); }
+  // the three day cards show by default while the sky is clear (green) and fold away when something is going on; a manual tap on the
+  // 3-day button overrides that until the status colour next changes
+  if (urgent) {
+    const calm = s.cls === 'green' || s.cls === 'grey';
+    if (st.daysCls !== s.cls) { st.daysCls = s.cls; st.daysManual = null; }
+    const open = st.daysManual != null ? st.daysManual : calm;
+    if (document.body.classList.contains('daysOpen') !== open) { document.body.classList.toggle('daysOpen', open); setTimeout(checkMapSize, 60); }
+    $('#daysToggle').textContent = open ? '3-day ▴' : '3-day ▾';
+  }
   s.main = precipify(s.main); s.sub = precipify(s.sub);
   $('#statusMain').textContent = s.main;
   let sub = s.sub;
