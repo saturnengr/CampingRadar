@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10f';
+const APP_VERSION = '2026.11.10g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1682,6 +1682,7 @@ async function runNowcast() {
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
       { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
+    res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, S.threshDbz, radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
     // beyond the two hours the tracker trusts, a straight-line look out to three hours: informational only (blue), never an alert
     if (!res.hit) { const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: 180, maxRingMi: 50, minHitCells: 6 }, labelled[2].labels); res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null; }
@@ -2494,7 +2495,10 @@ function computeStatus() {
     out.sub = (motion.ok && motion.speedMph >= 3 ? 'Closest ≈ ' + Math.max(1, Math.round(p.closestMi)) + ' mi · ' : '') + (moving || 'Movement unclear') + (nt && nt.word === 'strengthening' ? ' · nearest storm strengthening' : nt && nt.word === 'weakening' ? ' · nearest storm weakening' : '');
   } else {
     out.cls = 'green'; out.main = 'No rain heading your way';
-    out.sub = res.nearest ? '' : res.faint ? 'Only very light echoes within 50 mi (nearest ' + Math.max(1, Math.round(res.faint.distMi)) + ' mi ' + compass(res.faint.bearing) + ') — below your "count as rain" level' : 'Clear within 50 miles';
+    // "clear within 50 miles" is not the whole picture on a 150-mile display: say where the nearest rain in the window is and what it is doing
+    const far = !res.nearest && res.nearestAny && res.nearestAny.distMi > 50 ? res.nearestAny : null;
+    const farNote = far ? ' · nearest rain ' + Math.round(far.distMi) + ' mi ' + compass(far.bearing) + (motion.ok && motion.speedMph >= 3 ? ', moving ' + compass(motion.headingDeg) + ' and not toward you' : '') : '';
+    out.sub = (res.nearest ? '' : res.faint ? 'Only very light echoes within 50 mi (nearest ' + Math.max(1, Math.round(res.faint.distMi)) + ' mi ' + compass(res.faint.bearing) + ') — below your "count as rain" level' : 'Clear within 50 miles') + farNote;
   }
   return overlayLightning(out);
 }
@@ -3330,6 +3334,7 @@ function statusES(t) {
     .replace(/Rain to the (\w+) is not getting closer — likely evaporating at its edge/g, (m, d) => 'La lluvia al ' + dirES(d) + ' no se acerca; probablemente se evapora en su borde')
     .replace(/Its cells move (\d+) mph but the edge has held near (\d+) mi for (\d+) min/g, 'Sus celdas se mueven a $1 mph pero el borde se ha mantenido a unas $2 millas durante $3 minutos').replace(/(light|moderate|heavy|very heavy) rain possible if it holds together/g, (m, i) => 'posible lluvia ' + INTENSITY_ES[i[0].toUpperCase() + i.slice(1)] + ' si se mantiene')
     .replace(/edge closing at (\d+) mph/g, 'el borde se acerca a $1 mph').replace(/ and the air is dry \(dew point (\d+)° below the temperature\), so it may evaporate before reaching the ground/g, ' y el aire está seco (punto de rocío $1° por debajo de la temperatura), así que puede evaporarse antes de llegar al suelo')
+    .replace(/nearest rain (\d+) mi (\w+), moving (\w+) and not toward you/g, (m, d, dir, h) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir) + ', moviéndose al ' + dirES(h) + ' y no hacia ti').replace(/nearest rain (\d+) mi (\w+)$/g, (m, d, dir) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir))
     .replace(/nearer rain (\d+) mi (\w+) passes to the (\w+)/g, (m, d, dir, p) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir) + ' pasa hacia el ' + dirES(p))
     .replace(/Rain (\d+) mi (\w+) could reach you in (?:about )?(.+)/g, (m, d, dir, t) => 'Lluvia a ' + d + ' millas al ' + dirES(dir) + ' podría llegar en ' + (/^just/.test(t) ? '' : 'unas ') + t.replace('just over', 'poco más de').replace('just under', 'poco menos de')).replace(/Straight-line track, ≈ (\S+ \S+) — beyond the two hours the tracker trusts/g, 'Trayectoria en línea recta, hacia las $1; más allá de las dos horas en que el rastreador es fiable')
     .replace(/Light rain may reach you ≈ (.+)/g, 'Lluvia ligera podría llegar hacia las $1').replace(/Low confidence — NWS shows (\d+)% chance in the next 2 hours/g, 'Poca confianza: el NWS da $1% de probabilidad en las próximas 2 horas')
