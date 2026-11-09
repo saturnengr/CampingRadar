@@ -38,11 +38,14 @@ public sealed class Recorder
     }
 
     public static string SafeName(string name) { var n = new string((name ?? "").Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray()); return n.Length == 0 ? "rec-" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmm") : n[..Math.Min(40, n.Length)]; }
+    /// <summary>Every recording gets its own folder: the name is stamped with the UTC start time (dallas → dallas-20261109-0655) unless
+    /// the caller already stamped it, so starting "dallas" again tomorrow never appends to today's frames.</summary>
     public Job Start(string name, double lat, double lon, double hours, double radiusMi = 200, int zoom = 8)
     {
-        name = SafeName(name);
-        if (_jobs.TryGetValue(name, out var existing) && existing.Running) return existing;
         var now = DateTimeOffset.UtcNow;
+        name = SafeName(name);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"-\d{8}-\d{4}$")) name = SafeName(name[..Math.Min(26, name.Length)] + "-" + now.ToString("yyyyMMdd-HHmm"));
+        if (_jobs.TryGetValue(name, out var existing) && existing.Running) return existing;
         var job = new Job { Name = name, Lat = lat, Lon = lon, RadiusMi = radiusMi, Zoom = zoom, StartedAt = now, EndsAt = now.AddHours(Math.Clamp(hours, 0.1, 48)), Running = true };
         var dir = Path.Combine(_dir, name); Directory.CreateDirectory(dir);
         double mpp = 156543.03392 * Math.Cos(lat * Math.PI / 180) / Math.Pow(2, zoom);
