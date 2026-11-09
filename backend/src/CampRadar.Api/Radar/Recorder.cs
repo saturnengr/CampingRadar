@@ -53,6 +53,23 @@ public sealed class Recorder
         return job;
     }
 
+    /// <summary>Running jobs with their geometry (for the verify worker to attach ground truth to each one).</summary>
+    public IEnumerable<Job> RunningJobs() => _jobs.Values.Where(j => j.Running).ToList();
+    /// <summary>A recording's geometry and window from its meta.json — works for finished recordings and across restarts. Frame
+    /// timestamps bound the window when they exist (a restarted recording of the same name appends to the folder).</summary>
+    public (double Lat, double Lon, double RadiusMi, DateTimeOffset From, DateTimeOffset To)? Meta(string name)
+    {
+        try
+        {
+            var dir = Path.Combine(_dir, SafeName(name)); var mf = Path.Combine(dir, "meta.json"); if (!File.Exists(mf)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(mf)); var r = doc.RootElement;
+            var from = r.GetProperty("startedAt").GetDateTimeOffset(); var to = r.GetProperty("endsAt").GetDateTimeOffset();
+            var ts = Directory.EnumerateFiles(dir, "*.png").Select(f => long.TryParse(Path.GetFileNameWithoutExtension(f), out var t) ? t : 0).Where(t => t > 0).ToList();
+            if (ts.Count > 0) { from = DateTimeOffset.FromUnixTimeMilliseconds(ts.Min()); var last = DateTimeOffset.FromUnixTimeMilliseconds(ts.Max()); if (last < to) to = last; }
+            return (r.GetProperty("lat").GetDouble(), r.GetProperty("lon").GetDouble(), r.GetProperty("radiusMi").GetDouble(), from, to);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "meta {Name}", name); return null; }
+    }
     public bool IsRunning(string prefix) => _jobs.Values.Any(j => j.Running && j.Name.StartsWith(prefix, StringComparison.Ordinal));
     public int RunningCount() => _jobs.Values.Count(j => j.Running);
     public IEnumerable<string> RunningNames() => _jobs.Values.Where(j => j.Running).Select(j => j.Name).ToList();

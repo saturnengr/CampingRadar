@@ -37,6 +37,11 @@ static SocketsHttpHandler IPv4Handler() => new()
 builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(25)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddHttpClient("graph", c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddHttpClient("obs", c => c.Timeout = TimeSpan.FromSeconds(20)).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
+builder.Services.AddHttpClient("madis", c =>   // NOAA's viewer builds each answer on request: 15–40 s is normal
+{
+    c.Timeout = TimeSpan.FromSeconds(100);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(builder.Configuration["UserAgent"] ?? "CampRadar/1.0 (+https://github.com/saturnengr/CampingRadar)");
+}).ConfigurePrimaryHttpMessageHandler(IPv4Handler);
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("noaa"));
 builder.Services.AddSingleton<MrmsClient>();
 builder.Services.AddSingleton<LightningStore>();
@@ -488,6 +493,11 @@ app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Result
 app.MapGet("/admin/verify", (HttpRequest r, CampRadar.Api.Verify.Ledger led, CampRadar.Api.Verify.VerifyWorker vw, int days = 30) => IsAdmin(r) ? Results.Ok(new { worker = new { vw.LastCycle, vw.LastNote, points = vw.Points.Select(p => new { p.Id, p.Name }) }, summary = led.Summary(Math.Clamp(days, 1, 400)) }) : Results.Unauthorized());
 app.MapGet("/admin/verify.csv", (HttpRequest r, CampRadar.Api.Verify.Ledger led, int days = 90) => IsAdmin(r) ? Results.Text(led.Csv(Math.Clamp(days, 1, 400)), "text/csv") : Results.Unauthorized());
 app.MapPost("/admin/verify/run", async (HttpRequest r, CampRadar.Api.Verify.VerifyWorker vw, CancellationToken ct) => IsAdmin(r) ? Results.Ok(new { note = await vw.RunOnceAsync(ct) }) : Results.Unauthorized());
+// MADIS ground truth for a finished recording (one past-time query per hour of its window, in the background); GET shows progress.
+app.MapPost("/admin/verify/madis", (HttpRequest r, CampRadar.Api.Verify.VerifyWorker vw, string name) => { if (!IsAdmin(r)) return Results.Unauthorized(); vw.StartBackfill(name); return Results.Ok(new { name = Recorder.SafeName(name), state = vw.Backfills.GetValueOrDefault(Recorder.SafeName(name)) }); });
+app.MapGet("/admin/verify/madis", (HttpRequest r, CampRadar.Api.Verify.VerifyWorker vw, MadisProvider madis) => IsAdmin(r) ? Results.Ok(new { enabled = madis.Enabled, queriesLastHour = madis.QueriesLastHour, backfills = vw.Backfills }) : Results.Unauthorized());
+// Live MADIS probe for a point (waits for the query): the stations the app would show there.
+app.MapGet("/admin/obs", async (HttpRequest r, StationObsClient obs, double lat, double lon, CancellationToken ct) => IsAdmin(r) ? Results.Ok(await obs.NearbyAsync(lat, lon, ct, canWait: true)) : Results.Unauthorized());
 app.MapPost("/admin/record/start", (HttpRequest r, Recorder rec, string name, double lat, double lon, double hours = 6, double radiusMi = 200) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();

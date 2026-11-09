@@ -15,66 +15,127 @@ public interface IStationProvider
 }
 
 /// <summary>
-/// NOAA MADIS Text/XML viewer (madisXmlPublicDir): surface mesonet (CWOP backyard stations, state networks) plus METAR, by bounding box.
-/// Needs the credentials MADIS Support issues after the free data application. Column names follow the viewer's CSV header; parsed by name.
+/// NOAA MADIS Text/XML viewer (madisXmlPublicDir), public anonymous tier: surface mesonet (CWOP backyard stations, HADS gauges,
+/// state networks, RWIS) plus METAR, by bounding box, for the current hour or any past nominal time. One query takes 15–40 s on
+/// NOAA's side (the result is then cached there), so this provider caches by half-degree cell for twenty minutes, keeps to an hourly
+/// query budget, and is normally warmed by the alert/verify workers before a person asks. SI in, US units out. Values carry MADIS QC flags; Q/B/X are dropped.
 /// </summary>
 public sealed class MadisProvider : IStationProvider
 {
-    private readonly HttpClient _http; private readonly string _user, _pass, _base; private readonly ILogger _log;
+    public sealed record Ob(string Id, string Provider, string Sub, double Lat, double Lon, double? ElevM, DateTimeOffset At,
+        double? TempF, double? DewF, double? Rh, double? DirDeg, double? WindMph, double? GustMph, double? PressureInHg, double? Rain1hIn, double? RateInHr, string PresentWx);
+    private readonly HttpClient _http; private readonly string _base; private readonly bool _enabled; private readonly int _budget; private readonly ILogger _log;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<DateTimeOffset> _recent = new();   // query times in the last hour (Madis:MaxQueriesPerHour, default 80)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset At, List<Ob> List)> _cache = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<List<Ob>>> _inflight = new();
     public string Name => "madis";
-    public bool Enabled => _user.Length > 0 && _pass.Length > 0;
+    public bool Enabled => _enabled;
     public MadisProvider(IHttpClientFactory f, IConfiguration cfg, ILogger<MadisProvider> log)
-    { _http = f.CreateClient("obs"); _user = cfg["Madis:User"] ?? ""; _pass = cfg["Madis:Password"] ?? ""; _base = (string.IsNullOrWhiteSpace(cfg["Madis:QueryUrl"]) ? "https://madis-data.ncep.noaa.gov/madisPublic1/cgi-bin/madisXmlPublicDir" : cfg["Madis:QueryUrl"]!).TrimEnd('/'); _log = log; }
+    {
+        _http = f.CreateClient("madis"); _log = log;
+        _enabled = !string.Equals(cfg["Madis:Enabled"], "false", StringComparison.OrdinalIgnoreCase);
+        _budget = int.TryParse(cfg["Madis:MaxQueriesPerHour"], out var b) ? Math.Clamp(b, 5, 1000) : 80;
+        _base = (string.IsNullOrWhiteSpace(cfg["Madis:QueryUrl"]) ? "https://madis-data.ncep.noaa.gov/madisPublic1/cgi-bin/madisXmlPublicDir" : cfg["Madis:QueryUrl"]!).TrimEnd('/');
+    }
+
+    /// <summary>True when the half-degree cell around the point has a fresh answer (so a caller can decide to wait or fall back).</summary>
+    public bool IsWarm(double lat, double lon) => _cache.TryGetValue(CellKey(lat, lon), out var c) && DateTimeOffset.UtcNow - c.At < CellTtl;
+    private static readonly TimeSpan CellTtl = TimeSpan.FromMinutes(20);
+    public int QueriesLastHour { get { while (_recent.TryPeek(out var t) && DateTimeOffset.UtcNow - t > TimeSpan.FromHours(1)) _recent.TryDequeue(out _); return _recent.Count; } }
+    private bool HasBudget() => QueriesLastHour < _budget;
+    private static string CellKey(double lat, double lon) => $"{Math.Round(lat * 2) / 2:F1},{Math.Round(lon * 2) / 2:F1}";
 
     public async Task<List<StationOb>> NearbyAsync(double lat, double lon, double radiusMi, CancellationToken ct)
     {
-        double dLat = radiusMi / 69.0, dLon = radiusMi / (69.0 * Math.Cos(lat * Math.PI / 180));
-        string F(double v) => v.ToString("F3", CultureInfo.InvariantCulture);
-        var list = new List<StationOb>();
-        foreach (var dataset in new[] { "mesonet", "metar" })
-        {
-            var url = $"{_base}?rdr=&time=0&minbck=-60&minfwd=0&recwin=4&dfltrsel=0&latll={F(lat - dLat)}&lonll={F(lon - dLon)}&latur={F(lat + dLat)}&lonur={F(lon + dLon)}&stanam=&stasel=0&pvdrsel=0&varsel=1&qcsel=1&xml=2&csvmiss=0&dataset={dataset}" +
-                      "&nvars=T&nvars=TD&nvars=RH&nvars=DD&nvars=FF&nvars=FFGUST&nvars=ALTSE&nvars=SLP&nvars=PCP1H&nvars=ELEV";
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes(_user + ":" + _pass)));
-            using var res = await _http.SendAsync(req, ct);
-            if (!res.IsSuccessStatusCode) { _log.LogWarning("MADIS {Dataset} query {Status}", dataset, res.StatusCode); continue; }
-            var text = await res.Content.ReadAsStringAsync(ct);
-            list.AddRange(ParseCsv(text, lat, lon, dataset == "metar"));
-        }
-        return list.Where(x => x.DistMi <= radiusMi).OrderBy(x => x.DistMi).ToList();
+        var obs = await CellAsync(lat, lon, ct);
+        return obs.Select(o => ToStation(o, lat, lon)).Where(x => x.DistMi <= radiusMi).OrderBy(x => x.DistMi).ToList();
     }
 
-    /// <summary>Tolerant CSV reader: finds the header row (contains STAID or LAT), maps columns by name, converts units (MADIS is SI).</summary>
-    internal static List<StationOb> ParseCsv(string text, double lat0, double lon0, bool official)
+    /// <summary>Latest observation per station in the ~±1° cell box around the point, cached ten minutes; concurrent callers share one fetch.</summary>
+    public Task<List<Ob>> CellAsync(double lat, double lon, CancellationToken ct)
     {
-        var lines = text.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList();
-        int hi = lines.FindIndex(l => l.Contains("LAT", StringComparison.OrdinalIgnoreCase) && l.Contains("LON", StringComparison.OrdinalIgnoreCase) && l.Contains(','));
+        var key = CellKey(lat, lon);
+        if (_cache.TryGetValue(key, out var c) && DateTimeOffset.UtcNow - c.At < CellTtl) return Task.FromResult(c.List);
+        if (!_inflight.ContainsKey(key) && !HasBudget())
+        {   // over the hourly budget: a stale cell is better than nothing; a cold one tells the caller to fall back
+            if (c.List is not null) return Task.FromResult(c.List);
+            throw new InvalidOperationException($"MADIS query budget ({_budget}/hour) spent");
+        }
+        return _inflight.GetOrAdd(key, _ => Fetch());
+        async Task<List<Ob>> Fetch()
+        {
+            try
+            {
+                double cLat = Math.Round(lat * 2) / 2, cLon = Math.Round(lon * 2) / 2;
+                var list = await RegionAsync(cLat - 0.95, cLon - 1.15, cLat + 0.95, cLon + 1.15, null, ct);
+                _cache[key] = (DateTimeOffset.UtcNow, list); if (_cache.Count > 400) _cache.Clear();
+                return list;
+            }
+            finally { _inflight.TryRemove(key, out _); }
+        }
+    }
+
+    /// <summary>
+    /// One viewer query: stations in the box reporting in the hour ending at <paramref name="nominal"/> (null = now), latest report per
+    /// station. Variables: position, T, TD, RH, wind, gust, altimeter/SLP, 1-h precipitation, precipitation rate, present weather.
+    /// </summary>
+    public async Task<List<Ob>> RegionAsync(double latS, double lonW, double latN, double lonE, DateTimeOffset? nominal, CancellationToken ct)
+    {
+        string F(double v) => v.ToString("F3", CultureInfo.InvariantCulture);
+        var url = $"{_base}?rdr=&time={(nominal is null ? "0" : nominal.Value.ToUniversalTime().ToString("yyyyMMdd_HHmm", CultureInfo.InvariantCulture))}&minbck=-59&minfwd=0&recwin=3&timefilter=0&dfltrsel=1&state=TX" +
+                  $"&latll={F(latS)}&lonll={F(lonW)}&latur={F(latN)}&lonur={F(lonE)}&stanam=&stasel=0&pvdrsel=0&varsel=1&qctype=0&qcsel=99&xml=5&csvmiss=0" +
+                  "&nvars=LAT&nvars=LON&nvars=ELEV&nvars=T&nvars=TD&nvars=RH&nvars=DD&nvars=FF&nvars=FFGUST&nvars=ALTSE&nvars=SLP&nvars=PCP1H&nvars=PCPRATE&nvars=PRESWEA";
+        var sw = System.Diagnostics.Stopwatch.StartNew(); _recent.Enqueue(DateTimeOffset.UtcNow);
+        var text = await _http.GetStringAsync(url, ct);
+        var list = ParseCsv(text);
+        _log.LogInformation("MADIS box {LatS:F1},{LonW:F1}–{LatN:F1},{LonE:F1} {When}: {N} stations in {Ms} ms", latS, lonW, latN, lonE, nominal?.ToString("yyyy-MM-dd HH:mm") ?? "now", list.Count, sw.ElapsedMilliseconds);
+        return list;
+    }
+
+    /// <summary>
+    /// The viewer wraps its CSV in an HTML page. Header: STAID,OBDATE,OBTIME,PVDR,SUBPVDR then each variable followed by a "D" QC-flag column.
+    /// Missing is -99999. Flags: V verified, S screened, C coarse, Z not checked keep their value; Q questioned, B bad, X rejected drop it.
+    /// </summary>
+    public static List<Ob> ParseCsv(string text)
+    {
+        var plain = System.Text.RegularExpressions.Regex.Replace(text, "<[^>]+>", "\n");
+        var lines = plain.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        int hi = lines.FindIndex(l => l.StartsWith("STAID", StringComparison.OrdinalIgnoreCase));
         if (hi < 0) return new();
-        var cols = lines[hi].Split(',').Select(c => c.Trim().Trim('"').ToUpperInvariant()).ToList();
-        int Col(params string[] names) { foreach (var n in names) { int i = cols.FindIndex(c => c == n || c.StartsWith(n + "_") || c.StartsWith(n + " ")); if (i >= 0) return i; } return -1; }
-        int cId = Col("STAID", "STATION", "ID"), cName = Col("STANAME", "NAME"), cLat = Col("LAT"), cLon = Col("LON"), cEl = Col("ELEV"), cTime = Col("OBSTIME", "TIME", "DATE"), cProv = Col("PROVIDER", "PVDR");
-        int cT = Col("T"), cTd = Col("TD"), cRh = Col("RH"), cDd = Col("DD"), cFf = Col("FF"), cG = Col("FFGUST"), cAlt = Col("ALTSE"), cSlp = Col("SLP"), cP = Col("PCP1H");
-        var outp = new List<StationOb>();
+        var cols = lines[hi].Split(',').Select(c => c.Trim().ToUpperInvariant()).ToList();
+        int Col(string n) => cols.IndexOf(n);
+        int cId = Col("STAID"), cDate = Col("OBDATE"), cTime = Col("OBTIME"), cProv = Col("PVDR"), cSub = Col("SUBPVDR");
+        int cLat = Col("LAT"), cLon = Col("LON"), cEl = Col("ELEV"), cT = Col("T"), cTd = Col("TD"), cRh = Col("RH"), cDd = Col("DD"), cFf = Col("FF"), cG = Col("FFGUST"),
+            cAlt = Col("ALTSE"), cSlp = Col("SLP"), cP = Col("PCP1H"), cRate = Col("PCPRATE"), cWx = Col("PRESWEA");
+        var latest = new Dictionary<string, Ob>();
         foreach (var line in lines.Skip(hi + 1))
         {
-            var f = line.Split(',').Select(x => x.Trim().Trim('"')).ToList(); if (f.Count < cols.Count - 2) continue;
-            double? G(int i) => i >= 0 && i < f.Count && double.TryParse(f[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > -900 && v < 90000 ? v : null;
+            if (!line.Contains(',')) continue;
+            var f = line.Split(',').Select(x => x.Trim()).ToList(); if (f.Count < cols.Count - 1) continue;
             string S(int i) => i >= 0 && i < f.Count ? f[i] : "";
+            double? G(int i)
+            {
+                if (i < 0 || i >= f.Count || !double.TryParse(f[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v <= -9000) return null;
+                var flag = i + 1 < f.Count && i + 1 < cols.Count && cols[i + 1] == "D" ? f[i + 1] : "";
+                return flag is "Q" or "B" or "X" ? null : v;
+            }
             var la = G(cLat); var lo = G(cLon); if (la is null || lo is null) continue;
-            var when = cTime >= 0 && DateTimeOffset.TryParse(S(cTime), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t) ? t : DateTimeOffset.UtcNow;
-            double? tempF = G(cT) is { } k ? (k > 150 ? (k - 273.15) * 9 / 5 + 32 : k * 9 / 5 + 32) : null;   // Kelvin (viewer default) or °C
-            double? dewF = G(cTd) is { } kd ? (kd > 150 ? (kd - 273.15) * 9 / 5 + 32 : kd * 9 / 5 + 32) : null;
-            double? wind = G(cFf) is { } w ? w * 2.23694 : null, gust = G(cG) is { } g ? g * 2.23694 : null;   // m/s → mph
-            double? pres = G(cSlp) is { } slp ? (slp > 2000 ? slp / 3386.39 : slp / 33.8639) : G(cAlt) is { } alt ? (alt > 2000 ? alt / 3386.39 : alt / 33.8639) : null;   // Pa or hPa → inHg
-            double? rain = G(cP) is { } r ? r / 25.4 : null;   // mm → in
-            double dist = Haversine(lat0, lon0, la.Value, lo.Value);
-            outp.Add(new StationOb(S(cId), S(cName).Length > 0 ? S(cName) : S(cId), S(cProv).Length > 0 ? S(cProv) : (official ? "METAR" : "MESONET"), Math.Round(dist, 1), la.Value, lo.Value, (G(cEl) ?? 0) * 3.28084,
-                (int)Math.Max(0, (DateTimeOffset.UtcNow - when).TotalMinutes), tempF, G(cRh), dewF, wind, gust, G(cDd), pres, rain, official || S(cProv).Contains("ASOS", StringComparison.OrdinalIgnoreCase) || S(cProv).Contains("RAWS", StringComparison.OrdinalIgnoreCase)));
+            if (!DateTimeOffset.TryParseExact(S(cDate) + " " + S(cTime), "MM/dd/yyyy HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)) continue;
+            double? K2F(double? k) => k is { } v ? (v > 150 ? (v - 273.15) * 9 / 5 + 32 : v * 9 / 5 + 32) : null;
+            double? pres = G(cSlp) is { } slp ? (slp > 2000 ? slp / 3386.39 : slp / 33.8639) : G(cAlt) is { } alt ? (alt > 2000 ? alt / 3386.39 : alt / 33.8639) : null;
+            var ob = new Ob(S(cId), S(cProv), S(cSub), la.Value, lo.Value, G(cEl), at, K2F(G(cT)), K2F(G(cTd)), G(cRh), G(cDd),
+                G(cFf) is { } w ? w * 2.23694 : null, G(cG) is { } g ? g * 2.23694 : null, pres,
+                G(cP) is { } r ? r * 1000 / 25.4 : null, G(cRate) is { } rr ? rr * 3600 / 25.4 : null, S(cWx));   // PCP1H is metres, PCPRATE mm/s (checked against -RA METARs: 0.0018 m ↔ 0.0005 mm/s)
+            if (!latest.TryGetValue(ob.Id, out var prev) || prev.At < ob.At) latest[ob.Id] = ob;
         }
-        return outp;
+        return latest.Values.ToList();
     }
-    public Task<PressureTrend?> TrendAsync(StationOb station, CancellationToken ct) => Task.FromResult<PressureTrend?>(null);   // the viewer is point-in-time; the app keeps its own 6-h history
+
+    private static bool Official(Ob o) => o.Provider.Contains("ASOS", StringComparison.OrdinalIgnoreCase) || o.Provider.Contains("MTR", StringComparison.OrdinalIgnoreCase) || o.Provider.Contains("AWOS", StringComparison.OrdinalIgnoreCase) || o.Provider.Contains("RAWS", StringComparison.OrdinalIgnoreCase);
+    private static string NetName(Ob o) => o.Provider switch { "APRSWXNET" => "CWOP", "ASOS-HFM" or "ASOS" => "ASOS", "OTHER-MTR" or "OTHER-HFM" or "NonFedAWOS" => "AWOS", "HADS" => "HADS gauge", var p => p };
+    public static StationOb ToStation(Ob o, double lat0, double lon0) => new(o.Id, o.Id, NetName(o), Math.Round(Haversine(lat0, lon0, o.Lat, o.Lon), 1), o.Lat, o.Lon, (o.ElevM ?? 0) * 3.28084,
+        (int)Math.Max(0, (DateTimeOffset.UtcNow - o.At).TotalMinutes), o.TempF, o.Rh, o.DewF, o.WindMph, o.GustMph, o.DirDeg, o.PressureInHg, o.Rain1hIn, Official(o));
+    public Task<PressureTrend?> TrendAsync(StationOb station, CancellationToken ct) => Task.FromResult<PressureTrend?>(null);   // the viewer is point-in-time; airports fall through to IEM history
     public static double Haversine(double lat1, double lon1, double lat2, double lon2)
     { double R = 3958.8, p = Math.PI / 180, a = Math.Sin((lat2 - lat1) * p / 2); a *= a; double b = Math.Sin((lon2 - lon1) * p / 2); b *= b; return 2 * R * Math.Asin(Math.Sqrt(a + Math.Cos(lat1 * p) * Math.Cos(lat2 * p) * b)); }
 }

@@ -85,11 +85,16 @@ public sealed class StationObsClient
     public bool Enabled => true;
     public string Source => Active.Name;
 
-    public async Task<NearbyObs?> NearbyAsync(double lat, double lon, CancellationToken ct)
+    public async Task<NearbyObs?> NearbyAsync(double lat, double lon, CancellationToken ct, bool canWait = false)
     {
         var key = $"{Math.Round(lat * 20) / 20:F2},{Math.Round(lon * 20) / 20:F2}";
         if (_cache.TryGetValue(key, out var hit) && DateTimeOffset.UtcNow - hit.At < TimeSpan.FromMinutes(5)) return hit;
         var prov = Active; List<StationOb> list;
+        // MADIS answers in 15–40 s the first time a region is asked for. A person waiting on the map gets IEM's airports now while
+        // MADIS warms in the background; the workers (which can wait) and every later call get the full mesonet list.
+        bool wait = prov is not MadisProvider m || m.IsWarm(lat, lon) || canWait;
+        bool standIn = false;
+        if (!wait && prov is MadisProvider cold) { _ = Task.Run(() => cold.CellAsync(lat, lon, CancellationToken.None)); prov = _iem; standIn = true; }
         try { list = await prov.NearbyAsync(lat, lon, 25, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException && prov != _iem) { _log.LogWarning(ex, "{Provider} failed; falling back to IEM", prov.Name); list = await _iem.NearbyAsync(lat, lon, 25, ct); prov = _iem; }
         var best = list.FirstOrDefault(x => x.Official && x.DistMi <= 8 && x.TempF is not null && x.AgeMin <= 75) ?? list.FirstOrDefault(x => x.TempF is not null && x.AgeMin <= 75);
@@ -102,7 +107,8 @@ public sealed class StationObsClient
             if (apt is not null) trend = await _iem.TrendAsync(apt, ct);
         }
         var result = new NearbyObs(list, best, trend, DateTimeOffset.UtcNow);
-        _cache[key] = result; if (_cache.Count > 3000) _cache.Clear();
+        if (!standIn) _cache[key] = result;   // an IEM stand-in while MADIS warms is not cached, so the next call gets the mesonet list
+        if (_cache.Count > 3000) _cache.Clear();
         return result;
     }
 }
