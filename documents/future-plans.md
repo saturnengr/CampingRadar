@@ -124,7 +124,7 @@ Ranked by effort against likely revenue:
 
 ## Decided: e-paper weather tag prototype (Nov 2026)
 
-- Hardware ordered: **Elecrow CrowPanel ESP32-S3 5.79" E-Paper HMI** ($31.90; 272×792 B/W, ESP32-S3 N8R8, rotary dial, SH1.0 battery connector with charger, USB-C). Plus a 3.7 V pouch cell, 2,000–3,000 mAh, JST-SH 1.0 mm plug (check polarity against the board's + mark before plugging in). Prototype in a few weeks.
+- Hardware ordered (9 Nov 2026): **2 × Elecrow CrowPanel ESP32-S3 5.79" E-Paper HMI** ($31.90 each; 272×792 B/W, ESP32-S3 N8R8, rotary dial, SH1.0 battery connector with charger, USB-C) and **2 × 3.7 V 4,000 mAh pouch cells**. One set for the bench, one left running for a real runtime test. Arrival checklist: dry-fit the battery plug unpowered (it is keyed and only fits one way), confirm the red wire lands on the socket's `+` (left side in Elecrow's photo); if red is on the right, swap the two crimp contacts in the plug housing — never leave a reversed battery connected. Then measure deep-sleep current. Prototype in a few weeks.
 - Why it works now: the backend computes the full verdict server-side (`/status`), so the ESP32 only displays; no tracking on the device. The wide strip matches the status bar: status line, big ETA, 12-hour sparkline.
 - Firmware plan (Arduino): captive-portal Wi-Fi setup, poll a small text `/tag` endpoint every 5 min (longer on green days), draw with GxEPD2 using partial refresh, buzzer for the ten tones, snooze on the dial, deep sleep between polls. Expected two to four weeks per charge.
 - Known gaps: B/W only (inverted bar for red), no speaker on the board (add a piezo), e-paper sluggish below 0 °C, no enclosure (3D print), Temu clones may differ from the wiki.
