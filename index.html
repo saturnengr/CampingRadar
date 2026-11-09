@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10b';
+const APP_VERSION = '2026.11.10c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1210,9 +1210,23 @@ function fitSidebar() {
     if (el.scrollHeight <= el.clientHeight + 2 && el.scrollTop) el.scrollTop = 0;   // a column that now fits must not stay scrolled
   } finally { sidebarFitBusy = false; }
 }
+// Radar watchdog: Android's WebView can quietly drop a background page's tile images without firing an error, and a wake that finds the
+// same scan times requests nothing new — so the loop comes back empty. Every few seconds, if the frame on show has no live tiles for the
+// current view, it is redrawn; three strikes rebuilds all the frame layers.
+let radarWatchAt = 0, radarStrikes = 0;
+function radarWatchdog() {
+  if (Date.now() - radarWatchAt < 6000 || document.visibilityState !== 'visible') return; radarWatchAt = Date.now();
+  const l = radarLayers[frameIdx]; if (!l || !l._map || !l._tiles) return;
+  const tiles = Object.values(l._tiles), current = tiles.filter(t => t.current), loaded = current.filter(t => t.loaded);
+  st.tileStats.onShow = loaded.length + '/' + current.length;
+  if (current.length === 0 || (loaded.length === 0 && Date.now() - (st.tileStats.at || 0) > 20000)) {
+    radarStrikes++; st.tileStats.watchdog = (st.tileStats.watchdog || 0) + 1;
+    if (radarStrikes >= 3) { radarStrikes = 0; buildRadarLayers(); } else l.redraw();
+  } else radarStrikes = 0;
+}
 function checkMapSize() {
   if (typeof assertBottomGap === 'function') assertBottomGap();
-  fitSidebar();
+  fitSidebar(); try { radarWatchdog(); } catch (e) {}
   const el = $('#map'), h = el.clientHeight, w = el.clientWidth, sz = map.getSize();
   if (!h || (h === sz.y && w === sz.x)) return;
   map.invalidateSize({ pan: false });
@@ -4035,7 +4049,7 @@ function renderDiag() {
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', hidden strip ' + st.navpad.hidden + ', layout ' + st.navpad.layoutH + ' / visible ' + st.navpad.visibleH + ' / inner ' + st.navpad.innerH + ' / screen ' + st.navpad.screenH + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
@@ -4146,7 +4160,7 @@ function applySentinel() {
   }
 }
 async function keepAwake() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen'); } catch (e) {} }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); refreshRadarTiles().then(runNowcast); refreshAlerts(); if (S.account && Date.now() - (S.account.checkedAt || 0) > 60000) refreshAccount(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); refreshRadarTiles().then(() => { radarLayers.forEach(l => { if (l._map) l.redraw(); }); return runNowcast(); }); refreshAlerts(); if (S.account && Date.now() - (S.account.checkedAt || 0) > 60000) refreshAccount(); } });
 
 /* -------------------------------- start ---------------------------- */
 $('#soundChip').addEventListener('click', () => { const a = audio(); if (a) a.resume().then(updateSoundChip); });
