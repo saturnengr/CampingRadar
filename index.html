@@ -782,7 +782,7 @@ const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 // Settings that belong to this device, kept in their own slot so nothing that arrives from the account copy can overwrite them
-const DEVICE_KEYS = ['bottomGap', 'layout', 'lowData', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName'], DEVICE_KEY = 'campRadar.device';
+const DEVICE_KEYS = ['bottomGap', 'layout', 'lowData', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName', 'welcomed'], DEVICE_KEY = 'campRadar.device';
 function loadDeviceSettings() { try { const d = JSON.parse(localStorage.getItem(DEVICE_KEY) || '{}'); for (const k of DEVICE_KEYS) if (d[k] != null) S[k] = d[k]; } catch (e) {} }
 function saveDeviceSettings() { try { const d = {}; for (const k of DEVICE_KEYS) if (S[k] != null) d[k] = S[k]; localStorage.setItem(DEVICE_KEY, JSON.stringify(d)); } catch (e) {} }
 loadDeviceSettings();
@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10h';
+const APP_VERSION = '2026.11.10i';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -878,7 +878,7 @@ async function redeemCode(code) {
 }
 // Settings that travel with the account. Device-bound things (push id, device id, token, backend address, last fix) stay local.
 // per-device settings never sync: the phone's navigation-bar gap, the tablet's sidebar layout and low-data mode would otherwise overwrite each other
-const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash', 'bottomGap', 'layout', 'lowData', 'pushEndpoint', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName']);   // activity and range are per device too: a Sentinel tablet and a camping phone on one account must not flip each other
+const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash', 'bottomGap', 'layout', 'lowData', 'pushEndpoint', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName', 'welcomed']);   // activity and range are per device too: a Sentinel tablet and a camping phone on one account must not flip each other
 const syncable = () => { const o = {}; for (const k of Object.keys(S)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; return o; };
 let syncTimer = null, syncBusy = false;
 function scheduleSync() { if (!S.account || !S.account.token || !BE()) return; clearTimeout(syncTimer); syncTimer = setTimeout(pushSettings, 4000); }
@@ -4104,10 +4104,34 @@ function renderDiag() {
     'Sound: ' + (!S.sound ? 'off (Settings)' : audio() ? audio().state : 'unavailable'),
   ].join('\n');
 }
-function closeModal() { $('#modal').hidden = true; if (speech.speaking && $('#briefText')) stopSpeaking(); if (history.state && history.state.sheet) history.back(); }
+/* ---- first run on this device: name it, pick the activity, optionally sign in. Shown once; dismissing it counts.
+   Devices set up before this page existed (a name or an account already saved) never see it. ---- */
+function welcomeHtml() {
+  const es = lang() === 'es', signed = signedIn();
+  const acts = Object.entries(ACTIVITIES).map(([k, v]) => '<option value="' + k + '"' + (k === S.activity ? ' selected' : '') + '>' + v + '</option>').join('');
+  return '<h2>' + (es ? 'Bienvenido a LeadTime' : 'Welcome to LeadTime') + '</h2>' +
+    '<div class="row"><div class="td">' + (es ? 'Radar en vivo, aviso de la lluvia con tiempo y el pronóstico para donde estés. Dos cosas rápidas y listo.' : 'Live radar, advance notice of rain, and the forecast for wherever you are. Two quick things and you are set.') + '</div></div>' +
+    '<div class="row"><label>' + (es ? 'Nombre de este dispositivo' : 'Name this device') + '</label><input id="welDevice" maxlength="24" autocomplete="off" value="' + escapeHtml(deviceName()) + '" ' + inputStyle + '>' +
+      '<div class="muted" style="font-size:13px;margin-top:4px">' + (es ? 'Aparece junto a tu nombre en los mensajes del grupo y distingue tu teléfono de tu tableta.' : 'Shown after your name on group messages, and tells your phone from your tablet.') + '</div></div>' +
+    '<div class="row"><label>' + (es ? '¿Qué vas a hacer?' : 'What are you doing?') + '</label><select id="welAct" data-ksel="activity" ' + inputStyle + '>' + acts + '</select>' +
+      '<div class="muted" style="font-size:13px;margin-top:4px">' + (es ? 'Ajusta los avisos y los consejos. Se cambia cuando quieras en Ajustes.' : 'Tunes the heads-ups and advice. Change it any time in Settings.') + '</div></div>' +
+    (signed
+      ? '<div class="row"><div class="tl">' + (es ? 'Sesión iniciada' : 'Signed in') + '</div><div class="td">' + escapeHtml(S.account.email) + '</div></div>'
+      : '<div class="row"><label>' + (es ? 'Correo (opcional)' : 'Email (optional)') + '</label><input id="welEmail" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="' + escapeHtml(st.signinEmail || '') + '" ' + inputStyle + '>' +
+        (st.signinSent
+          ? '<label style="margin-top:10px">' + (es ? 'Código del correo' : 'Code from the email') + '</label><input id="welCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits" ' + inputStyle + '><div class="btns"><button data-act="wel-verify">' + (es ? 'Iniciar sesión' : 'Sign in') + '</button><button data-act="wel-send">' + (es ? 'Enviar otro código' : 'Send a new code') + '</button></div>'
+          : '<div class="btns"><button data-act="wel-send">' + (es ? 'Enviarme un código' : 'Send me a code') + '</button></div>') +
+        '<div id="welMsg" class="muted" style="font-size:14px;margin-top:6px">' + (st.signinSent ? (es ? 'Enviado a ' : 'Sent to ') + escapeHtml(st.signinEmail) + (es ? ' — mira en spam si tarda.' : ' — check spam if it is slow.')
+          : (es ? 'Solo sirve para iniciar sesión: guarda tus ajustes entre dispositivos y es donde vive Pro. Nada de boletines. También puedes hacerlo después en Ajustes → Cuenta.' : 'Used only to sign you in: it keeps your settings across your devices and is where Pro lives. No newsletters. You can also do this later under Settings → Account.')) + '</div></div>') +
+    '<div class="btns"><button class="done" data-act="wel-done">' + (signed ? (es ? 'Empezar' : 'Start') : st.signinSent ? (es ? 'Omitir por ahora' : 'Skip for now') : (es ? 'Empezar sin correo' : 'Start without email')) + '</button></div>';
+}
+function openWelcome() { $('#sheet').innerHTML = welcomeHtml(); openModal(); setTimeout(() => { const i = $('#welDevice'); if (i && !st.signinSent) { i.focus(); i.select(); } }, 60); }
+function finishWelcome() { const i = $('#welDevice'); if (i) S.deviceName = i.value.trim().slice(0, 24); S.welcomed = true; st.signinSent = false; save(); closeModal(); pinged = true; pingBackend(true); }
+function welcomeOpen() { return !$('#modal').hidden && !!$('#welDevice'); }
+function closeModal() { if (welcomeOpen() && !S.welcomed) { S.welcomed = true; save(); } $('#modal').hidden = true; if (speech.speaking && $('#briefText')) stopSpeaking(); if (history.state && history.state.sheet) history.back(); }
 $('#sheetClose').addEventListener('click', closeModal);
 // Back button / swipe-back closes the panel instead of leaving the app
-window.addEventListener('popstate', () => { if (!$('#modal').hidden) $('#modal').hidden = true; });
+window.addEventListener('popstate', () => { if (!$('#modal').hidden) { if (welcomeOpen() && !S.welcomed) { S.welcomed = true; save(); } $('#modal').hidden = true; } });
 function openModal() { if (!(history.state && history.state.sheet)) history.pushState({ sheet: true }, ''); $('#modal').hidden = false; }
 $('#btnSettings').addEventListener('click', () => openSettings('general'));
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
@@ -4121,6 +4145,9 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.act && b.dataset.act.startsWith('site-')) { placesAction(b); return; }
   if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
+  if (b.dataset.act === 'wel-done') { finishWelcome(); return; }
+  if (b.dataset.act === 'wel-send') { const email = ($('#welEmail').value || '').trim(); const m = $('#welMsg'); if (!email) { m.textContent = lang() === 'es' ? 'Escribe tu correo primero.' : 'Enter your email first.'; return; } m.textContent = lang() === 'es' ? 'Enviando…' : 'Sending…'; if ($('#welDevice')) S.deviceName = $('#welDevice').value.trim().slice(0, 24); startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openWelcome(); setTimeout(() => { const i = $('#welCode'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'wel-verify') { const code = ($('#welCode').value || '').trim(); const m = $('#welMsg'); if (code.length !== 6) { m.textContent = lang() === 'es' ? 'Escribe el código de 6 dígitos.' : 'Enter the 6-digit code.'; return; } m.textContent = lang() === 'es' ? 'Iniciando sesión…' : 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { speak(j.pro ? (lang() === 'es' ? 'Sesión iniciada. LeadTime Pro está activo.' : 'Signed in. LeadTime Pro is active.') : (lang() === 'es' ? 'Sesión iniciada.' : 'Signed in.')); finishWelcome(); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
@@ -4174,7 +4201,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
-$('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
+$('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice' || e.target.id === 'welDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
 $('#sheet').addEventListener('input', e => {
   const k = e.target.dataset && e.target.dataset.slider; if (!k) return;
   if (k === 'rate') { S.brief.rate = +e.target.value; save(); return; }
@@ -4220,6 +4247,8 @@ applySentinel();
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
 if (new URLSearchParams(location.search).get('brief') === '1') setTimeout(() => { if (!st.pushBrief) openBriefing(true); }, 4000);
 if (st.pendingJoin) setTimeout(() => openSettings(signedIn() ? 'family' : 'account'), 2500);
+// First run on this device → the welcome page. A device that already has a name or an account was set up before it existed: skip quietly.
+if (!S.welcomed) { if (S.deviceName || signedIn() || st.pendingJoin) { S.welcomed = true; save(); } else setTimeout(openWelcome, 700); }
 updatePickHint();
 renderStatus();
 keepAwake();
