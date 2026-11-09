@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10d';
+const APP_VERSION = '2026.11.10e';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2502,7 +2502,7 @@ function renderStatus() {
   const s = computeStatus();
   const bar = $('#statusbar');
   bar.className = s.cls;
-  const urgent = isPhone() && s.cls !== 'green' && s.cls !== 'grey';
+  const urgent = isPhone();   // phones: the status bar always leads and the banner stays compact, green included, so the screen never rearranges itself
   if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); document.body.classList.remove('daysOpen'); $('#daysToggle').hidden = !urgent; $('#daysToggle').textContent = '3-day ▾'; setTimeout(checkMapSize, 60); }
   s.main = precipify(s.main); s.sub = precipify(s.sub);
   $('#statusMain').textContent = s.main;
