@@ -10,7 +10,14 @@ python3 extract-core.py                      # copies the nowcast functions out 
 unzip ~/Downloads/dallas.zip -d /tmp/rec     # a recording: {t}.png frames + {t}.status.json + meta.json
 node replay.js /tmp/rec/dallas 120           # 120-mile window (the app's default); 200 = overview rings
 node replay.js /tmp/rec/dallas 120 --dry     # also apply the "NWS POP < 10% / dry air" rule
+node replay.js /tmp/rec/waco 120 --gauge-mi=8  # gauge truth radius (default 5 mi) when the recording has gauge files
 ```
+
+Ground truth from gauges: when the recording folder holds `gauge-madis.jsonl` (every MADIS mesonet report near the point,
+written by the backend's verify worker during the recording, or afterwards with `POST /admin/verify/madis?name=<rec>`) and/or
+`gauge.jsonl` (the airport), the harness also prints an hour-by-hour radar-vs-gauge comparison and scores both rule sets
+against gauge truth. `R-` hours are radar echo with dry gauges (virga, evaporation); `-G` hours are wet gauges with no ≥20 dBZ
+echo (drizzle the radar under-reads).
 
 Recordings on hand
 - `dallas` — 7–8 Nov 2026, 20:55–04:09 CST, 63 frames, 200 mi around 32.8954,-96.8424 (kept at

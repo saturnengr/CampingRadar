@@ -159,3 +159,43 @@ const alarm = c => c === 'orange' || c === 'red';
 const score = key => { const fa = rows.filter(r => !r.rainingNow && alarm(r[key]) && (r.actMin == null || r.actMin > 90)).length; const miss = rows.filter(r => !r.rainingNow && !alarm(r[key]) && r.actMin != null && r.actMin <= 60).length; const red = rows.filter(r => !r.rainingNow && r[key] === 'red' && (r.actMin == null || r.actMin > 30)).length; return `${fa} false alarms (orange/red, no rain within 90 min), ${red} false reds, ${miss} misses (rain within 60 min, no alarm)`; };
 console.log('old rules: ' + score('oldC'));
 console.log('new rules: ' + score('newC') + (DRY ? '  [with NWS POP < 10% / dry air]' : '  [without forecast info; add --dry to apply the 1% POP the forecast gave that night]'));
+
+/* ---- ground truth from gauges, when the recording carries them ----
+   gauge-madis.jsonl: one MADIS report per line {t, id, lat, lon, distMi, pcp1hIn, rateInHr, wx} (backend verify worker / backfill);
+   gauge.jsonl: the point's own airport {t, station, precipMm, wx, present}. A report is "wet" when its hourly total is ≥ 0.01 in or
+   present weather says rain/drizzle/thunder/snow. The hour it covers ends at t, so rain "arrived" somewhere inside (t − 60 min, t];
+   we take the midpoint. Radar truth (≥20 dBZ at the centre) and gauge truth disagree exactly where virga and fine drizzle live. */
+const GAUGE_MI = +(process.argv.find(a => a.startsWith('--gauge-mi='))?.slice(11) || 5);
+function loadGauges() {
+  const out = [];
+  for (const [file, kind] of [['gauge-madis.jsonl', 'madis'], ['gauge.jsonl', 'airport']]) {
+    const fp = path.join(dir, file); if (!fs.existsSync(fp)) continue;
+    for (const line of fs.readFileSync(fp, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const g = JSON.parse(line);
+        const dist = kind === 'madis' ? g.distMi : 0;
+        const inches = kind === 'madis' ? g.pcp1hIn : g.precipMm != null ? g.precipMm / 25.4 : null;
+        const wx = (kind === 'madis' ? g.wx : (g.present || g.wx)) || '';
+        out.push({ t: g.t, id: g.id || g.station, dist, inches, wx, wet: (inches != null && inches >= 0.01) || /RA|DZ|TS|SN|UP/.test(wx), kind });
+      } catch (e) { }
+    }
+  }
+  return out;
+}
+const gauges = loadGauges();
+if (gauges.length) {
+  const near = gauges.filter(g => g.dist <= GAUGE_MI);
+  const ids = new Set(near.map(g => g.id)), wet = near.filter(g => g.wet).sort((a, b) => a.t - b.t);
+  const wetMid = wet.map(g => g.t - 30 * 60000);   // midpoint of the hour the report covers
+  const gaugeActual = t => { const w = wetMid.find(x => x >= t - 30 * 60000); return w == null ? null : Math.max(0, (w - t) / 60000); };
+  const gaugeNow = t => wet.some(g => g.t >= t && g.t - 60 * 60000 <= t);
+  console.log(`\ngauges within ${GAUGE_MI} mi: ${ids.size} stations, ${near.length} reports, ${wet.length} wet` + (wet.length ? `; first wet report ${clock(wet[0].t)} (${wet[0].id}${wet[0].inches != null ? ' ' + wet[0].inches.toFixed(2) + ' in' : ''}${wet[0].wx ? ' ' + wet[0].wx : ''})` : ''));
+  const radarWetHours = new Set(rainSeries.filter(r => r.dbz >= thresh).map(r => Math.floor(r.t / 3600000)));
+  const gaugeWetHours = new Set(wet.map(g => Math.floor((g.t - 1) / 3600000)));
+  const allHours = [...new Set([...radarWetHours, ...gaugeWetHours])].sort();
+  if (allHours.length) console.log('hour-by-hour (UTC) radar≥20 dBZ vs gauge wet: ' + allHours.map(h => new Date(h * 3600000).toISOString().slice(11, 13) + 'Z ' + (radarWetHours.has(h) ? 'R' : '-') + (gaugeWetHours.has(h) ? 'G' : '-')).join('  ') + '   (R- = radar only → virga/evaporation; -G = gauge only → light rain radar missed)');
+  const gScore = key => { const fa = rows.filter(r => !gaugeNow(r.t) && alarm(r[key]) && (gaugeActual(r.t) == null || gaugeActual(r.t) > 90)).length; const miss = rows.filter(r => !gaugeNow(r.t) && !alarm(r[key]) && gaugeActual(r.t) != null && gaugeActual(r.t) <= 60).length; return `${fa} false alarms, ${miss} misses (gauge truth, ±30 min hour-midpoint)`; };
+  console.log('old rules vs gauges: ' + gScore('oldC'));
+  console.log('new rules vs gauges: ' + gScore('newC'));
+} else console.log('\n(no gauge files in the recording — gauge-madis.jsonl arrives with backend builds from 9 Nov on, or via /admin/verify/madis backfill)');
