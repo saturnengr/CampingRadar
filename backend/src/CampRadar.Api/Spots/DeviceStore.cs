@@ -7,7 +7,7 @@ namespace CampRadar.Api.Spots;
 /// Holds a random id the app made up, coarse location (rounded to ~7 miles), activity, language, platform and
 /// version — enough to answer "who is using this and where" for the admin page, nothing that identifies a person.
 /// </summary>
-public sealed record DeviceRow(string Id, double Lat, double Lon, string Activity, string Lang, string Platform, string Version, bool Push, long FirstMs, long LastMs, int Opens);
+public sealed record DeviceRow(string Id, double Lat, double Lon, string Activity, string Lang, string Platform, string Version, bool Push, long FirstMs, long LastMs, int Opens, string Name, string Email);
 
 public sealed class DeviceStore
 {
@@ -27,18 +27,21 @@ public sealed class DeviceStore
             CREATE INDEX IF NOT EXISTS devices_last ON devices(last_ms);
             """;
         cmd.ExecuteNonQuery();
+        // the two columns added in Nov 2026: the device's own name and, when signed in, the account email (from the token, never the client)
+        foreach (var col in new[] { "name", "email" }) { try { using var a = c.CreateCommand(); a.CommandText = $"ALTER TABLE devices ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"; a.ExecuteNonQuery(); } catch (SqliteException) { } }
     }
 
-    public void Ping(string id, double lat, double lon, string activity, string lang, string platform, string version, bool push, bool opened)
+    public void Ping(string id, double lat, double lon, string activity, string lang, string platform, string version, bool push, bool opened, string name = "", string? email = null)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO devices(id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens)
-            VALUES($id, $lat, $lon, $act, $lang, $plat, $ver, $push, $now, $now, $open)
-            ON CONFLICT(id) DO UPDATE SET lat=$lat, lon=$lon, activity=$act, lang=$lang, platform=$plat, version=$ver, push=$push, last_ms=$now, opens=opens+$open
+            INSERT INTO devices(id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens, name, email)
+            VALUES($id, $lat, $lon, $act, $lang, $plat, $ver, $push, $now, $now, $open, $name, COALESCE($email, ''))
+            ON CONFLICT(id) DO UPDATE SET lat=$lat, lon=$lon, activity=$act, lang=$lang, platform=$plat, version=$ver, push=$push, last_ms=$now, opens=opens+$open, name=$name, email=COALESCE($email, email)
             """;
+        cmd.Parameters.AddWithValue("$name", name ?? ""); cmd.Parameters.AddWithValue("$email", (object?)email ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$id", id); cmd.Parameters.AddWithValue("$lat", Math.Round(lat, 1)); cmd.Parameters.AddWithValue("$lon", Math.Round(lon, 1));
         cmd.Parameters.AddWithValue("$act", activity); cmd.Parameters.AddWithValue("$lang", lang); cmd.Parameters.AddWithValue("$plat", platform); cmd.Parameters.AddWithValue("$ver", version);
         cmd.Parameters.AddWithValue("$push", push ? 1 : 0); cmd.Parameters.AddWithValue("$now", now); cmd.Parameters.AddWithValue("$open", opened ? 1 : 0);
@@ -51,10 +54,10 @@ public sealed class DeviceStore
         var list = new List<DeviceRow>();
         using var c = new SqliteConnection(_cs); c.Open(); using (var p = c.CreateCommand()) { p.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;"; p.ExecuteNonQuery(); }
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens FROM devices WHERE last_ms >= $since ORDER BY last_ms DESC";
+        cmd.CommandText = "SELECT id, lat, lon, activity, lang, platform, version, push, first_ms, last_ms, opens, name, email FROM devices WHERE last_ms >= $since ORDER BY last_ms DESC";
         cmd.Parameters.AddWithValue("$since", since);
         using var r = cmd.ExecuteReader();
-        while (r.Read()) list.Add(new DeviceRow(r.GetString(0), r.GetDouble(1), r.GetDouble(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetInt32(7) == 1, r.GetInt64(8), r.GetInt64(9), r.GetInt32(10)));
+        while (r.Read()) list.Add(new DeviceRow(r.GetString(0), r.GetDouble(1), r.GetDouble(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetInt32(7) == 1, r.GetInt64(8), r.GetInt64(9), r.GetInt32(10), r.GetString(11), r.GetString(12)));
         return list;
     }
 

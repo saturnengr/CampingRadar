@@ -782,7 +782,7 @@ const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '
 
 const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } })());
 // Settings that belong to this device, kept in their own slot so nothing that arrives from the account copy can overwrite them
-const DEVICE_KEYS = ['bottomGap', 'layout', 'lowData', 'activity', 'rangeSet', 'range', 'rangeSetChosen'], DEVICE_KEY = 'campRadar.device';
+const DEVICE_KEYS = ['bottomGap', 'layout', 'lowData', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName'], DEVICE_KEY = 'campRadar.device';
 function loadDeviceSettings() { try { const d = JSON.parse(localStorage.getItem(DEVICE_KEY) || '{}'); for (const k of DEVICE_KEYS) if (d[k] != null) S[k] = d[k]; } catch (e) {} }
 function saveDeviceSettings() { try { const d = {}; for (const k of DEVICE_KEYS) if (S[k] != null) d[k] = S[k]; localStorage.setItem(DEVICE_KEY, JSON.stringify(d)); } catch (e) {} }
 loadDeviceSettings();
@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10a';
+const APP_VERSION = '2026.11.10b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -818,8 +818,9 @@ function pingBackend(opened) {
   const ua = navigator.userAgent, uad = navigator.userAgentData && navigator.userAgentData.platform || '';
   const platform = /Android/i.test(ua + uad) ? 'Android' : /iPhone|iPad/i.test(ua) || (/Mac/i.test(ua) && navigator.maxTouchPoints > 1) ? 'iOS' : /Windows/i.test(ua + uad) ? 'Windows' : /Mac/i.test(ua + uad) ? 'Mac' : /CrOS/i.test(ua) ? 'ChromeOS' : /Linux/i.test(ua + uad) && navigator.maxTouchPoints > 1 ? 'Android' : /Linux/i.test(ua + uad) ? 'Linux' : 'other';
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone ? ' app' : ' web';
-  fetch(BE() + '/app/ping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
-    body: JSON.stringify({ id: S.deviceId, lat: +st.loc.lat.toFixed(1), lon: +st.loc.lon.toFixed(1), activity: S.activity, lang: lang(), platform: platform + standalone, version: APP_VERSION, push: !!S.pushId, opened: !!opened }) }).catch(() => {});
+  // signed in, the sign-in token rides along so the admin page can show which account a device belongs to (the server reads the email from the token)
+  fetch(BE() + '/app/ping', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {}), keepalive: true,
+    body: JSON.stringify({ id: S.deviceId, lat: +st.loc.lat.toFixed(1), lon: +st.loc.lon.toFixed(1), activity: S.activity, lang: lang(), platform: platform + standalone, version: APP_VERSION, push: !!S.pushId, opened: !!opened, name: typeof deviceName === 'function' ? deviceName() : '' }) }).catch(() => {});
 }
 let pinged = false;
 setInterval(() => pingBackend(false), 10 * 60000);
@@ -877,7 +878,7 @@ async function redeemCode(code) {
 }
 // Settings that travel with the account. Device-bound things (push id, device id, token, backend address, last fix) stay local.
 // per-device settings never sync: the phone's navigation-bar gap, the tablet's sidebar layout and low-data mode would otherwise overwrite each other
-const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash', 'bottomGap', 'layout', 'lowData', 'pushEndpoint', 'activity', 'rangeSet', 'range', 'rangeSetChosen']);   // activity and range are per device too: a Sentinel tablet and a camping phone on one account must not flip each other
+const SYNC_SKIP = new Set(['pushId', 'deviceId', 'account', 'backend', 'backendOff', 'lastLoc', 'snoozeUntil', 'ack', 'recent', 'syncedAt', 'syncedHash', 'bottomGap', 'layout', 'lowData', 'pushEndpoint', 'activity', 'rangeSet', 'range', 'rangeSetChosen', 'deviceName']);   // activity and range are per device too: a Sentinel tablet and a camping phone on one account must not flip each other
 const syncable = () => { const o = {}; for (const k of Object.keys(S)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; return o; };
 let syncTimer = null, syncBusy = false;
 function scheduleSync() { if (!S.account || !S.account.token || !BE()) return; clearTimeout(syncTimer); syncTimer = setTimeout(pushSettings, 4000); }

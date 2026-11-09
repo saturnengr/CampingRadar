@@ -200,11 +200,12 @@ app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, 
 });
 
 // ---------- anonymous usage ping (the app calls this on open and every 10 minutes while open) ----------
-app.MapPost("/app/ping", ([FromBody] PingRequest r, DeviceStore d) =>
+app.MapPost("/app/ping", (HttpRequest http, [FromBody] PingRequest r, DeviceStore d, EntitlementStore ent) =>
 {
     if (string.IsNullOrWhiteSpace(r.Id) || r.Id.Length > 40 || r.Lat is < -90 or > 90 || r.Lon is < -180 or > 180) return Results.BadRequest();
     string Clip(string? x, int n) => (x ?? "").Length > n ? x![..n] : (x ?? "");
-    d.Ping(r.Id, r.Lat, r.Lon, Clip(r.Activity, 16), Clip(r.Lang, 8), Clip(r.Platform, 24), Clip(r.Version, 16), r.Push, r.Opened);
+    var (_, _, tok) = ent.Check(Bearer(http));   // the account comes from a valid sign-in token, never from the body; a device that signs out keeps its last known account
+    d.Ping(r.Id, r.Lat, r.Lon, Clip(r.Activity, 16), Clip(r.Lang, 8), Clip(r.Platform, 24), Clip(r.Version, 16), r.Push, r.Opened, Clip(r.Name, 40), tok?.Email);
     return Results.Ok();
 });
 
@@ -577,7 +578,7 @@ app.MapGet("/admin/overview", (HttpRequest r, DeviceStore d, SpotStore s, SiteSt
         groups = app.Services.GetRequiredService<GroupStore>().AdminSummary(),
         alerts24 = p.SentLast24h,
         activities = week.GroupBy(x => x.Activity).ToDictionary(g => g.Key, g => g.Count()),
-        devices = devices.Select(x => new { x.Id, x.Lat, x.Lon, x.Activity, x.Lang, x.Platform, x.Version, x.Push, x.FirstMs, x.LastMs, x.Opens }),
+        devices = devices.Select(x => new { x.Id, x.Lat, x.Lon, x.Activity, x.Lang, x.Platform, x.Version, x.Push, x.FirstMs, x.LastMs, x.Opens, x.Name, x.Email }),
         health = new
         {
             radar = new { scans = m.Times.Count, latest = m.Latest > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.Latest) : (DateTimeOffset?)null },
@@ -618,4 +619,4 @@ public sealed record VerifyRequest(string Email, string Code, string DeviceId);
 public sealed record GrantRequest(string Email, int Months, string? Plan, string? Note);
 public sealed record SiteRequest(string? Id, string? Name, double Lat, double Lon, string? Activity, bool Alerts, bool Digest, JsonElement? Thresholds);
 public sealed record PlanRequest(double Lat, double Lon, int? BackMin, JsonElement? Thresholds);
-public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened);
+public sealed record PingRequest(string Id, double Lat, double Lon, string? Activity, string? Lang, string? Platform, string? Version, bool Push, bool Opened, string? Name = null);

@@ -55,7 +55,7 @@ public static class AdminPage
       <tr><th>Verification</th><td><span id="vfySum" class="sub">loading…</span> <button id="vfyRun" style="padding:4px 10px;font-size:12px">Run a pass now</button> <a id="vfyCsv" href="#" style="font-size:12px">download CSV (90 days)</a><div id="vfyDetail" class="sub" style="margin-top:6px"></div></td></tr>
     </table>
   </details>
-  <div class="card wide"><h2>Devices (30 days)</h2><div style="overflow:auto;max-height:420px"><table id="devs"><thead><tr><th>Last seen</th><th>First seen</th><th>Opens</th><th>Activity</th><th>Lang</th><th>Platform</th><th>Version</th><th>Alerts</th><th>Near</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card wide"><h2>Devices (30 days)</h2><div style="overflow:auto;max-height:420px"><table id="devs"><thead><tr><th>Last seen</th><th>Device</th><th>Account</th><th>First seen</th><th>Opens</th><th>Activity</th><th>Lang</th><th>Platform</th><th>Version</th><th>Alerts</th><th>Near</th></tr></thead><tbody></tbody></table></div></div>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -97,7 +97,7 @@ async function load(){
   const now=Date.now();
   for(const d of o.devices){const age=now-d.lastMs;const col=age<600000?'#66bb6a':age<86400000?'#4fc3f7':'#9fb3c2';
     L.circleMarker([d.lat,d.lon],{radius:age<600000?8:6,color:col,fillColor:col,fillOpacity:.7,weight:1}).bindTooltip(esc(d.activity||'—')+' · '+esc(d.platform)+' · '+ago(d.lastMs)+(d.push?' · alerts on':'')).addTo(layer)}
-  $('#devs tbody').innerHTML=o.devices.map(d=>'<tr><td>'+ago(d.lastMs)+'</td><td>'+new Date(d.firstMs).toLocaleDateString()+'</td><td>'+esc(d.opens)+'</td><td>'+esc(d.activity||'—')+'</td><td>'+esc(d.lang)+'</td><td>'+esc(d.platform)+'</td><td>'+esc(d.version)+'</td><td>'+(d.push?'yes':'')+'</td><td>'+d.lat.toFixed(1)+', '+d.lon.toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="9" class="sub">No devices have reported yet.</td></tr>';
+  $('#devs tbody').innerHTML=o.devices.map(d=>'<tr><td>'+ago(d.lastMs)+'</td><td>'+esc(d.name||'—')+'</td><td>'+esc(d.email||'—')+'</td><td>'+new Date(d.firstMs).toLocaleDateString()+'</td><td>'+esc(d.opens)+'</td><td>'+esc(d.activity||'—')+'</td><td>'+esc(d.lang)+'</td><td>'+esc(d.platform)+'</td><td>'+esc(d.version)+'</td><td>'+(d.push?'yes':'')+'</td><td>'+d.lat.toFixed(1)+', '+d.lon.toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="11" class="sub">No devices have reported yet.</td></tr>';
 }
 async function loadEnts(){const r=await fetch('/admin/entitlements',{headers:{'X-Admin-Key':key}});if(!r.ok)return;const l=await r.json();
   $('#ents tbody').innerHTML=l.map(e=>'<tr><td>'+esc(e.email)+'</td><td>'+esc(e.plan)+'</td><td>'+(e.active?'<span class="ok">active</span>':'<span class="warn">inactive</span>')+'</td><td>'+(e.expiresMs?new Date(e.expiresMs).toLocaleDateString():'—')+'</td><td>'+esc(e.devices)+'</td><td>'+esc(e.source)+'</td><td>'+esc(e.note||'')+'</td><td>'+(e.active?'<button data-code="'+esc(e.email)+'" style="padding:4px 10px;font-size:12px">New code</button>':'')+'</td></tr>').join('')||'<tr><td colspan="8" class="sub">No one has Pro yet.</td></tr>'}
