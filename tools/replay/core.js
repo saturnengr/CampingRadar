@@ -226,8 +226,8 @@ function hailCores(grid, cellKm, cx, cy, thresh, maxRing, loc) {
 function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const thresh = opts.thresh, horizon = opts.horizonMin || 120, maxRing = opts.maxRingMi || 50;
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
-  const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false };
-  const ringR = [2, 5, 10, 30, 50, 100, 120], farRing = Math.max(opts.maxRingMi || 50, 120);
+  const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false, 150: false };
+  const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
