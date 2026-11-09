@@ -809,7 +809,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10c';
+const APP_VERSION = '2026.11.10d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1038,10 +1038,13 @@ const MrmsLayer = L.TileLayer.extend({          // tiles rendered by NOAA's expo
       // a failed tile is retried once from the *other* source: a backend tile falls back to NOAA's renderer and vice versa, so a stalled
       // connection to one host (Android keeps reusing a dead connection for a while after a network change) does not blank the radar
       if (!e.tile || e.tile.dataset.retried) return; e.tile.dataset.retried = '1'; st.tileStats.retried = (st.tileStats.retried || 0) + 1;
-      const m = /\/mrms\/tile\/(\d+)\/(\d+)\/(\d+)\/(\d+)\.png/.exec(src);
-      let alt = null;
-      if (m) { const t = +m[1], z = +m[2], x = +m[3], y = +m[4], size = 2 * MERC / (256 * 2 ** z / 512), minx = -MERC + x * size, maxy = MERC - y * size; alt = mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, t); }
-      else if (/[?&]keep=1\b/.test(src)) alt = src.replace(/([?&])keep=1\b/, '$1retry=' + Date.now());
+      // the tile's coordinates come from the event itself, so the fallback does not depend on parsing the failed URL
+      const c = e.coords, fromBackend = src.indexOf('/mrms/tile/') >= 0; let alt = null;
+      try {
+        if (c && fromBackend) { const size = 2 * MERC / (256 * 2 ** c.z / 512), minx = -MERC + c.x * size, maxy = MERC - c.y * size; alt = mrmsExportUrl(minx, maxy - size, minx + size, maxy, 512, 512, this._t); }
+        else if (c && BE() && st.backendTimes && st.backendTimes.has(this._t)) alt = BE() + '/mrms/tile/' + this._t + '/' + c.z + '/' + c.x + '/' + c.y + '.png?retry=' + Date.now();
+      } catch (err) { st.tileStats.altErr = String(err.message || err).slice(0, 80); }
+      st.tileStats.lastAlt = alt ? alt.slice(0, 100) : 'none';
       if (alt) setTimeout(() => { e.tile.src = alt; }, 300);
     });
   },
@@ -4049,7 +4052,7 @@ function renderDiag() {
     'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', hidden strip ' + st.navpad.hidden + ', layout ' + st.navpad.layoutH + ' / visible ' + st.navpad.visibleH + ' / inner ' + st.navpad.innerH + ' / screen ' + st.navpad.screenH + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
-    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
+    'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ((st.tileStats || {}).lastAlt ? ' · last retry went to: ' + (st.tileStats || {}).lastAlt : '') + ((st.tileStats || {}).altErr ? ' · retry error: ' + (st.tileStats || {}).altErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
