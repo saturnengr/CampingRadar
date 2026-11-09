@@ -42,15 +42,47 @@ public sealed class Recorder
     {
         name = SafeName(name);
         if (_jobs.TryGetValue(name, out var existing) && existing.Running) return existing;
-        var job = new Job { Name = name, Lat = lat, Lon = lon, RadiusMi = radiusMi, Zoom = zoom, StartedAt = DateTimeOffset.UtcNow, EndsAt = DateTimeOffset.UtcNow.AddHours(Math.Clamp(hours, 0.1, 48)), Running = true };
-        _jobs[name] = job;
-        var cts = new CancellationTokenSource(); _cts[name] = cts;
+        var now = DateTimeOffset.UtcNow;
+        var job = new Job { Name = name, Lat = lat, Lon = lon, RadiusMi = radiusMi, Zoom = zoom, StartedAt = now, EndsAt = now.AddHours(Math.Clamp(hours, 0.1, 48)), Running = true };
         var dir = Path.Combine(_dir, name); Directory.CreateDirectory(dir);
         double mpp = 156543.03392 * Math.Cos(lat * Math.PI / 180) / Math.Pow(2, zoom);
         File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(new { name, lat, lon, radiusMi, zoom, metersPerPx = mpp, sizePx = 2 * (int)Math.Round(radiusMi * 1609.344 / mpp), startedAt = job.StartedAt, endsAt = job.EndsAt, note = "frames are NOAA MRMS exportImage PNGs (Web Mercator, centred on lat/lon, radiusMi each side); {t}.status.json is the server engine's output for that scan with default options" }, new JsonSerializerOptions { WriteIndented = true }));
         Prune();
-        _ = Task.Run(() => RunAsync(job, dir, cts.Token));
+        Launch(job, dir);
         return job;
+    }
+
+    private void Launch(Job job, string dir)
+    {
+        _jobs[job.Name] = job;
+        var cts = new CancellationTokenSource(); _cts[job.Name] = cts;
+        _ = Task.Run(() => RunAsync(job, dir, cts.Token));
+    }
+
+    /// <summary>
+    /// After a restart (the host recycles the app pool without warning), pick up every recording whose window has not closed: same
+    /// folder, same meta.json, frames from the last half hour onward. Called once at startup; returns the names resumed.
+    /// </summary>
+    public List<string> ResumeInterrupted()
+    {
+        var resumed = new List<string>();
+        foreach (var dir in Directory.EnumerateDirectories(_dir))
+        {
+            try
+            {
+                var mf = Path.Combine(dir, "meta.json"); if (!File.Exists(mf)) continue;
+                using var doc = JsonDocument.Parse(File.ReadAllText(mf)); var r = doc.RootElement;
+                var endsAt = r.GetProperty("endsAt").GetDateTimeOffset();
+                if (endsAt <= DateTimeOffset.UtcNow.AddMinutes(5)) continue;
+                var name = Path.GetFileName(dir); if (_jobs.TryGetValue(name, out var j) && j.Running) continue;
+                var job = new Job { Name = name, Lat = r.GetProperty("lat").GetDouble(), Lon = r.GetProperty("lon").GetDouble(), RadiusMi = r.GetProperty("radiusMi").GetDouble(), Zoom = r.TryGetProperty("zoom", out var z) ? z.GetInt32() : 8,
+                    StartedAt = DateTimeOffset.UtcNow.AddMinutes(-30), EndsAt = endsAt, Running = true };
+                Launch(job, dir); resumed.Add(name);
+            }
+            catch (Exception ex) { _log.LogDebug(ex, "resume {Dir}", dir); }
+        }
+        if (resumed.Count > 0) _log.LogInformation("resumed recordings after restart: {Names}", string.Join(", ", resumed));
+        return resumed;
     }
 
     /// <summary>Running jobs with their geometry (for the verify worker to attach ground truth to each one).</summary>
@@ -84,6 +116,7 @@ public sealed class Recorder
     private async Task RunAsync(Job job, string dir, CancellationToken ct)
     {
         var seen = new HashSet<long>(Directory.EnumerateFiles(dir, "*.png").Select(f => long.TryParse(Path.GetFileNameWithoutExtension(f), out var t) ? t : 0));
+        var failures = new Dictionary<long, int>();
         try
         {
             while (!ct.IsCancellationRequested && DateTimeOffset.UtcNow < job.EndsAt)
@@ -93,7 +126,14 @@ public sealed class Recorder
                     await _mrms.RefreshTimesAsync(ct);
                     foreach (var t in _mrms.Times.Where(t => !seen.Contains(t) && t >= job.StartedAt.AddMinutes(-35).ToUnixTimeMilliseconds()).OrderBy(t => t))
                     {
-                        var png = await _mrms.ExportPngAsync(t, job.Lat, job.Lon, job.Zoom, job.RadiusMi, ct);
+                        byte[] png;
+                        try { png = await _mrms.ExportPngAsync(t, job.Lat, job.Lon, job.Zoom, job.RadiusMi, ct); }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {   // a scan NOAA will not render (too old, or a hiccup) is retried twice, then skipped so newer scans still land
+                            failures[t] = failures.GetValueOrDefault(t) + 1; job.LastError = "frame " + t + ": " + ex.Message;
+                            if (failures[t] >= 3) seen.Add(t);
+                            continue;
+                        }
                         await File.WriteAllBytesAsync(Path.Combine(dir, t + ".png"), png, ct);
                         seen.Add(t); job.Frames = seen.Count; job.LastT = t; job.Bytes += png.Length;
                         if (t == _mrms.Latest)

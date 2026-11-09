@@ -77,6 +77,7 @@ builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNam
 
 var app = builder.Build();
 app.UseCors();
+app.Services.GetRequiredService<Recorder>().ResumeInterrupted();   // recordings survive the host's app-pool recycles
 app.Services.GetRequiredService<EntitlementStore>().OwnerResolver = email => app.Services.GetRequiredService<GroupStore>().GroupOf(email)?.OwnerEmail;
 string adminKey = app.Configuration["AdminKey"] ?? "";
 var ipCodes = new System.Collections.Concurrent.ConcurrentDictionary<string, Queue<long>>();   // small per-key rate limiters (codes, verify attempts, briefings)
