@@ -122,6 +122,14 @@ Ranked by effort against likely revenue:
 5. **Native Android shell → Android Auto → Wear OS / Garmin** — the shell is needed anyway for screen-off GPS.
 6. **API / white label** — high value, but only after the ledger has months of scored cases.
 
+## Decided: e-paper weather tag prototype (Nov 2026)
+
+- Hardware ordered: **Elecrow CrowPanel ESP32-S3 5.79" E-Paper HMI** ($31.90; 272×792 B/W, ESP32-S3 N8R8, rotary dial, SH1.0 battery connector with charger, USB-C). Plus a 3.7 V pouch cell, 2,000–3,000 mAh, JST-SH 1.0 mm plug (check polarity against the board's + mark before plugging in). Prototype in a few weeks.
+- Why it works now: the backend computes the full verdict server-side (`/status`), so the ESP32 only displays; no tracking on the device. The wide strip matches the status bar: status line, big ETA, 12-hour sparkline.
+- Firmware plan (Arduino): captive-portal Wi-Fi setup, poll a small text `/tag` endpoint every 5 min (longer on green days), draw with GxEPD2 using partial refresh, buzzer for the ten tones, snooze on the dial, deep sleep between polls. Expected two to four weeks per charge.
+- Known gaps: B/W only (inverted bar for red), no speaker on the board (add a piezo), e-paper sluggish below 0 °C, no enclosure (3D print), Temu clones may differ from the wiki.
+- Lineup this creates: e-paper tag (status) → ESP32 LCD Sentinel-lite (status + server-rendered radar snapshot, brain for the horn box) → tablet Sentinel (full app). The 2.13" ($11.90) board is a possible mini tag later; the 4.2" is skipped.
+
 ## Locking down the Sentinel tablet (kiosk mode)
 
 Goal: the tablet boots straight into LeadTime, stays there, lets the owner change Wi-Fi, and cannot be turned back into an ordinary Android tablet by the customer.
