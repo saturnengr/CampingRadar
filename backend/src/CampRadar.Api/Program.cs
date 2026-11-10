@@ -70,7 +70,7 @@ builder.Services.AddSingleton<CampRadar.Api.Verify.VerifyWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CampRadar.Api.Verify.VerifyWorker>());
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 {
-    var origins = (builder.Configuration["AllowedOrigins"] ?? "https://saturnengr.github.io").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var origins = (builder.Configuration["AllowedOrigins"] ?? "https://app.getleadtime.app,https://saturnengr.github.io").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
 }));
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase; o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull; });
