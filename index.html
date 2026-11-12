@@ -777,7 +777,8 @@ function applyLowData() {
   if (typeof applyLayers === 'function' && map) applyLayers();
 }
 const ALERT_RANGE_MI = 50;   // rain is tracked out to the window edge, but "it will reach you" alerts wait until it is this close
-const NC = { zoom: 7, radiusMi: 120, freeRadiusMi: 100, overviewRadiusMi: 200, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
+const NC = { coreDbz: 45,   // a heavy core: downpour / thunderstorm cell, tracked separately inside a larger rain area
+ zoom: 7, radiusMi: 120, freeRadiusMi: 100, overviewRadiusMi: 200, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 // Tracking window: free accounts track ±100 mi (about 1½ h of lead at typical storm speeds); Pro tracks ±120 mi, or ±200 mi with the overview rings
 const overviewAllowed = () => typeof isPro === 'function' && isPro();
 const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
@@ -817,7 +818,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12a';
+const APP_VERSION = '2026.11.12b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1716,6 +1717,11 @@ async function runNowcast() {
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, S.threshDbz, radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
+    // Inside a large rain area the heavy cores (≥ 45 dBZ: downpours, thunderstorm cells) are tracked on their own, so the status can say
+    // whether the strong part reaches you or slides by while the lighter rain does arrive.
+    { const sres = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: NC.coreDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, minHitCells: 2 });
+      res.core = sres.hit ? { hit: true, etaMin: sres.hit.etaMin, endMin: sres.hit.endMin, maxDbz: sres.hit.maxDbz, fromBearing: sres.hit.fromBearing, distMi: sres.hit.distMi }
+        : sres.passing && sres.passing.distMi <= 40 ? { hit: false, distMi: sres.passing.distMi, bearing: sres.passing.bearing, passBearing: sres.passing.passBearing, closestMi: sres.passing.closestMi, maxDbz: sres.nearest ? sres.nearest.dbz : NC.coreDbz } : null; }
     // beyond the two hours the tracker trusts, a straight-line look out to three hours: informational only (blue), never an alert
     if (!res.hit) { const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: 180, maxRingMi: 50, minHitCells: 6 }, labelled[2].labels); res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null; }
     // how the nearest rain's edge has actually moved over the last hour (reset when the location changes)
@@ -2047,6 +2053,18 @@ function awayLabel(bearingDeg, html) {
   const tx = east ? '0' : west ? '-100%' : '-50%', ty = north ? '-100%' : '0';
   return L.divIcon({ className: '', html: '<div class="maplbl" style="transform:translate(' + tx + ',' + ty + ')">' + html + '</div>', iconSize: null, iconAnchor: [east ? -8 : west ? 8 : 0, north ? 6 : -6] });
 }
+// A label at a storm's closest-approach point (passBearing / closestMi from you). Zoomed out, that point sits on top of the location
+// dot, so the label then moves to the side away from the storm instead. With a dot, the point itself is marked too.
+function passLabel(passBearing, closestMi, _stormBearing, txt, dot) {
+  const ang = passBearing * Math.PI / 180;
+  let lat = st.loc.lat + closestMi * Math.cos(ang) / 69, lon = st.loc.lon + closestMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
+  if (dot) L.circleMarker([lat, lon], { pane: 'hazards', radius: 5, color: '#fff', weight: 2, fillColor: '#263238', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
+  let pushed = false;
+  try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]); if (c.distanceTo(q) < 56) pushed = true; } catch (e) {}
+  // pushed off the dot, the label sits on the side the storm passes (its text running outward), never on the storm's own side
+  if (pushed) addAwayLabel((passBearing + 180) % 360, Math.min(closestMi, 6), txt);
+  else L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="maplbl">' + txt + '</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+}
 // Place such a label: on the far side from the storm, close to the dot, and nudged back inside the map when the text would run off the edge
 let awayLabelCount = 0;
 function addAwayLabel(bearingDeg, distMi, html) {
@@ -2108,16 +2126,14 @@ function drawMotion() {
     const eta = Math.max(0, res.hit.etaMin - radarLag());
     L.circleMarker([lat, lon], { pane: 'hazards', radius: 7, color: '#fff', weight: 2, fillColor: '#ff9100', fillOpacity: 0.95, interactive: false }).addTo(motionLayer);
     addAwayLabel(res.hit.fromBearing, dMi, 'arrives ' + (eta < 1 ? 'now' : 'in ' + fmtDur(eta) + ' · ' + etaClock(eta)));
+    // the heavy core inside that storm: where it arrives, or where it passes by
+    const core = res.core;
+    if (core && core.hit && core.etaMin - res.hit.etaMin > 3) addAwayLabel(core.fromBearing, Math.max(dMi, 1) + 1.5, 'heavy core ≈ ' + etaClock(Math.max(0, core.etaMin - radarLag())));
+    else if (core && !core.hit && core.passBearing != null) passLabel(core.passBearing, core.closestMi, core.bearing, (core.maxDbz >= 55 ? 'very heavy' : 'heavy') + ' core passes here · ' + Math.max(1, Math.round(core.closestMi)) + ' mi', true);
   } else if (res && res.passing && st.loc && res.passing.passBearing != null) {
-    const ang = res.passing.passBearing * Math.PI / 180, dMi = res.passing.closestMi;
-    let lat = st.loc.lat + dMi * Math.cos(ang) / 69, lon = st.loc.lon + dMi * Math.sin(ang) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
-    // zoomed out, the closest-approach point sits on top of the location dot: the label then moves to the side away from the storm
-    let pushed = false;
-    try { const c = map.latLngToContainerPoint([st.loc.lat, st.loc.lon]), q = map.latLngToContainerPoint([lat, lon]); if (c.distanceTo(q) < 56) { [lat, lon] = labelPointNear(res.passing.bearing, dMi, 56); pushed = true; } } catch (e) {}
     // when the status bar is about a different storm (one that could reach you later), say whose closest approach this is
-    const other = res.far && res.far.blob && res.far.blob !== res.nearestBlob, txt = (other ? 'nearer rain passes here · ' : 'closest approach · ') + Math.max(1, Math.round(dMi)) + ' mi';
-    if (pushed) addAwayLabel(res.passing.bearing, dMi, txt);
-    else L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="maplbl">' + txt + '</div>', iconSize: null, iconAnchor: [0, 8] }), pane: 'hazards', interactive: false }).addTo(motionLayer);
+    const other = res.far && res.far.blob && res.far.blob !== res.nearestBlob;
+    passLabel(res.passing.passBearing, res.passing.closestMi, res.passing.bearing, (other ? 'nearer rain passes here · ' : 'closest approach · ') + Math.max(1, Math.round(res.passing.closestMi)) + ' mi');
     if (res.far && st.loc) {   // and mark where the later storm would arrive, in the status colour
       const a2 = (res.far.fromBearing || 0) * Math.PI / 180, d2 = S.hitMi || 3, la2 = st.loc.lat + d2 * Math.cos(a2) / 69, lo2 = st.loc.lon + d2 * Math.sin(a2) / (69 * Math.cos(st.loc.lat * Math.PI / 180));
       const eta2 = Math.max(0, res.far.etaMin - radarLag());
@@ -2456,6 +2472,19 @@ async function refreshWind() {
 }
 
 /* --------------------------- status + chime ------------------------ */
+/* The heavy-core sentence that rides on an arrival: the strong part of the storm either reaches you (and when), or passes by while
+   the lighter rain arrives. Silent when the core is the same thing as the rain already described (arrives within 3 min of it). */
+function coreLine(core, hit, lag) {
+  if (!core || !hit) return '';
+  const strength = core.maxDbz >= 55 ? 'very heavy core' : 'heavy core';
+  if (core.hit) {
+    const eta = Math.max(0, core.etaMin - lag), rainEta = Math.max(0, hit.etaMin - lag);
+    if (hit.etaMin <= 0.5 && core.etaMin <= 0.5) return '';
+    if (core.etaMin - hit.etaMin <= 3) return '';
+    return ' · the ' + strength + ' (' + Math.round(core.maxDbz) + ' dBZ) ' + (rainEta < 1 ? 'reaches you ≈ ' : 'follows ≈ ') + etaClock(eta);
+  }
+  return ' · the ' + strength + ' passes ' + Math.max(1, Math.round(core.closestMi)) + ' mi to the ' + compassLong(core.passBearing) + ' — lighter rain here';
+}
 function computeStatus() {
   const out = { cls: 'grey', main: '', sub: '', level: 'none', rings: { 10: false, 30: false, 50: false } };
   if (!st.loc) { out.main = 'Waiting for location…'; return out; }
@@ -2495,16 +2524,17 @@ function computeStatus() {
     // when the rain's edge is closing more slowly than its cells move, the edge decides the arrival time
     const etaRaw = edgeSlow ? Math.min(NC.horizonMin, edge.etaMin) : hit.etaMin, eta = Math.max(0, etaRaw - lat), word = intensityWord(hit.maxDbz) + trendWord;
     const edgeNote = edgeSlow ? ' · edge closing at ' + Math.max(1, Math.round(edge.rate)) + ' mph' : '';
+    const coreNote = coreLine(res.core, hit, lat);
     if (hit.etaMin <= 0.5) {
       out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';
-      out.sub = hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + etaClock(hit.endMin - lat) : 'May continue for a while';
+      out.sub = (hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + etaClock(hit.endMin - lat) : 'May continue for a while') + coreNote;
     } else if (eta <= 10) {
       out.cls = 'red'; out.level = 'imminent'; out.main = 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min';
-      out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + (moving ? ' · ' + moving : '');
+      out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + coreNote + (moving ? ' · ' + moving : '');
     } else {
       out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')';
       const p = res.passing, nearer = p && p.distMi < hit.distMi - 5 && Math.abs(((p.bearing - hit.fromBearing) % 360 + 540) % 360 - 180) > 25 ? ' · nearer rain ' + Math.round(p.distMi) + ' mi ' + compass(p.bearing) + ' passes to the ' + compassLong(p.passBearing) : '';
-      out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + (moving ? ' · ' + moving : '') + edgeNote + nearer;
+      out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + coreNote + (moving ? ' · ' + moving : '') + edgeNote + nearer;
     }
   } else if (hit && lowConf) {
     out.cls = 'yellow'; out.level = 'low';
@@ -3368,6 +3398,8 @@ function statusES(t) {
     .replace(/(Light|Moderate|Heavy|Very heavy)(, strengthening|, weakening)? rain from the (\w+)/g, (m, i, tr, d) => 'Lluvia ' + INTENSITY_ES[i] + (tr ? (/strength/.test(tr) ? ', intensificándose,' : ', debilitándose,') : '') + ' desde el ' + dirES(d))
     .replace(/Rain to the (\w+) is weakening — may fizzle before it reaches you/g, (m, d) => 'La lluvia al ' + dirES(d) + ' se está debilitando; puede disiparse antes de llegar')
     .replace(/Rain to the (\w+) is not getting closer — likely evaporating at its edge/g, (m, d) => 'La lluvia al ' + dirES(d) + ' no se acerca; probablemente se evapora en su borde')
+    .replace(/the (very heavy|heavy) core \((\d+) dBZ\) (reaches you|follows) ≈ /g, (m, k, d, v) => 'el núcleo ' + (k === 'very heavy' ? 'muy fuerte' : 'fuerte') + ' (' + d + ' dBZ) ' + (v === 'follows' ? 'llega después ≈ ' : 'te alcanza ≈ '))
+    .replace(/the (very heavy|heavy) core passes (\d+) mi to the (\w+(?: \w+)?) — lighter rain here/g, (m, k, d, dir) => 'el núcleo ' + (k === 'very heavy' ? 'muy fuerte' : 'fuerte') + ' pasa a ' + d + ' millas al ' + dirES(dir) + ' — aquí lluvia más ligera')
     .replace(/Its cells move (\d+) mph but the edge has held near (\d+) mi for (\d+) min/g, 'Sus celdas se mueven a $1 mph pero el borde se ha mantenido a unas $2 millas durante $3 minutos').replace(/(light|moderate|heavy|very heavy) rain possible if it holds together/g, (m, i) => 'posible lluvia ' + INTENSITY_ES[i[0].toUpperCase() + i.slice(1)] + ' si se mantiene')
     .replace(/edge closing at (\d+) mph/g, 'el borde se acerca a $1 mph').replace(/ and the air is dry \(dew point (\d+)° below the temperature\), so it may evaporate before reaching the ground/g, ' y el aire está seco (punto de rocío $1° por debajo de la temperatura), así que puede evaporarse antes de llegar al suelo')
     .replace(/nearest rain (\d+) mi (\w+), moving (\w+) and not toward you/g, (m, d, dir, h) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir) + ', moviéndose al ' + dirES(h) + ' y no hacia ti').replace(/nearest rain (\d+) mi (\w+)$/g, (m, d, dir) => 'lluvia más cercana a ' + d + ' millas al ' + dirES(dir))
