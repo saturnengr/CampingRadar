@@ -243,6 +243,14 @@ body.side.compact .pillsec{padding:5px 12px 6px}body.side.compact .pillhdr{displ
 body.side.compact #olRow{height:50px}body.side.compact .ol .pct{display:none}body.side.compact #olNote{font-size:11px}body.side.compact .msg{font-size:13px}
 body.side.compact2 #days{display:none}body.side.compact2 #statusMain{font-size:17px}body.side.compact2 #statusSub{font-size:13px}body.side.compact2 #nowTemp{font-size:32px}body.side.compact2 #olRow{height:40px}body.side.compact2 .ol .tmp{display:none}
 body.side.side-right #side{border-right:0;border-left:1px solid var(--line)}
+/* a phone turned sideways: a narrower column so the map keeps most of the width; fitSidebar compacts it further if it overflows */
+body.side.side-phone #side{width:clamp(270px,40vw,340px)}
+body.side.side-phone #statusbar{padding:6px 10px;gap:4px 8px}body.side.side-phone #statusMain{font-size:17px}body.side.side-phone #statusSub{font-size:13px}
+body.side.side-phone #banner{padding:6px 10px;gap:6px}body.side.side-phone #nowTemp{font-size:34px}body.side.side-phone #nowCond{font-size:14px}body.side.side-phone #nowWind{font-size:13px}body.side.side-phone #nowPlace{display:none}
+body.side.side-phone .day{padding:3px 2px}body.side.side-phone .day svg{width:26px;height:26px}body.side.side-phone .day .t{font-size:14px}body.side.side-phone .day .nm{font-size:11px}body.side.side-phone .day .p{font-size:10px;min-height:12px}
+body.side.side-phone .pillsec{padding:4px 10px 5px}body.side.side-phone .pillhdr{display:none}body.side.side-phone .ww,body.side.side-phone .hu{min-height:28px;font-size:12px;padding:0 8px}
+body.side.side-phone #olRow{height:44px}body.side.side-phone .ol .pct{display:none}body.side.side-phone #olNote{font-size:11px}
+body.side.side-phone #rings{gap:3px}body.side.side-phone .ring{font-size:11px;padding:2px 6px}
 body.side #statusbar{order:0;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 14px;min-height:0}
 body.side #statusText{flex:1 0 100%}
 body.side #rings{margin-right:auto;gap:4px}
@@ -809,7 +817,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.10i';
+const APP_VERSION = '2026.11.12a';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1210,10 +1218,15 @@ function applyBottomGap() {
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => setTimeout(applyBottomGap, 50));
 window.addEventListener('resize', () => setTimeout(applyBottomGap, 50));
 function assertBottomGap() { try { const want = st.navpad && st.navpad.px; const have = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--navpad')); if (want != null && Math.abs((have || 0) - want) > 0.5) { st.navpadFixes = (st.navpadFixes || 0) + 1; applyBottomGap(); } } catch (e) {} }
+/* A phone is a screen whose short side is under 500 px, whichever way it is held. Upright it always stacks; turned sideways the
+   stack would bury the map, so the forecast moves beside it automatically — on the left or right per the Layout setting. */
+function isPhoneDevice() { return Math.min(window.innerWidth, window.innerHeight) < 500; }
 function applyLayout() {
-  const side = (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
+  const phone = isPhoneDevice(), landscape = window.innerWidth > window.innerHeight;
+  const side = phone ? landscape : (S.layout === 'left' || S.layout === 'right') && window.innerWidth > 860 && window.innerHeight > 520;
   document.body.classList.toggle('side', side);
   document.body.classList.toggle('side-right', side && S.layout === 'right');
+  document.body.classList.toggle('side-phone', side && phone);
   // zoom buttons: inside the column on tablets/desktops (after Settings), their own corner box on phones
   const wide = window.innerWidth > 600 && window.innerHeight > 520, zi = $('#zoomIn'), zo = $('#zoomOut');
   if (wide && zi.parentElement !== $('#controls')) { $('#btnRange').after(zi, zo); }
@@ -3697,7 +3710,9 @@ const SETTINGS = {
   general: [
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: extra space under the toolbar (Auto measures what Android covers; use a fixed value only if Auto leaves the toolbar under the navigation bar)', [['auto', 'Auto'], ['0', 'None'], ['24', '+24 px'], ['48', '+48 px']]],
-    ['layout', 'Layout on tablets and desktops (phones always stack)', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
+    isPhoneDevice()
+      ? ['layout', 'Forecast column when the phone is turned sideways (upright it always stacks)', [['left', 'On the left'], ['right', 'On the right']]]
+      : ['layout', 'Layout on tablets and desktops', [['top', 'Forecast on top'], ['left', 'Forecast on the left'], ['right', 'Forecast on the right']]],
     ['rangeSet', 'Range buttons and rings', [['10-30-50', '10 · 30 · 50 mi'], ['5-10-30', '5 · 10 · 30 mi'], ['2-5-10', '2 · 5 · 10 mi (walks)'], ['50-100-150', '50 · 100 · 150 mi (overview) · Pro']]],
     ['night', 'Night mode', [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']]],
     ['animate', 'Radar loop', [[true, 'Animate'], [false, 'Latest only']]],
