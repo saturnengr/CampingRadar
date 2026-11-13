@@ -874,7 +874,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12j';
+const APP_VERSION = '2026.11.12k';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1411,7 +1411,7 @@ function applyNight() {
   const night = isNightNow(), was = document.body.classList.contains('night');
   document.body.classList.toggle('night', night);
 
-  if (was !== night) drawRings();
+  if (was !== night) { drawRings(); if (typeof drawMotion === 'function') drawMotion(); }
 }
 
 
@@ -2177,7 +2177,7 @@ function drawMotion() {
     const nv = Math.ceil(pts0.length / Math.max(1, Math.floor(pts0.length / 200))), v = { vx: svx / nv, vy: svy / nv }; const sp = Math.hypot(v.vx, v.vy) * 60 * 0.621371; if (sp < 3) continue;
     const hdg = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360, dirWord = compass(hdg);
     const pts = cells.get(b.id), step = Math.max(1, Math.floor(pts.length / 400)), sample = pts.filter((_, i) => i % step === 0);
-    const isFocus = b.id === focus, dim = focus && !isFocus ? 0.7 : 1;
+    const isFocus = b.id === focus, dim = focus && !isFocus ? 0.7 : 1, night = document.body.classList.contains("night");
     if (isFocus) { const h0 = hull(sample); if (h0.length >= 3) L.polygon(h0.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: '#fff', weight: 2.5, opacity: 0.9 * op, fill: false, interactive: false }).addTo(motionLayer); }
     // ghost outlines
     // Each sample point rides the local velocity field in 15-minute steps (re-reading the field where it lands), so a long
@@ -2187,8 +2187,13 @@ function drawMotion() {
     for (let t = 0; t < 60; t += 15) { moved = moved.map(([x, y]) => { const q = vel(x, y); return [x + q.vx * 15 / fineKm, y + q.vy * 15 / fineKm]; }); if (t + 15 === 15 || t + 15 === 30 || t + 15 === 60) hulls[t + 15] = hull(moved); }
     [[60, GHOST_COLORS[60], 0.55], [30, GHOST_COLORS[30], 0.7], [15, GHOST_COLORS[15], 0.85]].forEach(([min, col, alpha]) => {
       const h = hulls[min]; if (!h || h.length < 3) return;
-      // outlines ignore the radar opacity slider (they are the point of the overlay) and sit on a dark halo so the pastels read on a light basemap in daylight
-      const ll = h.map(([x, y]) => toLL(x, y)), dash = min === 15 ? '3 7' : min === 30 ? '7 7' : '14 9', w = isFocus ? 3.5 : 2.5;
+      // daytime: outlines ignore the radar opacity slider and sit on a dark halo so the pastels read on a light basemap
+      const ll = h.map(([x, y]) => toLL(x, y));
+      if (night) {   // dark basemap: the pastels already stand out, so keep the original quiet styling
+        L.polygon(ll, { pane: 'hazards', color: col, weight: isFocus ? 3 : 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op * dim, fillColor: col, fillOpacity: (isFocus ? 0.1 : 0.06) * op * dim, interactive: false }).addTo(motionLayer);
+        return;
+      }
+      const dash = min === 15 ? '3 7' : min === 30 ? '7 7' : '14 9', w = isFocus ? 3.5 : 2.5;
       L.polygon(ll, { pane: 'hazards', color: '#1a1a1a', weight: w + 2.5, dashArray: dash, opacity: 0.55 * alpha * dim, fillColor: col, fillOpacity: (isFocus ? 0.16 : 0.1) * dim, interactive: false }).addTo(motionLayer);
       L.polygon(ll, { pane: 'hazards', color: col, weight: w, dashArray: dash, opacity: Math.min(1, alpha + 0.25) * dim, fill: false, interactive: false }).addTo(motionLayer);
     });
