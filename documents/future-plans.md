@@ -140,3 +140,19 @@ Goal: the tablet boots straight into VantageWX, stays there, lets the owner chan
 - **Still manageable by us:** device owner can install and update the app silently (or we simply keep the PWA, which self-updates), set the screen to stay on while charged, hold brightness, disable the camera, and push a new config from the admin page. An “owner PIN” screen inside the app can expose the Wi-Fi screen, volume and the bottom-gap setting to the customer while keeping the rest closed.
 - **Options that avoid writing a DPC:** Android Enterprise with a free-tier MDM (Google’s Android Management API is free; Scalefusion, Esper and Hexnode charge per device per month) gives the same lock task + Wi-Fi-only policy from a web console, and zero-touch enrollment from a reseller. Worth it if we ship hundreds; for the first batches our own 300-line DPC is cheaper and we own it.
 - **Hardware notes:** choose a tablet with Android 10+ and Google Play services (Device Owner and Play-less AOSP tablets behave differently); the Oukitel RT3 qualifies. Keep a bench procedure: fresh reset → skip setup → provision device owner → install app → lock task → test Wi-Fi change → box it.
+
+## Webcams as ground truth (decided 2026-11-13: internal first)
+
+Public webcams see what radar and gauges cannot: fog and visibility, wet ground under drizzle that never tips a gauge, snow on the ground, and whether a faint echo reaches the surface at all. Used first as a third truth source in the verification ledger; later as something users see.
+
+**Architecture.** Server-side, in a worker driven by the status engine, not a timer: a camera is fetched only within ~10 mi of an alerted push spot, a running recording or a Sentinel, and only while something is inside the horizon; cadence tightens with status (watch 30 min, incoming 15, imminent/at-you 5). Work is per camera, not per user. Phones do not fetch or classify public cameras. Going native adds the phone's own camera as an opt-in observation source later.
+
+**Classifier.** Cheap pre-checks (stale by hash, placeholder size, day/night from the sun, lens state), then one Gemini vision call per usable frame with a fixed question and a JSON answer: precip (none/rain/snow/mixed/unsure + light/heavy), ground (dry/wet/puddled/snow/ice), visibility bucket (clear/reduced/fog/dense), sky (clear/partly/overcast/lowdark/towering/shaft), lens, wind cue bucket, confidence, visible cues. Stored with image time, staleness, day part, model, radar dBZ over the camera and the target's status level. Not attempted: temperature, pressure, wind numbers, cloud height.
+
+**Directory (`sites.db`, `cams`).** Sources: OpenTrafficCamMap (MIT; ~4,000 US DOT snapshot cameras, Ohio/California/Colorado/Indiana/Alaska/Kentucky/Arizona) and IEM webcams (TV/DOT cameras in the upper Midwest with heading and frame timestamp). Weekly refresh; retire, never delete; per-camera uptime, quality, reference frame and cues. Candidates to add: FAA WeatherCams, WSDOT/511 APIs (need keys), NPS/USFS park cams.
+
+**Status (13 Nov):** backend engine shipped (`Cams/`), `cam.jsonl` written beside `gauge-madis.jsonl`, harness prints camera-vs-radar agreement, `/admin/cams` endpoints. Next: watch the first week of verdicts, then the fog/visibility line, a map layer with tap-to-view frames (with attribution), and the "see the sky it is coming from" button.
+
+### Weather-station directory and layer (decided 2026-11-13)
+
+Same treatment for surface stations: a `stations` table (network, position, elevation, reported variables, interval, uptime, QC-flag share, trust score) refreshed weekly from MADIS metadata, IEM network lists, NDBC and RWIS; the verify worker picks gauges by trust as well as distance; the Nearby stations layer gains a tap card (latest obs with age, trust badge, 24-h strip; buoys add water temperature and waves) and filters by kind. One scrape framework and one nearest-N query shared with the cameras.
