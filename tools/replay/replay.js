@@ -16,6 +16,15 @@ const tz = 'America/Chicago', clock = ms => new Date(ms).toLocaleTimeString('en-
 
 // motion-field variants (env): MOTION_REGIONS=3|4|5, MOTION_REGIONS_AUTO=1, MOTION_SEGMENTS=1 (+ MOTION_SEG_KM, MOTION_SEG_MIN_KM)
 const MOPTS = { maxKmh: 110, regions: +(process.env.MOTION_REGIONS || 0) || undefined, regionsAuto: !!process.env.MOTION_REGIONS_AUTO, segments: !!process.env.MOTION_SEGMENTS, segKm: +(process.env.MOTION_SEG_KM || 50), segMinKm: +(process.env.MOTION_SEG_MIN_KM || 100), thresh };
+// motion fallback experiment (env): FALLBACK=long  → when the tracker is not ok or its confidence is below FB_CONF (default 0.5), use the
+// 60-minute long-baseline whole-window match instead (real-time capable: it only looks back);  FALLBACK=oracle → use the recording-wide
+// median of confident motions (an upper bound: what a perfect steering wind would buy). FB_CONF overrides the threshold.
+// proximity experiment (env PROX_MI): with no projected hit, echo at/above the threshold within PROX_MI miles that is not receding
+// (edge rate > -5 mph) raises orange — "rain nearby, may drift over you". Targets the stationary light-echo misses (lake effect, drizzle).
+const PROX_MI = +(process.env.PROX_MI || 0);
+const FALLBACK = process.env.FALLBACK || '', FB_CONF = +(process.env.FB_CONF || 0.5);
+let fbUsed = 0, fbFrames = 0, oracleVec = null;
+function synthMotion(vx, vy, tag) { return { ok: true, regions: [], global: { vx, vy, conf: FB_CONF }, speedMph: Math.hypot(vx, vy) * 60 * 0.621371, headingDeg: (Math.atan2(vx, -vy) * 180 / Math.PI + 360) % 360, regionSize: 1, fallback: tag, baselineMin: 60 }; }
 const cache = new Map();
 function frame(t) {
   if (cache.has(t)) return cache.get(t);
@@ -101,6 +110,14 @@ function pageRun(latest) {
   const F = fr.map(frame), coarse = F.map(f => f.coarse);
   let motion = dt1 >= 10 ? C.estimateMotion(coarse[0], coarse[2], dt1, coarseKm, MOPTS) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
   if (dt2 >= 6) { const m2 = C.estimateMotion(coarse[1], coarse[2], dt2, coarseKm, MOPTS); if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1; }
+  if (FALLBACK && (!motion.ok || motion.global.conf < FB_CONF)) {
+    fbFrames++;
+    if (FALLBACK === 'oracle' && oracleVec) { motion = synthMotion(oracleVec.vx, oracleVec.vy, 'oracle'); fbUsed++; }
+    else if (FALLBACK === 'long') {
+      const tA = nearestTime(T.filter(x => x < latest), latest - 60 * 60000);
+      if ((latest - tA) >= 40 * 60000) { const lb = longBaseline(tA, latest); if (!lb.edge && lb.score > 0.3) { const sp = lb.speedMph / 60 / 0.621371, h = lb.headingDeg * Math.PI / 180; motion = synthMotion(Math.sin(h) * sp, -Math.cos(h) * sp, 'long'); fbUsed++; } }
+    }
+  }
   const vel = C.makeVelocityField(motion, coarseF);
   const labelled = F.map(f => C.labelBlobs(f.cleaned, thresh));
   const res = C.predictRain(F[2].cleaned, fineKm, c, c, vel, { thresh, hitRadiusMi: hitMi, horizonMin: 120, maxRingMi: 50 }, labelled[2].labels);
@@ -110,6 +127,12 @@ function pageRun(latest) {
 
 // ---------------- run ----------------
 const tracks = coreTracks(35);
+if (FALLBACK === 'oracle') {
+  const vs = [];
+  for (const t of times) { if (t - times[0] < 30 * 60000) continue; const T = times.filter(x => x <= t), a = nearestTime(T, t - 30 * 60000); const dt = (t - a) / 60000; if (dt < 10) continue; const m = C.estimateMotion(frame(a).coarse, frame(t).coarse, dt, coarseKm, MOPTS); if (m.ok && m.global.conf >= 0.6) vs.push([m.global.vx, m.global.vy]); }
+  if (vs.length) { const med = i => vs.map(v => v[i]).sort((p, q) => p - q)[vs.length >> 1]; oracleVec = { vx: med(0), vy: med(1) }; }
+  console.log(`oracle steering: ${vs.length} confident frames → ${oracleVec ? (Math.hypot(oracleVec.vx, oracleVec.vy) * 60 * 0.621371).toFixed(0) + ' mph' : 'none'}`);
+}
 console.log('motion variant: ' + JSON.stringify(MOPTS));
 console.log(`${times.length} frames ${clock(times[0])}–${clock(times[times.length - 1])}, window ±${radiusMi} mi, ${tracks.length} core tracks (≥35 dBZ, ≥25 min)`);
 const rainSeries = times.map(t => ({ t, dbz: rainAt(frame(t)) }));
@@ -186,11 +209,14 @@ for (const t of times) {
     else if (eta4 > BLUE_MIN && !(nr && nr.distMi <= BLUE_NEAR_MI)) v4C = 'blue';
     else { etaV4 = eta4; v4C = eta4 <= 10 ? 'red' : 'orange'; }
   }
+  const prox = PROX_MI > 0 && !hit && !closingNear && nr && nr.distMi <= PROX_MI && nr.dbz >= thresh && !(edge && edge.rate <= -5);
+  if (prox) v4C = 'orange';
   // --sweep: the same V4 logic under several settings at once (rule evaluation is cheap; the frame work above is not)
   const sweep = {};
   if (V4) for (const cfg of SWEEP) {
     let c = 'green'; const cn = edge && edge.rate >= cfg.close && nr && nr.distMi <= cfg.near;
     if (cn) { const e = nr.distMi / edge.rate * 60; c = e <= 10 ? 'red' : 'orange'; }
+    else if (prox) c = 'orange';
     if (hit) {
       const ea = edge && (p.res.nearestBlob == null || hit.blob == null || p.res.nearestBlob === hit.blob) && !(hit.maxDbz >= 40 || hit.cells >= 100);
       let e4 = hit.etaMin; if (ea && edge.verdict === 'slow' && edge.etaMin > hit.etaMin) e4 = Math.min(120, edge.etaMin);
@@ -215,7 +241,8 @@ for (const t of times) {
 const scored = rows.filter(r => r.dH != null);
 if (scored.length) {
   const absH = scored.map(r => Math.abs(r.dH)).sort((a, b) => a - b), absS = scored.map(r => Math.abs(r.dS)).sort((a, b) => a - b);
-  console.log(`\nmotion field: segments active in ${segFrames} frames (${segRegs} segment vectors), region grid use ${JSON.stringify(regGrid)}`);
+  if (FALLBACK) console.log(`\nfallback '${FALLBACK}': tracker weak in ${fbFrames} frames, fallback applied in ${fbUsed}`);
+console.log(`\nmotion field: segments active in ${segFrames} frames (${segRegs} segment vectors), region grid use ${JSON.stringify(regGrid)}`);
 console.log(`\nheading: median |error| ${absH[absH.length >> 1].toFixed(0)}°, 90th pct ${absH[Math.floor(absH.length * 0.9)].toFixed(0)}°, reversed (>120°) in ${scored.filter(r => Math.abs(r.dH) > 120).length}/${scored.length}`);
   console.log(`speed:   median |error| ${absS[absS.length >> 1].toFixed(0)} mph, 90th pct ${absS[Math.floor(absS.length * 0.9)].toFixed(0)} mph`);
 }
