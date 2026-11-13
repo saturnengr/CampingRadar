@@ -34,3 +34,16 @@ Recordings on hand
   poor, 53° median heading error, stratiform with few cores). Misses are cells forming close in with no
   history; the remaining false alarms are passing storms. V4 targets: a forming-nearby rule, a tighter
   closest-approach gate, and reading recorded POP/dew spread + gauge.jsonl per frame.
+
+### Rule versions scored by the harness (12 Nov 2026)
+
+- **old rules** — page 2026.11.08k: projection only, fizzle watch.
+- **new rules** — pages 2026.11.08l … 2026.11.12c: edge rules (stalled / slow) and the 20-minute fizzle memory, applied to whatever
+  the nearest echo was.
+- **v4 rules** (`--v4`) — page 2026.11.12d, "V4 strict horizon": edge verdicts apply only to the storm projected to hit and never to a
+  strong or large arrival; the fizzle memory releases once the edge is observed closing (5 mph); observed closing at 10 mph+ inside
+  15 mi outranks the projection; a grazing hit (< 12 min, < 6 cells, < 40 dBZ) and a receding edge (≤ −5 mph) are passes (blue);
+  arrivals projected beyond 75 min are "could reach you" (blue). 71-case batch: false alarms 412 → 349 (new) → 322 (v4);
+  misses 206 → 244 (new) → 222 (v4); gauge misses 74 → 84 → 71. `--v4` also prints a 12-setting sweep (horizon 75/90 min,
+  near-echo exception off/15/25 mi, closing 10/15 mph) for choosing the next adjustment. The near-echo exception at 25 mi gave
+  misses 202 but false alarms 388 — rejected for now in favour of the strict horizon.

@@ -778,6 +778,13 @@ function applyLowData() {
 }
 const ALERT_RANGE_MI = 50;   // rain is tracked out to the window edge, but "it will reach you" alerts wait until it is this close
 const NC = { coreDbz: 45,   // a heavy core: downpour / thunderstorm cell, tracked separately inside a larger rain area
+  // V4 arrival rules (chosen on the 71-case replay batch of 12 Nov 2026; see tools/replay/README.md)
+  resumeMph: 5,      // fizzle memory releases once the edge is observed closing this fast
+  closeMph: 10, nearMi: 15,   // observed closing at ≥ closeMph with echo inside nearMi outranks the projection
+  grazeMin: 12, grazeCells: 6, // a projected hit that only clips the circle this briefly, with this little rain, is a pass
+  recedeMph: 5,      // nearest echo of the hitting storm moving away this fast → not believed
+  blueMin: 75,       // projected arrivals beyond this many minutes are "could reach you", not "arriving"
+  stallMin: 30,      // the stalled-edge watch only when the projected arrival is further out than this
  zoom: 7, radiusMi: 120, freeRadiusMi: 100, overviewRadiusMi: 200, fineCellPx: 2, coarse: 2, horizonMin: 120, latencyMin: 4, maxKmh: 110 };
 // Tracking window: free accounts track ±100 mi (about 1½ h of lead at typical storm speeds); Pro tracks ±120 mi, or ±200 mi with the overview rings
 const overviewAllowed = () => typeof isPro === 'function' && isPro();
@@ -818,7 +825,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12c';
+const APP_VERSION = '2026.11.12d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1740,7 +1747,7 @@ async function runNowcast() {
       res.hit.fizzles = !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < res.hit.etaMin - 2);
       // a "weakening" verdict flickers frame to frame on a decaying shield; once seen, it stands for 20 min unless the storm is strengthening
       if (res.hit.fizzles) st.fizzleSeen = Date.now();
-      else if (st.fizzleSeen && Date.now() - st.fizzleSeen < 20 * 60000 && !(tr && tr.word === 'strengthening') && res.hit.maxDbz < 40) res.hit.fizzles = true;
+      else if (st.fizzleSeen && Date.now() - st.fizzleSeen < 20 * 60000 && !(tr && tr.word === 'strengthening') && res.hit.maxDbz < 40 && !(res.edge && res.edge.rate >= NC.resumeMph)) res.hit.fizzles = true;   // an edge seen closing again is believed at once
       delete res.hit.blobCells;
     }
     if (res.nearestBlob) res.nearestTrend = trends.get(res.nearestBlob) || null;
@@ -2499,13 +2506,27 @@ function computeStatus() {
   const ob = st.wx.obs, dewSpread = ob && ob.tempF != null && ob.dewF != null ? ob.tempF - ob.dewF : null, dryAir = dewSpread != null && dewSpread >= 15;
   const lowConf = hit && st.wx.pop2h != null && st.wx.pop2h < 10 && (dryAir ? hit.maxDbz < 35 : hit.etaMin > 15 && hit.maxDbz < 30);
   const edge = res.edge;
-  if (hit && !lowConf && edge && edge.verdict === 'stalled' && hit.maxDbz < 40 && hit.etaMin - lat > 5) {
+  // The edge verdicts describe the NEAREST echo: they speak for the arrival only when that echo belongs to the storm projected to
+  // hit, and never override a big, strong arrival, which the projection gets right.
+  const edgeApplies = !!(hit && edge && (res.nearestBlob == null || hit.blob == null || res.nearestBlob === hit.blob) && !(hit.maxDbz >= 40 || hit.cells >= 100));
+  // Observed closing outranks the projection: echo inside nearMi that has been closing at closeMph+ for 20 min is arriving,
+  // whatever the motion field projects (showers that form and accelerate close in are what the projection under-reads).
+  const closingNear = edge && edge.rate >= NC.closeMph && res.nearest && res.nearest.distMi <= NC.nearMi;
+  if (closingNear && !(hit && hit.etaMin <= 0.5)) {
+    const etaObs = res.nearest.distMi / edge.rate * 60, etaRaw = hit && hit.etaMin < etaObs ? hit.etaMin : etaObs, eta = Math.max(0, etaRaw - lat);
+    const word = hit ? intensityWord(hit.maxDbz) : intensityWord(res.nearest.dbz);
+    if (eta <= 10) { out.cls = 'red'; out.level = 'imminent'; out.main = 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min'; }
+    else { out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')'; }
+    out.sub = word + ' rain ' + Math.round(res.nearest.distMi) + ' mi ' + compass(res.nearest.bearing) + ' closing at ' + Math.round(edge.rate) + ' mph' + (hit ? coreLine(res.core, hit, lat) : '') + (moving ? ' · ' + moving : '');
+    out.rings = Object.assign({}, res.rings); return overlayLightning(out);
+  }
+  if (hit && !lowConf && edgeApplies && edge.verdict === 'stalled' && hit.etaMin - lat > NC.stallMin) {
     out.cls = 'yellow'; out.level = 'low';
     out.main = 'Rain to the ' + compassLong(res.nearest.bearing) + ' is not getting closer — likely evaporating at its edge';
     out.sub = 'Its cells move ' + Math.round(motion.speedMph) + ' mph but the edge has held near ' + Math.round(res.nearest.distMi) + ' mi for ' + Math.round(edge.spanMin) + ' min' + (res.nearest.distMi <= 15 ? ' · ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain possible if it holds together' : '');
     out.rings = Object.assign({}, res.rings); return overlayLightning(out);
   }
-  const edgeSlow = hit && edge && edge.verdict === 'slow' && edge.etaMin > hit.etaMin;
+  const edgeSlow = edgeApplies && edge.verdict === 'slow' && edge.etaMin > hit.etaMin;
   const tr = hit && hit.trend, trendWord = tr && tr.word === 'strengthening' ? ', strengthening' : tr && tr.word === 'weakening' ? ', weakening' : '';
   // A weakening storm that should be gone before it arrives is a watch, not an alarm — unless it's close or heavy.
   if (hit && hit.fizzles && !lowConf && hit.etaMin - lat > 10 && hit.maxDbz < 40) {
@@ -2514,12 +2535,20 @@ function computeStatus() {
     out.sub = 'If it holds together: ' + intensityWord(hit.maxDbz).toLowerCase() + ' rain ≈ ' + etaClock(hit.etaMin - lat) + (moving ? ' · ' + moving : '');
     out.rings = Object.assign({}, res.rings); return overlayLightning(out);
   }
-  if (hit && !lowConf && hit.distMi > ALERT_RANGE_MI) {
+  // A projected hit that only clips the circle briefly, with little rain, is a storm passing by.
+  const graze = hit && (hit.endMin - hit.etaMin) < NC.grazeMin && hit.cells < NC.grazeCells && hit.maxDbz < 40;
+  const receding = edgeApplies && edge.rate <= -NC.recedeMph && hit.etaMin - lat > 10;
+  const etaProj = hit ? Math.max(0, (edgeSlow ? Math.min(NC.horizonMin, edge.etaMin) : hit.etaMin) - lat) : null;
+  if (hit && !lowConf && (graze || receding)) {
+    out.cls = 'blue'; out.level = 'passing';
+    out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + (receding ? ' is moving away' : ' — likely brushing past');
+    out.sub = (receding ? 'Its edge has been pulling back at ' + Math.round(-edge.rate) + ' mph for ' + Math.round(edge.spanMin) + ' min' : 'Only a sliver of it crosses your spot, ≈ ' + etaClock(etaProj) + ' for a few minutes') + (moving ? ' · ' + moving : '');
+  } else if (hit && !lowConf && (hit.distMi > ALERT_RANGE_MI || etaProj > NC.blueMin)) {
     // heading this way but still far out: say so, no alert until it is inside the alert range
-    const eta = Math.max(0, hit.etaMin - lat);
+    const eta = etaProj;
     out.cls = 'blue'; out.level = 'watch';
     out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + ' is heading this way';
-    out.sub = 'About ' + fmtDur(eta) + ' out at current speed (' + etaClock(eta) + ')' + (moving ? ' · ' + moving : '') + ' · alerts start inside ' + ALERT_RANGE_MI + ' mi';
+    out.sub = 'About ' + fmtDur(eta) + ' out at current speed (' + etaClock(eta) + ')' + (moving ? ' · ' + moving : '') + (hit.distMi > ALERT_RANGE_MI ? ' · alerts start inside ' + ALERT_RANGE_MI + ' mi' : ' · alerts start inside ' + NC.blueMin + ' min');
   } else if (hit && !lowConf) {
     // when the rain's edge is closing more slowly than its cells move, the edge decides the arrival time
     const etaRaw = edgeSlow ? Math.min(NC.horizonMin, edge.etaMin) : hit.etaMin, eta = Math.max(0, etaRaw - lat), word = intensityWord(hit.maxDbz) + trendWord;
@@ -3398,6 +3427,12 @@ function statusES(t) {
     .replace(/(Light|Moderate|Heavy|Very heavy)(, strengthening|, weakening)? rain from the (\w+)/g, (m, i, tr, d) => 'Lluvia ' + INTENSITY_ES[i] + (tr ? (/strength/.test(tr) ? ', intensificándose,' : ', debilitándose,') : '') + ' desde el ' + dirES(d))
     .replace(/Rain to the (\w+) is weakening — may fizzle before it reaches you/g, (m, d) => 'La lluvia al ' + dirES(d) + ' se está debilitando; puede disiparse antes de llegar')
     .replace(/Rain to the (\w+) is not getting closer — likely evaporating at its edge/g, (m, d) => 'La lluvia al ' + dirES(d) + ' no se acerca; probablemente se evapora en su borde')
+    .replace(/rain (\d+) mi (\w+) closing at (\d+) mph/g, (m, d, dir, v) => 'lluvia a ' + d + ' millas al ' + (DIR_ES[dir] || dir) + ' acercándose a ' + v + ' mph')
+    .replace(/Rain (\d+) mi (\w+) is moving away/g, (m, d, dir) => 'La lluvia a ' + d + ' millas al ' + (DIR_ES[dir] || dir) + ' se está alejando')
+    .replace(/Rain (\d+) mi (\w+) — likely brushing past/g, (m, d, dir) => 'La lluvia a ' + d + ' millas al ' + (DIR_ES[dir] || dir) + ' probablemente solo roza tu zona')
+    .replace(/Its edge has been pulling back at (\d+) mph for (\d+) min/g, 'Su borde lleva $2 min retrocediendo a $1 mph')
+    .replace(/Only a sliver of it crosses your spot, ≈ (\S+ \S+) for a few minutes/g, 'Solo una franja cruza tu punto, ≈ $1, por unos minutos')
+    .replace(/alerts start inside (\d+) min/g, 'las alertas empiezan a menos de $1 min')
     .replace(/the (very heavy|heavy) core \((\d+) dBZ\) (reaches you|follows) ≈ /g, (m, k, d, v) => 'el núcleo ' + (k === 'very heavy' ? 'muy fuerte' : 'fuerte') + ' (' + d + ' dBZ) ' + (v === 'follows' ? 'llega después ≈ ' : 'te alcanza ≈ '))
     .replace(/the (very heavy|heavy) core passes (\d+) mi to the (\w+(?: \w+)?) — lighter rain here/g, (m, k, d, dir) => 'el núcleo ' + (k === 'very heavy' ? 'muy fuerte' : 'fuerte') + ' pasa a ' + d + ' millas al ' + dirES(dir) + ' — aquí lluvia más ligera')
     .replace(/Its cells move (\d+) mph but the edge has held near (\d+) mi for (\d+) min/g, 'Sus celdas se mueven a $1 mph pero el borde se ha mantenido a unas $2 millas durante $3 minutos').replace(/(light|moderate|heavy|very heavy) rain possible if it holds together/g, (m, i) => 'posible lluvia ' + INTENSITY_ES[i[0].toUpperCase() + i.slice(1)] + ' si se mantiene')
