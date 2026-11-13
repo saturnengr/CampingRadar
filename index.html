@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0d141b">
-<title>LeadTime</title>
+<title>VanguardWX</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="LeadTime">
+<meta name="apple-mobile-web-app-title" content="VanguardWX">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{--navpad:env(safe-area-inset-bottom,0px);--chrome:#0d141b;--chrome2:#16212c;--text:#eef3f7;--muted:#9fb0bf;--line:#2a3846;--accent:#2f7dd1;--accent2:#7cc4ff}
@@ -818,7 +818,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12b';
+const APP_VERSION = '2026.11.12c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2683,7 +2683,7 @@ function renderPushRow() {
   const row = $('#pushRow'); if (!row) return;
   const on = !!S.pushId;
   row.innerHTML = (on ? '<button data-push="test">Send a test alert</button><button data-push="off">Turn off</button>' : '<button data-push="on">Turn on alerts for this device</button>') +
-    '<div id="pushMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (on ? 'Rain arrival, lightning and NWS warnings arrive even with the screen off.' : (BE() ? (isPro() ? '' : '<span class="pro">PRO</span> Needs LeadTime Pro — Settings → Account.') : 'Needs a backend address (above).')) + '</div>';
+    '<div id="pushMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (on ? 'Rain arrival, lightning and NWS warnings arrive even with the screen off.' : (BE() ? (isPro() ? '' : '<span class="pro">PRO</span> Needs VanguardWX Pro — Settings → Account.') : 'Needs a backend address (above).')) + '</div>';
 }
 
 /* ------------------------------- snooze ---------------------------- */
@@ -2747,7 +2747,7 @@ async function openNow() {
   sh.innerHTML = '<h2>' + (es ? 'Ahora mismo' : 'Right now') + '</h2>' +
     '<div class="muted" style="font-size:13px;margin-bottom:8px">' + (o ? (es ? 'Medido en ' : 'Measured at ') + escapeHtml(o.name || 'the nearest station') + ' · ' + o.ageMin + ' min ' + (es ? 'atrás' : 'ago') : (es ? 'Sin estación cercana; del pronóstico horario' : 'No station report yet; from the hourly forecast')) + '</div>' +
     '<div class="tiles">' + tiles + '</div>' +
-    '<div id="nowAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:12px">' + (isPro() && BE() ? '<span class="muted">' + (es ? 'Analizando…' : 'Working out what is going on…') + '</span>' : '<span class="muted">' + (es ? 'Con LeadTime Pro, aquí aparece una explicación escrita de lo que está pasando y por qué.' : 'With LeadTime Pro, a written explanation of what is happening and why appears here.') + ' <button class="mini" data-act="go-account">' + (es ? 'Cuenta' : 'Account') + '</button></span>') + '</div>' +
+    '<div id="nowAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:12px">' + (isPro() && BE() ? '<span class="muted">' + (es ? 'Analizando…' : 'Working out what is going on…') + '</span>' : '<span class="muted">' + (es ? 'Con VanguardWX Pro, aquí aparece una explicación escrita de lo que está pasando y por qué.' : 'With VanguardWX Pro, a written explanation of what is happening and why appears here.') + ' <button class="mini" data-act="go-account">' + (es ? 'Cuenta' : 'Account') + '</button></span>') + '</div>' +
     '<button class="done" data-act="close">' + (es ? 'Listo' : 'Done') + '</button>';
   if (isPro() && BE()) {
     try {
@@ -2911,7 +2911,7 @@ async function openDay(dateStr) {
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="color:var(--muted);font-size:13px">What matters for <b style="color:var(--text)">' + ACTIVITIES[act] + '</b></div>' +
     '<div class="seg" style="gap:4px">' + Object.entries(ACTIVITIES).map(([k, v]) => '<button data-actv="' + k + '" class="' + (k === act ? 'on' : '') + '" style="min-height:36px;padding:0 10px;font-size:13px">' + v.split(' /')[0] + '</button>').join('') + '</div></div>' +
     '<div class="tiles">' + tilesByActivity[act].filter(Boolean).join('') + '</div>' +
-    '<div id="dayAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:10px">' + (isPro() && BE() ? '<span class="muted">' + (lang() === 'es' ? 'Redactando el resumen del día…' : 'Writing up the day…') + '</span>' : '<span class="muted">' + (lang() === 'es' ? 'Con LeadTime Pro, aquí aparece una explicación escrita de cómo se desarrolla el día.' : 'With LeadTime Pro, a written walk-through of how the day unfolds appears here.') + '</span>') + '</div>' +
+    '<div id="dayAnalysis" class="row" style="font-size:16px;line-height:1.45;margin-top:10px">' + (isPro() && BE() ? '<span class="muted">' + (lang() === 'es' ? 'Redactando el resumen del día…' : 'Writing up the day…') + '</span>' : '<span class="muted">' + (lang() === 'es' ? 'Con VanguardWX Pro, aquí aparece una explicación escrita de cómo se desarrolla el día.' : 'With VanguardWX Pro, a written walk-through of how the day unfolds appears here.') + '</span>') + '</div>' +
     (sun && sun.rise ? '<div class="sunline"><span>Dawn <b>' + clock(sun.dawn) + '</b></span><span>Sunrise <b>' + clock(sun.rise) + '</b></span><span>Sunset <b>' + clock(sun.set) + '</b></span><span>Dusk <b>' + clock(sun.dusk) + '</b></span><span>Moon <b>' + moon.ill + '% ' + moon.name.toLowerCase() + '</b></span></div>' : '') +
     (hours.length ? '<div style="max-height:46vh;overflow:auto;margin-top:8px"><table class="hrs"><thead><tr><th>Hour</th><th>Temp (feels)</th><th>Rain</th>' + (hasTh ? '<th>Thunder</th>' : '') + '<th>Wind mph</th><th>Sky</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="fctext">Hour-by-hour detail is not available this far out.</div>') +
     '<div class="fctext">' + (dayP ? '<b>' + dayP.name + '</b>' + dayP.detailedForecast : '') + (nightP ? '<b>' + nightP.name + '</b>' + nightP.detailedForecast : '') + '</div>' +
@@ -3917,7 +3917,7 @@ async function familyAction(b) {
       return true;
     }
     if (act === 'fam-copy') { try { await navigator.clipboard.writeText(b.dataset.link); b.textContent = es ? 'Copiado' : 'Copied'; } catch (e) { prompt(es ? 'Copia este enlace' : 'Copy this link', b.dataset.link); } return true; }
-    if (act === 'fam-sharelink') { try { await navigator.share({ title: 'LeadTime', text: es ? 'Únete a mi grupo de LeadTime' : 'Join my LeadTime group', url: b.dataset.link }); } catch (e) {} return true; }
+    if (act === 'fam-sharelink') { try { await navigator.share({ title: 'VanguardWX', text: es ? 'Únete a mi grupo de VanguardWX' : 'Join my VanguardWX group', url: b.dataset.link }); } catch (e) {} return true; }
     if (act === 'fam-join') {
       const name = ($('#famJoinName').value || '').trim(); if (name) { S.account.name = name; save(); }
       say_('#famJoinMsg', es ? 'Uniéndote…' : 'Joining…');
@@ -4110,17 +4110,17 @@ function openSettings(tab) {
     pane('family', familyPane()) +
     pane('places', placesPane()) +
     pane('account', (S.account && S.account.email
-      ? '<div class="row"><div class="tl">' + (isPro() ? '<span class="pro">PRO</span> LeadTime Pro is active' : 'Signed in — free version') + '</div><div class="td">' + S.account.email + (isPro() && S.account.expiresMs ? ' · Pro until ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div>' +
+      ? '<div class="row"><div class="tl">' + (isPro() ? '<span class="pro">PRO</span> VanguardWX Pro is active' : 'Signed in — free version') + '</div><div class="td">' + S.account.email + (isPro() && S.account.expiresMs ? ' · Pro until ' + new Date(S.account.expiresMs).toLocaleDateString() : '') + '</div>' +
         '<div class="td" style="margin-top:4px">Settings sync across your signed-in devices' + (S.syncedAt ? ' · last synced ' + new Date(S.syncedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '') + '.</div>' +
         '<div class="btns"><button data-act="acct-refresh">Check again</button><button data-act="acct-signout">Sign out on this device</button></div></div>' +
-        (isPro() ? '' : '<div class="row"><label>Have a Pro activation code?</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div><div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div style="color:var(--muted);font-size:14px;margin-top:8px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div></div>') +
+        (isPro() ? '' : '<div class="row"><label>Have a Pro activation code?</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div><div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div><div style="color:var(--muted);font-size:14px;margin-top:8px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://vanguardwx.com/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div></div>') +
         '<div class="row" style="color:var(--muted);font-size:14px">Delete account: removes your email, synced settings and alert subscriptions from the server. <button data-act="acct-delete" style="margin-left:6px;min-height:34px;font-size:13px">Delete my account…</button></div>'
       : '<div class="row"><div class="tl">Sign in (optional)</div><div class="td">Keeps your settings across phone, tablet and desktop, and is where Pro lives. Nothing in the free app needs it.</div></div>' +
         '<div class="row"><label>Email</label><input id="acctEmail" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="' + (st.signinEmail || '') + '" ' + inputStyle + '>' +
         (st.signinSent ? '<label style="margin-top:10px">Code from the email</label><input id="acctLogin" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits" ' + inputStyle + '><div class="btns"><button data-act="acct-verify">Sign in</button><button data-act="acct-start">Send a new code</button></div>' : '<div class="btns"><button data-act="acct-start">Send me a code</button></div>') +
         '<div id="acctMsg" style="color:var(--muted);font-size:14px;margin-top:6px">' + (st.signinSent ? 'Sent to ' + st.signinEmail + ' — check spam if it is slow.' : '') + '</div></div>' +
         '<div class="row"><label>Or a Pro activation code</label><input id="acctCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" ' + inputStyle + '><div class="btns"><button data-act="acct-redeem">Activate Pro</button></div></div>' +
-        '<div class="row" style="color:var(--muted);font-size:14px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://getleadtime.app/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div>')) +
+        '<div class="row" style="color:var(--muted);font-size:14px">Pro adds: ' + Object.values(PRO_FEATURES).join('; ').toLowerCase() + '. <a href="https://vanguardwx.com/pricing/" target="_blank" rel="noopener" style="color:var(--accent2)">Pricing →</a></div>')) +
     pane('about', '<div class="diag" id="diag" style="border-top:0;margin-top:0;padding-top:4px"></div>' +
       '<div class="row"><div class="btns"><button data-act="upd-check">Check for an update</button><button data-act="upd-reload">Reload the app</button></div><div id="updMsg" style="color:var(--muted);font-size:14px;margin-top:6px"></div></div>' +
       '<div class="row" style="color:var(--muted);font-size:13px">Data: NOAA/NWS (radar, forecasts, alerts, river gauges, smoke, satellite, tropical cyclones, tides and water temperature), NIFC (wildfires), USDA SNOTEL (snow depth), Open-Meteo (wind arrows, UV, modeled snow depth), OpenStreetMap (map). Supplemental information — not a substitute for official warnings or your own judgment.</div>') +
@@ -4134,7 +4134,7 @@ function renderDiag() {
   const d = $('#diag'); if (!d) return;
   const m = st.nc && st.nc.motion;
   d.textContent = [
-    'LeadTime version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
+    'VanguardWX version ' + APP_VERSION + (upd.pending ? ' · update ready' : '') + (lowData() ? ' · low-data mode' : ''),
     'Location: ' + (st.loc ? st.loc.lat.toFixed(4) + ', ' + st.loc.lon.toFixed(4) + ' (' + st.loc.src + ')' : 'none') + (st.gpsAcc ? ' · GPS ±' + Math.round(st.gpsAcc) + ' m' : '') + (st.gpsErr ? ' · GPS: ' + st.gpsErr : ''),
     'Toolbar gap: setting ' + String(S.bottomGap) + ' → ' + ((st.navpad || {}).px ?? '?') + ' px' + (st.navpad ? ' (inset ' + Math.round(st.navpad.inset) + ', hidden strip ' + st.navpad.hidden + ', layout ' + st.navpad.layoutH + ' / visible ' + st.navpad.visibleH + ' / inner ' + st.navpad.innerH + ' / screen ' + st.navpad.screenH + ', ' + (st.navpad.standalone ? 'installed app' : 'browser tab') + ')' : '') + ' · device slot: ' + (localStorage.getItem('campRadar.device') || 'empty') + (st.navpadFixes ? ' · re-applied ' + st.navpadFixes + '×' : ''),
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ((st.tileStats || {}).lastAlt ? ' · last retry went to: ' + (st.tileStats || {}).lastAlt : '') + ((st.tileStats || {}).altErr ? ' · retry error: ' + (st.tileStats || {}).altErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
@@ -4156,7 +4156,7 @@ function renderDiag() {
 function welcomeHtml() {
   const es = lang() === 'es', signed = signedIn();
   const acts = Object.entries(ACTIVITIES).map(([k, v]) => '<option value="' + k + '"' + (k === S.activity ? ' selected' : '') + '>' + v + '</option>').join('');
-  return '<h2>' + (es ? 'Bienvenido a LeadTime' : 'Welcome to LeadTime') + '</h2>' +
+  return '<h2>' + (es ? 'Bienvenido a VanguardWX' : 'Welcome to VanguardWX') + '</h2>' +
     '<div class="row"><div class="td">' + (es ? 'Radar en vivo, aviso de la lluvia con tiempo y el pronóstico para donde estés. Dos cosas rápidas y listo.' : 'Live radar, advance notice of rain, and the forecast for wherever you are. Two quick things and you are set.') + '</div></div>' +
     '<div class="row"><label>' + (es ? 'Nombre de este dispositivo' : 'Name this device') + '</label><input id="welDevice" maxlength="24" autocomplete="off" value="' + escapeHtml(deviceName()) + '" ' + inputStyle + '>' +
       '<div class="muted" style="font-size:13px;margin-top:4px">' + (es ? 'Aparece junto a tu nombre en los mensajes del grupo y distingue tu teléfono de tu tableta.' : 'Shown after your name on group messages, and tells your phone from your tablet.') + '</div></div>' +
@@ -4190,13 +4190,13 @@ $('#sheet').addEventListener('click', e => {
   if (b.dataset.speak) { if (speech.speaking) stopSpeaking(); else if (st.lastBrief) speak(st.lastBrief); return; }
   if (b.dataset.act && (b.dataset.act.startsWith('fam-') || b.dataset.act === 'go-account')) { familyAction(b); return; }
   if (b.dataset.act && b.dataset.act.startsWith('site-')) { placesAction(b); return; }
-  if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'LeadTime Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'acct-redeem') { const code = ($('#acctCode').value || '').trim(); const m = $('#acctMsg'); if (!code) { m.textContent = 'Enter the code first.'; return; } m.textContent = 'Checking…'; redeemCode(code).then(j => { openSettings('account'); speak(j.pro ? 'VanguardWX Pro is active.' : 'Signed in, but Pro is not active.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-signout') { signOut().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'wel-done') { finishWelcome(); return; }
   if (b.dataset.act === 'wel-send') { const email = ($('#welEmail').value || '').trim(); const m = $('#welMsg'); if (!email) { m.textContent = lang() === 'es' ? 'Escribe tu correo primero.' : 'Enter your email first.'; return; } m.textContent = lang() === 'es' ? 'Enviando…' : 'Sending…'; if ($('#welDevice')) S.deviceName = $('#welDevice').value.trim().slice(0, 24); startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openWelcome(); setTimeout(() => { const i = $('#welCode'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
-  if (b.dataset.act === 'wel-verify') { const code = ($('#welCode').value || '').trim(); const m = $('#welMsg'); if (code.length !== 6) { m.textContent = lang() === 'es' ? 'Escribe el código de 6 dígitos.' : 'Enter the 6-digit code.'; return; } m.textContent = lang() === 'es' ? 'Iniciando sesión…' : 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { speak(j.pro ? (lang() === 'es' ? 'Sesión iniciada. LeadTime Pro está activo.' : 'Signed in. LeadTime Pro is active.') : (lang() === 'es' ? 'Sesión iniciada.' : 'Signed in.')); finishWelcome(); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'wel-verify') { const code = ($('#welCode').value || '').trim(); const m = $('#welMsg'); if (code.length !== 6) { m.textContent = lang() === 'es' ? 'Escribe el código de 6 dígitos.' : 'Enter the 6-digit code.'; return; } m.textContent = lang() === 'es' ? 'Iniciando sesión…' : 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { speak(j.pro ? (lang() === 'es' ? 'Sesión iniciada. VanguardWX Pro está activo.' : 'Signed in. VanguardWX Pro is active.') : (lang() === 'es' ? 'Sesión iniciada.' : 'Signed in.')); finishWelcome(); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-start') { const email = ($('#acctEmail').value || '').trim(); const m = $('#acctMsg'); if (!email) { m.textContent = 'Enter your email first.'; return; } m.textContent = 'Sending…'; startSignIn(email).then(() => { st.signinEmail = email; st.signinSent = true; openSettings('account'); setTimeout(() => { const i = $('#acctLogin'); if (i) i.focus(); }, 50); }).catch(e => { m.textContent = e.message; }); return; }
-  if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. LeadTime Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
+  if (b.dataset.act === 'acct-verify') { const code = ($('#acctLogin').value || '').trim(); const m = $('#acctMsg'); if (code.length !== 6) { m.textContent = 'Enter the 6-digit code.'; return; } m.textContent = 'Signing in…'; verifySignIn(st.signinEmail, code).then(j => { st.signinSent = false; openSettings(st.pendingJoin ? 'family' : 'account'); speak(j.pro ? 'Signed in. VanguardWX Pro is active.' : 'Signed in.'); }).catch(e => { m.textContent = e.message; }); return; }
   if (b.dataset.act === 'acct-delete') { if (!confirm('Delete your account? This removes your email, synced settings and alert subscriptions from the server. The app keeps working as the free version.')) return; deleteAccount().then(() => openSettings('account')).catch(e => alert(e.message)); return; }
   if (b.dataset.act === 'acct-refresh') { refreshAccount().then(() => openSettings('account')); return; }
   if (b.dataset.act === 'ww-show') { const a = st.wwPills[+b.dataset.ww]; closeModal(); if (a && a.bounds) { st.lastTouch = Date.now(); map.fitBounds(a.bounds.pad(0.2)); } return; }

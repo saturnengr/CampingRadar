@@ -1,6 +1,6 @@
 {
-  "name": "LeadTime",
-  "short_name": "LeadTime",
+  "name": "VanguardWX",
+  "short_name": "VanguardWX",
   "description": "Weather radar, rain arrival alerts, lightning and NWS warnings for camping, RVs, trails, beaches and fishing.",
   "start_url": "./",
   "scope": "./",

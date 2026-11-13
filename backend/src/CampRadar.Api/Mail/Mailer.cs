@@ -24,8 +24,8 @@ public sealed class Mailer
     public bool SmtpEnabled => !string.IsNullOrWhiteSpace(_cfg["Smtp:Host"]) && !string.IsNullOrWhiteSpace(_cfg["Smtp:From"]);
     public bool Enabled => GraphEnabled || SmtpEnabled;
     public string Transport => GraphEnabled ? "graph" : SmtpEnabled ? "smtp" : "none";
-    public string ProductName => _cfg["ProductName"] ?? "LeadTime";
-    public string SupportAddress => _cfg["SupportEmail"] ?? "support@getleadtime.app";
+    public string ProductName => _cfg["ProductName"] ?? "VanguardWX";
+    public string SupportAddress => _cfg["SupportEmail"] ?? "support@vanguardwx.com";
 
     public Task SendAsync(string to, string subject, string text, CancellationToken ct) => GraphEnabled ? SendGraphAsync(to, subject, text, ct) : SendSmtpAsync(to, subject, text, ct);
 
