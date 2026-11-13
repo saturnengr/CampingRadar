@@ -129,6 +129,8 @@ const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.i
       20+ minutes, that observation outranks the projection: orange (red inside 10 min) with ETA = distance / observed rate.
       This is the "forming / light rain the projection under-reads" miss. The stalled-edge yellow also only applies when the
       projected arrival is more than 30 min out.
+   6. the edge rules (stalled / slow / receding) describe the NEAREST echo; they only speak for the arrival when that echo is part of
+      the storm projected to hit, and never override a big strong arrival (≥ 40 dBZ or ≥ 100 cells, which the projection gets right).
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
 const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10);
 let fizzleSeen4 = 0;
@@ -164,15 +166,17 @@ for (const t of times) {
     else if (lowConf) newC = 'yellow';
     else { if (edge && edge.verdict === 'slow' && edge.etaMin > hit.etaMin) etaNew = Math.min(120, edge.etaMin); newC = etaNew <= 10 ? 'red' : 'orange'; }
     // V4 column (an observed-closing verdict set above stands)
+    const edgeApplies = edge && (p.res.nearestBlob == null || hit.blob == null || p.res.nearestBlob === hit.blob) && !(hit.maxDbz >= 40 || hit.cells >= 100);
+    let eta4 = hit.etaMin; if (edgeApplies && edge.verdict === 'slow' && edge.etaMin > hit.etaMin) eta4 = Math.min(120, edge.etaMin);
     if (closingNear) { if (hit.etaMin < etaV4) { etaV4 = hit.etaMin; v4C = etaV4 <= 10 ? 'red' : 'orange'; } }
     else if (fizz4 && hit.etaMin > 10 && hit.maxDbz < 40) v4C = 'yellow';
-    else if (!lowConf && edge && edge.verdict === 'stalled' && hit.maxDbz < 40 && hit.etaMin > 30) v4C = 'yellow';
+    else if (!lowConf && edgeApplies && edge.verdict === 'stalled' && hit.etaMin > 30) v4C = 'yellow';
     else if (graze) v4C = 'blue';
-    else if (edge && edge.rate <= -RECEDE_MPH && hit.etaMin > 10) v4C = 'blue';
+    else if (edgeApplies && edge.rate <= -RECEDE_MPH && hit.etaMin > 10) v4C = 'blue';
     else if (far && !lowConf) v4C = 'blue';
     else if (lowConf) v4C = 'yellow';
-    else if (etaNew > BLUE_MIN) v4C = 'blue';
-    else v4C = etaNew <= 10 ? 'red' : 'orange';
+    else if (eta4 > BLUE_MIN) v4C = 'blue';
+    else { etaV4 = eta4; v4C = eta4 <= 10 ? 'red' : 'orange'; }
   }
   rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, etaV4: closingNear ? etaV4 : etaNew, oldC, newC, v4C, graze, closingNear, fizz, fizz4, hitCells: hit ? hit.cells : null, hitDur: hit ? hit.endMin - hit.etaMin : null, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
   const eTxt = ` | ${oldC.padEnd(6)} → ${newC.padEnd(6)}` + (edge ? ` edge ${edge.rate.toFixed(0)} vs ${edge.closing.toFixed(0)} mph ${edge.verdict}` : '');
