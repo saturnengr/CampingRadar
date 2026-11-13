@@ -10,12 +10,12 @@ const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const MI = 1609.344, mpp = meta.metersPerPx, size = meta.sizePx, half = size / 2;
 const fineCellPx = 4, coarseF = 2;                 // zoom 8 × 4 px = the page's zoom 7 × 2 px (≈2.05 km)
 const fineKm = mpp * fineCellPx / 1000, coarseKm = fineKm * coarseF;
-const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = 20, hitMi = 3;
+const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = +(process.env.THRESH || 20), hitMi = 3;   // THRESH = the app's alert threshold (10 any echo / 15 light / 20 / 30 moderate); radar truth uses the same bar
 const times = fs.readdirSync(dir).filter(f => /^\d+\.png$/.test(f)).map(f => +f.slice(0, -4)).sort((a, b) => a - b);
 const tz = 'America/Chicago', clock = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
 
 // motion-field variants (env): MOTION_REGIONS=3|4|5, MOTION_REGIONS_AUTO=1, MOTION_SEGMENTS=1 (+ MOTION_SEG_KM, MOTION_SEG_MIN_KM)
-const MOPTS = { maxKmh: 110, regions: +(process.env.MOTION_REGIONS || 0) || undefined, regionsAuto: !!process.env.MOTION_REGIONS_AUTO, segments: !!process.env.MOTION_SEGMENTS, segKm: +(process.env.MOTION_SEG_KM || 50), segMinKm: +(process.env.MOTION_SEG_MIN_KM || 100), thresh: 20 };
+const MOPTS = { maxKmh: 110, regions: +(process.env.MOTION_REGIONS || 0) || undefined, regionsAuto: !!process.env.MOTION_REGIONS_AUTO, segments: !!process.env.MOTION_SEGMENTS, segKm: +(process.env.MOTION_SEG_KM || 50), segMinKm: +(process.env.MOTION_SEG_MIN_KM || 100), thresh };
 const cache = new Map();
 function frame(t) {
   if (cache.has(t)) return cache.get(t);
@@ -23,7 +23,7 @@ function frame(t) {
   // crop the central 2R px (the page builds its composite exactly 2R wide around the point)
   const w = 2 * R, out = Buffer.alloc(w * w * 4), x0 = Math.round(half - R), y0 = Math.round(half - R);
   for (let y = 0; y < w; y++) png.data.copy(out, y * w * 4, ((y0 + y) * png.width + x0) * 4, ((y0 + y) * png.width + x0 + w) * 4);
-  const fine = C.despeckle(C.gridFromRGBA(out, w, w, fineCellPx), 15);
+  const fine = C.despeckle(C.gridFromRGBA(out, w, w, fineCellPx), Math.min(15, thresh));
   const f = { t, fine, coarse: C.downsampleMax(fine, coarseF), cleaned: C.despeckle(fine, thresh) };
   cache.set(t, f); return f;
 }
@@ -114,7 +114,7 @@ console.log('motion variant: ' + JSON.stringify(MOPTS));
 console.log(`${times.length} frames ${clock(times[0])}–${clock(times[times.length - 1])}, window ±${radiusMi} mi, ${tracks.length} core tracks (≥35 dBZ, ≥25 min)`);
 const rainSeries = times.map(t => ({ t, dbz: rainAt(frame(t)) }));
 const firstRain = rainSeries.find(r => r.dbz >= thresh);
-console.log('rain (≥20 dBZ) at the centre: ' + (firstRain ? 'first at ' + clock(firstRain.t) : 'never') + ' — ' + rainSeries.map(r => r.dbz >= thresh ? '#' : r.dbz >= 5 ? '.' : ' ').join(''));
+console.log('rain (≥' + thresh + ' dBZ) at the centre: ' + (firstRain ? 'first at ' + clock(firstRain.t) : 'never') + ' — ' + rainSeries.map(r => r.dbz >= thresh ? '#' : r.dbz >= 5 ? '.' : ' ').join(''));
 
 console.log('\n time   | page motion (baseline)          conf | 60-min NCC        | core tracks        | Δhdg Δspd | page ETA → actual');
 const rows = []; const hist = []; let segFrames = 0, segRegs = 0, regGrid = {}; let fizzleSeen = 0; const DRY = process.argv.includes('--dry');
