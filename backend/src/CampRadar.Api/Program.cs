@@ -65,6 +65,11 @@ builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
 builder.Services.AddSingleton<AlertWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertWorker>());
+builder.Services.AddSingleton<CampRadar.Api.Cams.CamStore>();
+builder.Services.AddSingleton<CampRadar.Api.Cams.CamDirectory>();
+builder.Services.AddSingleton<CampRadar.Api.Cams.CamClassifier>();
+builder.Services.AddSingleton<CampRadar.Api.Cams.CamWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CampRadar.Api.Cams.CamWorker>());
 builder.Services.AddSingleton<CampRadar.Api.Verify.Ledger>();
 builder.Services.AddSingleton<CampRadar.Api.Verify.VerifyWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CampRadar.Api.Verify.VerifyWorker>());
@@ -490,6 +495,13 @@ app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, Cancell
 // Which outside services can this host actually reach? (shared hosts block or black-hole some destinations)
 // ---------- radar recordings for offline verification ----------
 app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Results.Ok(rec.List()) : Results.Unauthorized());
+// ---- webcams as ground truth: our directory, what the worker is looking at, and one-off checks ----
+app.MapGet("/admin/cams", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, CampRadar.Api.Cams.CamDirectory dir, CampRadar.Api.Cams.CamWorker w, double? lat, double? lon, double mi = 15) =>
+    !IsAdmin(r) ? Results.Unauthorized() : Results.Ok(new { directory = new { dir.LastRun, dir.LastRunAt, stats = cs.Stats() }, worker = new { w.LastCycle, w.LastCycleAt, targets = w.Targets(), recent = w.Recent.Values.OrderByDescending(x => x).Take(30) },
+        near = lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 25).Select(c => new { c.Id, c.Name, c.Lat, c.Lon, c.HeadingDeg, c.Url, c.Quality, c.Attempts, c.Good, c.LastGoodMs, distMi = Math.Round(CampRadar.Api.Cams.CamStore.Haversine(la, lo, c.Lat, c.Lon), 1) }) : null }));
+app.MapPost("/admin/cams/refresh", async (HttpRequest r, CampRadar.Api.Cams.CamDirectory dir, CancellationToken ct) => IsAdmin(r) ? Results.Ok(new { result = await dir.RefreshAsync(ct) }) : Results.Unauthorized());
+app.MapPost("/admin/cams/classify", async (HttpRequest r, CampRadar.Api.Cams.CamWorker w, string id, CancellationToken ct) => IsAdmin(r) ? Results.Ok(await w.ClassifyNowAsync(id, ct)) : Results.Unauthorized());
+app.MapGet("/admin/cams/obs", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, string? id, int hours = 24) => IsAdmin(r) ? Results.Ok(cs.Obs(id, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - hours * 3_600_000L)) : Results.Unauthorized());
 // Verification: what the tracker said versus what happened (sample airports, subscriptions, saved places)
 app.MapGet("/admin/verify", (HttpRequest r, CampRadar.Api.Verify.Ledger led, CampRadar.Api.Verify.VerifyWorker vw, int days = 30) => IsAdmin(r) ? Results.Ok(new { worker = new { vw.LastCycle, vw.LastNote, points = vw.Points.Select(p => new { p.Id, p.Name }) }, summary = led.Summary(Math.Clamp(days, 1, 400)) }) : Results.Unauthorized());
 app.MapGet("/admin/verify.csv", (HttpRequest r, CampRadar.Api.Verify.Ledger led, int days = 90) => IsAdmin(r) ? Results.Text(led.Csv(Math.Clamp(days, 1, 400)), "text/csv") : Results.Unauthorized());
