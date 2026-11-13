@@ -511,7 +511,8 @@ app.MapGet("/admin/cams/frame", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, 
 {
     if (!(IsAdmin(r) || (adminKey.Length > 0 && key == adminKey))) return Results.Unauthorized();
     var p = cs.FramePath(name); if (p is null) return Results.NotFound();
-    return Results.File(p, name.EndsWith(".png") ? "image/png" : name.EndsWith(".gif") ? "image/gif" : "image/jpeg");
+    // Results.File resolves a relative path against the web root; the data folder is elsewhere, so hand it the full path
+    return Results.File(Path.GetFullPath(p), name.EndsWith(".png") ? "image/png" : name.EndsWith(".gif") ? "image/gif" : "image/jpeg", enableRangeProcessing: false);
 });
 app.MapPost("/admin/cams/refresh", async (HttpRequest r, CampRadar.Api.Cams.CamDirectory dir, CancellationToken ct) => IsAdmin(r) ? Results.Ok(new { result = await dir.RefreshAsync(ct) }) : Results.Unauthorized());
 app.MapPost("/admin/cams/classify", async (HttpRequest r, CampRadar.Api.Cams.CamWorker w, string id, CancellationToken ct) => IsAdmin(r) ? Results.Ok(await w.ClassifyNowAsync(id, ct)) : Results.Unauthorized());
