@@ -841,6 +841,7 @@ const NC = { coreDbz: 45,   // a heavy core: downpour / thunderstorm cell, track
   // V4 arrival rules (chosen on the 71-case replay batch of 12 Nov 2026; see tools/replay/README.md)
   resumeMph: 5,      // fizzle memory releases once the edge is observed closing this fast
   closeMph: 10, nearMi: 15,   // observed closing at ≥ closeMph with echo inside nearMi outranks the projection
+  proxMi: 5,                  // no projected hit, but echo at/above threshold within proxMi and not receding → orange "may drift over you" (replay: −15 misses / +18 FA at 5 mi; 8 mi overreaches)
   grazeMin: 12, grazeCells: 6, // a projected hit that only clips the circle this briefly, with this little rain, is a pass
   recedeMph: 5,      // nearest echo of the hitting storm moving away this fast → not believed
   blueMin: 75,       // projected arrivals beyond this many minutes are "could reach you", not "arriving"
@@ -885,7 +886,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13a';
+const APP_VERSION = '2026.11.13b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2691,6 +2692,11 @@ function computeStatus() {
     const p = res.passing, near = p && Math.abs(((p.bearing - f.fromBearing) % 360 + 540) % 360 - 180) > 25 ? ' · nearer rain ' + Math.round(p.distMi) + ' mi ' + compass(p.bearing) + ' passes to the ' + compassLong(p.passBearing) : '';
     const dur = fmtDur(eta); out.main = 'Rain ' + Math.round(f.distMi) + ' mi ' + compass(f.fromBearing) + ' could reach you in ' + (/^just/.test(dur) ? '' : 'about ') + dur;
     out.sub = 'Straight-line track, ≈ ' + etaClock(eta) + ' — beyond the two hours the tracker trusts' + near + (moving ? ' · ' + moving : '');
+  } else if (!hit && !closingNear && res.nearest && res.nearest.distMi <= NC.proxMi && !(edge && edge.rate <= -NC.recedeMph)) {
+    // proximity: the tracker has no track to project (stationary drizzle, lake effect, rain forming in place) but rain is already next door
+    const n = res.nearest; out.cls = 'orange'; out.level = 'incoming'; out.prox = true;
+    out.main = 'Rain ' + Math.max(1, Math.round(n.distMi)) + ' mi ' + compass(n.bearing) + ' — may drift over you';
+    out.sub = intensityWord(n.dbz) + ' rain nearby with no clear track' + (edge && Math.abs(edge.rate) < NC.recedeMph ? ' · holding its distance' : '') + (moving ? ' · ' + moving : '');
   } else if (res.passing) {
     const p = res.passing, nt = res.nearestTrend;
     out.cls = 'blue'; out.level = 'passing';
@@ -2716,6 +2722,11 @@ function ringStates(s) {
   const hitOk = res.hit && ['atyou', 'imminent', 'incoming', 'low', 'watch'].includes(s.level);   // not passing/receding/fizzled
   const missOk = !!(res.passing || (res.hit && s.level === 'passing' && !s.receding));
   const col = res.hit ? (res.hit.maxDbz >= 50 ? 'red' : res.hit.maxDbz >= 40 ? 'orange' : res.hit.maxDbz >= 30 ? 'yellow' : 'white') : 'white';
+  if (s.prox && res.nearest) {   // proximity orange: the nearby echo is treated as the hitting part for the rings it already sits inside
+    const pc = res.nearest.dbz >= 50 ? 'red' : res.nearest.dbz >= 40 ? 'orange' : res.nearest.dbz >= 30 ? 'yellow' : 'white';
+    for (const r of ranges()) out[r] = res.nearest.distMi <= r ? { style: 'solid', c: pc } : { style: 'dashed', c: 'white' };
+    return out;
+  }
   for (const r of ranges()) {
     let style = 'dashed', c = 'white';
     const hi = hitOk && res.ringIn ? res.ringIn[r] : null, mi = res.ringMiss ? res.ringMiss[r] : null;
