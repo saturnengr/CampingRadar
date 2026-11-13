@@ -9,7 +9,7 @@ public static class AdminPage
     public const string Html = """
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VanguardWX · admin</title>
+<title>VantageWX · admin</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root{--bg:#0f1a24;--panel:#1b2d3b;--line:#2a4255;--text:#e9f0f5;--muted:#9fb3c2;--accent:#ffb74d;--blue:#4fc3f7;--green:#66bb6a}
@@ -30,7 +30,7 @@ public static class AdminPage
   @media(max-width:900px){main{grid-template-columns:1fr 1fr}.half{grid-column:1/-1}}
 </style></head>
 <body>
-<header><h1>VanguardWX · admin</h1><div class="r" id="when"></div><button id="refresh" hidden>Refresh</button><button id="logout" hidden style="background:var(--panel);color:var(--text);border:1px solid var(--line)">Sign out</button></header>
+<header><h1>VantageWX · admin</h1><div class="r" id="when"></div><button id="refresh" hidden>Refresh</button><button id="logout" hidden style="background:var(--panel);color:var(--text);border:1px solid var(--line)">Sign out</button></header>
 <div id="login"><p>Enter the admin key (the <code>AdminKey</code> from appsettings.Production.json).</p><p><input id="key" type="password" autocomplete="off" placeholder="admin key"> <button id="go">Open</button></p><p class="sub" id="err"></p></div>
 <main id="main" hidden>
   <div class="card"><h2>Active now</h2><div class="big" id="now">–</div><div class="sub">app open in the last 10 minutes</div></div>

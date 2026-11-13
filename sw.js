@@ -1,4 +1,4 @@
-/* VanguardWX service worker: shows push alerts from the backend. */
+/* VantageWX service worker: shows push alerts from the backend. */
 self.addEventListener('install', e => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
@@ -26,11 +26,11 @@ async function trimTiles(c) {
 }
 
 self.addEventListener('push', e => {
-  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'VanguardWX', body: e.data && e.data.text() }; }
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'VantageWX', body: e.data && e.data.text() }; }
   const critical = (d.tag || '').startsWith('warning') || d.level === 'imminent' || d.level === 'atyou';
   const opts = { body: d.body || '', tag: d.tag || 'campradar', renotify: true, requireInteraction: critical, data: d, icon: './icon-192.png', badge: './icon-192.png', vibrate: critical ? [300, 100, 300, 100, 600] : [150, 80, 150] };
   if (d.tag === 'msg' && d.replyToken) opts.actions = (d.lang === 'es' ? ['OK', '5 min', 'No puedo'] : ['OK', '5 min', "Can't"]).map(t => ({ action: 'reply:' + t, title: t }));
-  e.waitUntil(self.registration.showNotification(d.title || 'VanguardWX', opts));
+  e.waitUntil(self.registration.showNotification(d.title || 'VantageWX', opts));
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();

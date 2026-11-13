@@ -1,6 +1,6 @@
 {
-  "name": "VanguardWX",
-  "short_name": "VanguardWX",
+  "name": "VantageWX",
+  "short_name": "VantageWX",
   "description": "Weather radar, rain arrival alerts, lightning and NWS warnings for camping, RVs, trails, beaches and fishing.",
   "start_url": "./",
   "scope": "./",

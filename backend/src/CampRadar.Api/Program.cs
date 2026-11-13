@@ -70,7 +70,7 @@ builder.Services.AddSingleton<CampRadar.Api.Verify.VerifyWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CampRadar.Api.Verify.VerifyWorker>());
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 {
-    var origins = (builder.Configuration["AllowedOrigins"] ?? "https://app.vanguardwx.com,https://app.getleadtime.app,https://saturnengr.github.io").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var origins = (builder.Configuration["AllowedOrigins"] ?? "https://app.vantagewx.com,https://app.getleadtime.app,https://saturnengr.github.io").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
 }));
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase; o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull; });
@@ -85,10 +85,10 @@ static string ExtractEmail(string prefsJson) { try { using var d = JsonDocument.
 bool IsAdmin(HttpRequest r) => adminKey.Length > 0 && r.Headers["X-Admin-Key"] == adminKey;
 string? Bearer(HttpRequest r) { var h = r.Headers.Authorization.ToString(); return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : null; }
 // Pro gate: 402 with a short reason the app shows next to the feature.
-IResult? RequirePro(HttpRequest r, EntitlementStore ent) => ent.Check(Bearer(r)).Pro ? null : Results.Json(new { error = "pro", message = "This needs VanguardWX Pro. Sign in or enter an activation code in Settings → Account." }, statusCode: 402);
+IResult? RequirePro(HttpRequest r, EntitlementStore ent) => ent.Check(Bearer(r)).Pro ? null : Results.Json(new { error = "pro", message = "This needs VantageWX Pro. Sign in or enter an activation code in Settings → Account." }, statusCode: 402);
 
 // ---------- health / heartbeat ----------
-app.MapGet("/", () => Results.Text("VanguardWX API. See /health", "text/plain"));
+app.MapGet("/", () => Results.Text("VantageWX API. See /health", "text/plain"));
 app.MapGet("/health", (MrmsClient m, LightningStore l, AlertWorker w, PushSender p, SpotStore s) => new
 {
     ok = true, utc = DateTimeOffset.UtcNow,
@@ -196,7 +196,7 @@ app.MapPost("/push/{id}/test", async (string id, SpotStore store, PushSender p, 
     var spot = store.Get(id); if (spot is null) return Results.NotFound();
     try
     {
-        var ok = await p.SendAsync(spot, new { title = "VanguardWX test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
+        var ok = await p.SendAsync(spot, new { title = "VantageWX test", body = "Alerts are working on this device.", tag = "test", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }, "test", false, ct);
         return ok ? Results.Ok() : Results.Json(new { error = "this device's subscription has expired; turn alerts off and on again" }, statusCode: 410);
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -275,7 +275,7 @@ app.MapGet("/sites", (HttpRequest r, EntitlementStore ent, SiteStore sites) =>
 app.MapPost("/sites", (HttpRequest r, [FromBody] SiteRequest req, EntitlementStore ent, SiteStore sites) =>
 {
     var (pro, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
-    if (!pro) return Results.Json(new { error = "pro", message = "Saved places need VanguardWX Pro." }, statusCode: 402);
+    if (!pro) return Results.Json(new { error = "pro", message = "Saved places need VantageWX Pro." }, statusCode: 402);
     var name = (req.Name ?? "").Trim(); if (name.Length is 0 or > 40) return Results.BadRequest(new { error = "name: 1 to 40 characters" });
     if (req.Lat is < -90 or > 90 || req.Lon is < -180 or > 180) return Results.BadRequest(new { error = "bad coordinates" });
     var thr = req.Thresholds is { ValueKind: JsonValueKind.Object } th && th.GetRawText().Length < 500 ? th.GetRawText() : "{}";
@@ -337,7 +337,7 @@ app.MapGet("/group", (HttpRequest r, EntitlementStore ent, GroupStore groups) =>
 app.MapPost("/group/invite", async (HttpRequest r, [FromBody] InviteRequest req, EntitlementStore ent, GroupStore groups, Mailer mail, CancellationToken ct) =>
 {
     var (_, e, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
-    if (e?.Active != true) return Results.Json(new { error = "pro", message = "Inviting family and friends needs VanguardWX Pro on your account." }, statusCode: 402);
+    if (e?.Active != true) return Results.Json(new { error = "pro", message = "Inviting family and friends needs VantageWX Pro on your account." }, statusCode: 402);
     var existing = groups.GroupOf(t.Email);
     if (existing is not null && existing.OwnerEmail != t.Email) return Results.BadRequest(new { error = "You are a member of someone else's group. Leave it to start your own." });
     var g = groups.EnsureOwnerGroup(t.Email, req.MyName ?? "");
@@ -348,7 +348,7 @@ app.MapPost("/group/invite", async (HttpRequest r, [FromBody] InviteRequest req,
     if (!string.IsNullOrWhiteSpace(req.Email) && mail.Enabled)
     {
         var owner = DisplayName(req.MyName, t.Email);
-        try { await mail.SendAsync(req.Email.Trim(), $"{owner} invited you to VanguardWX", $"{owner} ({t.Email}) invited you to their VanguardWX group.\n\nWith the invite you share weather alerts, can choose to share your location with the group for a few hours at a time, and can send each other short messages like \"dinner in 10\".\n\nTo accept: open the app (app.vanguardwx.com), sign in with this email under Settings → Account, then Settings → Family → enter the invite code:\n\n    {code}\n\nThe code works for 7 days. If you don't know {owner}, ignore this email.\n\n— {mail.ProductName}", ct); emailed = true; }
+        try { await mail.SendAsync(req.Email.Trim(), $"{owner} invited you to VantageWX", $"{owner} ({t.Email}) invited you to their VantageWX group.\n\nWith the invite you share weather alerts, can choose to share your location with the group for a few hours at a time, and can send each other short messages like \"dinner in 10\".\n\nTo accept: open the app (app.vantagewx.com), sign in with this email under Settings → Account, then Settings → Family → enter the invite code:\n\n    {code}\n\nThe code works for 7 days. If you don't know {owner}, ignore this email.\n\n— {mail.ProductName}", ct); emailed = true; }
         catch (Exception ex) { app.Logger.LogWarning(ex, "invite mail failed"); }
     }
     return Results.Ok(new { code, emailed, expiresDays = 7 });
@@ -429,7 +429,7 @@ string ReplyKey(long msgId, string email)
 app.MapPost("/group/message", async (HttpRequest r, [FromBody] MessageRequest req, EntitlementStore ent, GroupStore groups, SpotStore spots, PushSender push, CancellationToken ct) =>
 {
     var (pro, _, t) = ent.Check(Bearer(r)); if (t is null) return Results.Unauthorized();
-    if (!pro) return Results.Json(new { error = "pro", message = "Messages need VanguardWX Pro (yours or your group owner's)." }, statusCode: 402);
+    if (!pro) return Results.Json(new { error = "pro", message = "Messages need VantageWX Pro (yours or your group owner's)." }, statusCode: 402);
     var g = groups.GroupOf(t.Email); if (g is null) return Results.BadRequest(new { error = "not in a group" });
     var text = (req.Text ?? "").Trim(); if (text.Length == 0 || text.Length > 160) return Results.BadRequest(new { error = "1 to 160 characters" });
     if (groups.RecentMessageCount(t.Email, 10) >= 20) return Results.Json(new { error = "Slow down — that's a lot of messages in ten minutes." }, statusCode: 429);
