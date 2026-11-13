@@ -841,7 +841,7 @@ const overviewAllowed = () => typeof isPro === 'function' && isPro();
 const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 15, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping', leadTime: 'on',
   layers: { motion: true, storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
@@ -875,7 +875,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12m';
+const APP_VERSION = '2026.11.12n';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1017,6 +1017,18 @@ function distMi(a, b) {
 function fmtDurExact(min) { min = Math.round(min); if (min < 60) return min + ' min'; const h = Math.floor(min / 60), m = min % 60; return h + ' h' + (m ? ' ' + m + ' min' : ''); }
 // Rounded the way people say it, in 10-minute steps: 1–4 past a mark is "just over" it, 5–9 past is "just under" the next (62 → just over 1 h; 67 → just under 1 h 10 min). Under 10 minutes stays exact.
 function fmtDur(min, exact) { min = Math.round(min); if (exact || min < 10) return fmtDurExact(min); const d = min % 10; return d === 0 ? fmtDurExact(min) : d < 5 ? 'just over ' + fmtDurExact(min - d) : 'just under ' + fmtDurExact(min - d + 10); }
+/* Lead time: the banner's red ("act now") window is the time this activity needs to get safe, and a strong storm stretches it.
+   Minutes to red by activity and intensity class [light/moderate <40 dBZ, heavy 40–49, very heavy ≥50]. Orange reaches to the
+   75-minute horizon as before; red here can override the far/horizon blue (a very heavy cell 80 min out IS "head in now" on a boat).
+   Settings → Alerts → "Lead time" = Off restores the fixed 10-minute red for every activity. */
+const LEAD_RED = { sentinel: [10, 10, 15], rv: [10, 10, 15], camping: [15, 25, 40], hunting: [15, 25, 40], beach: [15, 25, 40], trail: [20, 40, 60], skiing: [20, 40, 60], fishing: [30, 60, 90] };
+const LEAD_ACT = { camping: 'secure camp now', hunting: 'start back now', beach: 'pack up now', trail: 'start for shelter now', skiing: 'head down now', fishing: 'head for shore now' };
+function leadRed(dbz) {
+  if (S.leadTime === 'off') return 10;
+  const row = LEAD_RED[S.activity] || LEAD_RED.camping;
+  return row[dbz >= 50 ? 2 : dbz >= 40 ? 1 : 0];
+}
+function leadNote(eta, dbz) { return S.leadTime !== 'off' && eta > 10 && LEAD_ACT[S.activity] ? ' — ' + LEAD_ACT[S.activity] : ''; }
 function intensityWord(dbz) { return dbz < 20 ? 'Very light' : dbz < 30 ? 'Light' : dbz < 40 ? 'Moderate' : dbz < 50 ? 'Heavy' : 'Very heavy'; }
 /* The tracking threshold in use. "Light rain and up" is 15 dBZ: on MRMS base reflectivity, November drizzle and cold-season
    stratiform rain sit at 10–20 dBZ and do wet the ground (the gauge record shows it), so 20 missed whole shields of it. In warm
@@ -2598,7 +2610,8 @@ function computeStatus() {
   if (closingNear && !(hit && hit.etaMin <= 0.5)) {
     const etaObs = res.nearest.distMi / edge.rate * 60, etaRaw = hit && hit.etaMin < etaObs ? hit.etaMin : etaObs, eta = Math.max(0, etaRaw - lat);
     const word = hit ? intensityWord(hit.maxDbz) : intensityWord(res.nearest.dbz);
-    if (eta <= 10) { out.cls = 'red'; out.level = 'imminent'; out.main = 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min'; }
+    const dbzC = hit ? hit.maxDbz : res.nearest.dbz;
+    if (eta <= leadRed(dbzC)) { out.cls = 'red'; out.level = 'imminent'; out.main = eta <= 10 ? 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min' : 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')' + leadNote(eta, dbzC); }
     else { out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')'; }
     out.sub = word + ' rain ' + Math.round(res.nearest.distMi) + ' mi ' + compass(res.nearest.bearing) + ' closing at ' + Math.round(edge.rate) + ' mph' + (hit ? coreLine(res.core, hit, lat) : '') + (moving ? ' · ' + moving : '');
     out.rings = Object.assign({}, res.rings); return overlayLightning(out);
@@ -2626,7 +2639,7 @@ function computeStatus() {
     out.cls = 'blue'; out.level = 'passing';
     out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + (receding ? ' is moving away' : ' — likely brushing past');
     out.sub = (receding ? 'Its edge has been pulling back at ' + Math.round(-edge.rate) + ' mph for ' + Math.round(edge.spanMin) + ' min' : 'Only a sliver of it crosses your spot, ≈ ' + etaClock(etaProj) + ' for a few minutes') + (moving ? ' · ' + moving : '');
-  } else if (hit && !lowConf && (hit.distMi > ALERT_RANGE_MI || etaProj > NC.blueMin)) {
+  } else if (hit && !lowConf && (hit.distMi > ALERT_RANGE_MI || etaProj > NC.blueMin) && !(etaProj <= leadRed(hit.maxDbz) && hit.distMi <= ALERT_RANGE_MI)) {
     // heading this way but still far out: say so, no alert until it is inside the alert range
     const eta = etaProj;
     out.cls = 'blue'; out.level = 'watch';
@@ -2640,8 +2653,9 @@ function computeStatus() {
     if (hit.etaMin <= 0.5) {
       out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';
       out.sub = (hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + etaClock(hit.endMin - lat) : 'May continue for a while') + coreNote;
-    } else if (eta <= 10) {
-      out.cls = 'red'; out.level = 'imminent'; out.main = 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min';
+    } else if (eta <= leadRed(hit.maxDbz)) {
+      out.cls = 'red'; out.level = 'imminent';
+      out.main = eta <= 10 ? 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min' : 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')' + leadNote(eta, hit.maxDbz);
       out.sub = word + ' rain from the ' + compassLong(hit.fromBearing) + coreNote + (moving ? ' · ' + moving : '');
     } else {
       out.cls = 'orange'; out.level = 'incoming'; out.main = 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')';
@@ -3870,6 +3884,7 @@ const SETTINGS = {
   alerts: [
     ['sound', 'Sound (chimes and warning alarm)', [[true, 'On'], [false, 'Off']]],
     ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
+    ['leadTime', 'Lead time — red ("act now") comes earlier for activities that need longer to get safe, and earlier still for heavy storms: boating 30–90 min, hiking 20–60, camping 15–40; Sentinel stays at 10', [['on', 'By activity'], ['off', 'Fixed 10 min']]],
     ['threshDbz', 'Count as rain', [[10, 'Any echo (10 dBZ — drizzle, flurries)'], [15, 'Light rain and up (15 dBZ; 20 in warm air)'], [20, 'Steady rain and up (20 dBZ)'], [30, 'Moderate and up (30 dBZ)']]],
   ],
   data: [
@@ -4364,6 +4379,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
+  if (k === 'leadTime' || k === 'activity') renderStatus();
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice' || e.target.id === 'welDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
