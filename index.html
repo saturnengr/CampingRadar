@@ -874,7 +874,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12k';
+const APP_VERSION = '2026.11.12l';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2190,7 +2190,7 @@ function drawMotion() {
       // daytime: outlines ignore the radar opacity slider and sit on a dark halo so the pastels read on a light basemap
       const ll = h.map(([x, y]) => toLL(x, y));
       if (night) {   // dark basemap: the pastels already stand out, so keep the original quiet styling
-        L.polygon(ll, { pane: 'hazards', color: col, weight: isFocus ? 3 : 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op * dim, fillColor: col, fillOpacity: (isFocus ? 0.1 : 0.06) * op * dim, interactive: false }).addTo(motionLayer);
+        L.polygon(ll, { pane: 'hazards', color: col, weight: isFocus ? 3 : 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op * dim, fill: false, interactive: false }).addTo(motionLayer);   // no fill: on a wide shield the three hulls overlap and the tints stack into a visible band
         return;
       }
       const dash = min === 15 ? '3 7' : min === 30 ? '7 7' : '14 9', w = isFocus ? 3.5 : 2.5;
