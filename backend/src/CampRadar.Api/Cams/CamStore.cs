@@ -103,7 +103,10 @@ public sealed class CamStore
     public int UpsertMany(IEnumerable<Cam> cams)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); int n = 0;
-        using var c = Open(); using var tx = c.BeginTransaction();
+        using var c = Open();
+        var byUrl = new Dictionary<string, string>();
+        using (var qq = c.CreateCommand()) { qq.CommandText = "SELECT url,id FROM cams"; using var rr = qq.ExecuteReader(); while (rr.Read()) byUrl[rr.GetString(0)] = rr.GetString(1); }
+        using var tx = c.BeginTransaction();
         using var q = c.CreateCommand();
         q.CommandText = """
             INSERT INTO cams(id,source,name,lat,lon,heading,url,refresh_s,licence,first_seen_ms,last_seen_ms)
@@ -115,6 +118,8 @@ public sealed class CamStore
         foreach (var k in new[] { "$id", "$src", "$name", "$lat", "$lon", "$hdg", "$url", "$ref", "$lic", "$now" }) { var sp = q.CreateParameter(); sp.ParameterName = k; q.Parameters.Add(sp); p[k] = sp; }
         foreach (var cam in cams)
         {
+            if (byUrl.TryGetValue(cam.Url, out var other) && other != cam.Id) continue;   // same camera already known from another registry
+            byUrl[cam.Url] = cam.Id;
             p["$id"].Value = cam.Id; p["$src"].Value = cam.Source; p["$name"].Value = cam.Name; p["$lat"].Value = cam.Lat; p["$lon"].Value = cam.Lon;
             p["$hdg"].Value = (object?)cam.HeadingDeg ?? DBNull.Value; p["$url"].Value = cam.Url; p["$ref"].Value = cam.RefreshSec; p["$lic"].Value = cam.Licence; p["$now"].Value = now;
             n += q.ExecuteNonQuery();
