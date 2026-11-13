@@ -115,6 +115,23 @@ console.log('rain (≥20 dBZ) at the centre: ' + (firstRain ? 'first at ' + cloc
 
 console.log('\n time   | page motion (baseline)          conf | 60-min NCC        | core tracks        | Δhdg Δspd | page ETA → actual');
 const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.includes('--dry');
+/* ---- V4 candidate rules (harness only; nothing in the app changes until these win on the whole batch) ----
+   --v4 scores a third colour column:
+   1. fizzle escape: the 20-minute "it fizzled" memory holds only while the edge is NOT observed closing (edge rate < 5 mph);
+      a rain edge that resumes advancing is believed again at once.
+   2. grazing gate: a projected hit that only clips the circle (in and out within 12 min with few cells) and carries no heavy
+      core is a passing storm, not an arrival → blue instead of orange.
+   3. horizon colour: an arrival projected more than V4_BLUE_MIN (75) minutes out is blue ("could reach you"), not orange —
+      orange means within about an hour. Far-out projections are where the motion estimate's errors compound.
+   4. receding edge: when the nearest echo has been moving AWAY at V4_RECEDE_MPH (5) or more for 20+ minutes, a projected hit is
+      not believed (blue) — the storm is dissipating or sliding by whatever the motion field says.
+   5. observed closing: when the nearest echo is within V4_NEAR_MI (15) and has been closing at V4_CLOSE_MPH (10) or more for
+      20+ minutes, that observation outranks the projection: orange (red inside 10 min) with ETA = distance / observed rate.
+      This is the "forming / light rain the projection under-reads" miss. The stalled-edge yellow also only applies when the
+      projected arrival is more than 30 min out.
+   Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
+const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10);
+let fizzleSeen4 = 0;
 const fizzOld = (hit, p) => { const tr = p.trends.get(hit.blob); return !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < hit.etaMin - 2); };
 for (const t of times) {
   if (t - times[0] < 30 * 60000) continue;
@@ -131,8 +148,13 @@ for (const t of times) {
   const edge = C.edgeCheck(hist, t, nr, m);
   let fizz = false;
   if (p.res.hit) { const tr = p.trends.get(p.res.hit.blob); fizz = !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < p.res.hit.etaMin - 2); if (fizz) fizzleSeen = t; else if (fizzleSeen && t - fizzleSeen < 20 * 60000 && !(tr && tr.word === 'strengthening') && p.res.hit.maxDbz < 40) fizz = true; }
-  const hit = p.res.hit; let oldC = 'green', newC = 'green', etaNew = hit ? hit.etaMin : null;
+  let fizz4 = false;
+  if (p.res.hit) { const tr = p.trends.get(p.res.hit.blob); const now = !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < p.res.hit.etaMin - 2); if (now) { fizz4 = true; fizzleSeen4 = t; } else if (fizzleSeen4 && t - fizzleSeen4 < 20 * 60000 && !(tr && tr.word === 'strengthening') && p.res.hit.maxDbz < 40 && !(edge && edge.rate >= RESUME_MPH)) fizz4 = true; }
+  const hit = p.res.hit; let oldC = 'green', newC = 'green', v4C = 'green', etaNew = hit ? hit.etaMin : null, graze = false, etaV4 = null;
+  const closingNear = edge && edge.rate >= CLOSE_MPH && nr && nr.distMi <= NEAR_MI;
+  if (closingNear) { etaV4 = nr.distMi / edge.rate * 60; v4C = etaV4 <= 10 ? 'red' : 'orange'; }
   if (hit) {
+    graze = (hit.endMin - hit.etaMin) < GRAZE_MIN && hit.cells < GRAZE_CELLS && hit.maxDbz < 40;
     const far = hit.distMi > 50;
     oldC = (fizzOld(hit, p) && hit.etaMin > 10 && hit.maxDbz < 40) ? 'yellow' : far ? 'blue' : hit.etaMin <= 10 ? 'red' : 'orange';
     const lowConf = DRY && hit.maxDbz < 35;
@@ -141,8 +163,18 @@ for (const t of times) {
     else if (far && !lowConf) newC = 'blue';
     else if (lowConf) newC = 'yellow';
     else { if (edge && edge.verdict === 'slow' && edge.etaMin > hit.etaMin) etaNew = Math.min(120, edge.etaMin); newC = etaNew <= 10 ? 'red' : 'orange'; }
+    // V4 column (an observed-closing verdict set above stands)
+    if (closingNear) { if (hit.etaMin < etaV4) { etaV4 = hit.etaMin; v4C = etaV4 <= 10 ? 'red' : 'orange'; } }
+    else if (fizz4 && hit.etaMin > 10 && hit.maxDbz < 40) v4C = 'yellow';
+    else if (!lowConf && edge && edge.verdict === 'stalled' && hit.maxDbz < 40 && hit.etaMin > 30) v4C = 'yellow';
+    else if (graze) v4C = 'blue';
+    else if (edge && edge.rate <= -RECEDE_MPH && hit.etaMin > 10) v4C = 'blue';
+    else if (far && !lowConf) v4C = 'blue';
+    else if (lowConf) v4C = 'yellow';
+    else if (etaNew > BLUE_MIN) v4C = 'blue';
+    else v4C = etaNew <= 10 ? 'red' : 'orange';
   }
-  rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, oldC, newC, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
+  rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, etaV4: closingNear ? etaV4 : etaNew, oldC, newC, v4C, graze, closingNear, fizz, fizz4, hitCells: hit ? hit.cells : null, hitDur: hit ? hit.endMin - hit.etaMin : null, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
   const eTxt = ` | ${oldC.padEnd(6)} → ${newC.padEnd(6)}` + (edge ? ` edge ${edge.rate.toFixed(0)} vs ${edge.closing.toFixed(0)} mph ${edge.verdict}` : '');
   console.log(`${clock(t)}  | ${m.ok ? (compass(m.headingDeg) + ' ' + m.headingDeg.toFixed(0) + '° ' + m.speedMph.toFixed(0) + ' mph').padEnd(18) + ('(' + (m.baselineMin || 0).toFixed(0) + ' min)').padEnd(10) : ('— ' + (m.reason || '')).padEnd(28)} ${m.global.conf.toFixed(2)} | ${lb ? (compass(lb.headingDeg) + ' ' + lb.headingDeg.toFixed(0) + '° ' + lb.speedMph.toFixed(0) + ' mph').padEnd(17) : ''.padEnd(17)} | ${ct ? (compass(ct.headingDeg) + ' ' + ct.headingDeg.toFixed(0) + '° ' + ct.speedMph.toFixed(0) + ' mph n=' + ct.n).padEnd(18) : ''.padEnd(18)} | ${dH == null ? '    ' : (dH >= 0 ? '+' : '') + dH.toFixed(0).padStart(3) + '°'} ${dS == null ? '     ' : (dS >= 0 ? '+' : '') + dS.toFixed(0).padStart(3) + ' '} | ${etaTxt} → ${actTxt}${eTxt}`);
 }
@@ -159,6 +191,16 @@ const alarm = c => c === 'orange' || c === 'red';
 const score = key => { const fa = rows.filter(r => !r.rainingNow && alarm(r[key]) && (r.actMin == null || r.actMin > 90)).length; const miss = rows.filter(r => !r.rainingNow && !alarm(r[key]) && r.actMin != null && r.actMin <= 60).length; const red = rows.filter(r => !r.rainingNow && r[key] === 'red' && (r.actMin == null || r.actMin > 30)).length; return `${fa} false alarms (orange/red, no rain within 90 min), ${red} false reds, ${miss} misses (rain within 60 min, no alarm)`; };
 console.log('old rules: ' + score('oldC'));
 console.log('new rules: ' + score('newC') + (DRY ? '  [with NWS POP < 10% / dry air]' : '  [without forecast info; add --dry to apply the 1% POP the forecast gave that night]'));
+if (V4 && process.argv.includes('--why')) {
+  const alarm = c => c === 'orange' || c === 'red';
+  console.log('\n-- misses (rain within 60 min, no alarm) under v4 --');
+  for (const r of rows.filter(r => !r.rainingNow && r.actMin != null && r.actMin <= 60 && !alarm(r.v4C)))
+    console.log(`${clock(r.t)} rain in ${Math.round(r.actMin)} min | old ${r.oldC} new ${r.newC} v4 ${r.v4C} | hit ${r.eta == null ? 'none' : Math.round(r.eta) + ' min ' + r.maxDbz + ' dBZ ' + r.hitCells + ' cells ' + Math.round(r.hitDur) + ' min long'} | fizz ${r.fizz}/${r.fizz4} | edge ${r.edge ? r.edge.verdict + ' ' + r.edge.rate.toFixed(0) + '/' + r.edge.closing.toFixed(0) : '-'} | nearest ${r.nearest ? Math.round(r.nearest.distMi) + ' mi ' + Math.round(r.nearest.dbz) + ' dBZ' : '-'}`);
+  console.log('-- false alarms under v4 --');
+  for (const r of rows.filter(r => !r.rainingNow && alarm(r.v4C) && (r.actMin == null || r.actMin > 90)))
+    console.log(`${clock(r.t)} ${r.actMin == null ? 'no rain' : 'rain in ' + Math.round(r.actMin)} | hit ${Math.round(r.eta)} min ${r.maxDbz} dBZ ${r.hitCells} cells ${Math.round(r.hitDur)} min long | edge ${r.edge ? r.edge.verdict + ' ' + r.edge.rate.toFixed(0) + '/' + r.edge.closing.toFixed(0) : '-'} | nearest ${r.nearest ? Math.round(r.nearest.distMi) + ' mi' : '-'}`);
+}
+if (V4) console.log('v4 rules:  ' + score('v4C') + `  [fizzle escape ${RESUME_MPH} mph; graze < ${GRAZE_MIN} min & < ${GRAZE_CELLS} cells (${rows.filter(r => r.graze).length} rows); blue beyond ${BLUE_MIN} min; receding ${RECEDE_MPH} mph]`);
 
 /* ---- ground truth from gauges, when the recording carries them ----
    gauge-madis.jsonl: one MADIS report per line {t, id, lat, lon, distMi, pcp1hIn, rateInHr, wx} (backend verify worker / backfill);
@@ -198,4 +240,5 @@ if (gauges.length) {
   const gScore = key => { const fa = rows.filter(r => !gaugeNow(r.t) && alarm(r[key]) && (gaugeActual(r.t) == null || gaugeActual(r.t) > 90)).length; const miss = rows.filter(r => !gaugeNow(r.t) && !alarm(r[key]) && gaugeActual(r.t) != null && gaugeActual(r.t) <= 60).length; return `${fa} false alarms, ${miss} misses (gauge truth, ±30 min hour-midpoint)`; };
   console.log('old rules vs gauges: ' + gScore('oldC'));
   console.log('new rules vs gauges: ' + gScore('newC'));
+  if (V4) console.log('v4 rules vs gauges:  ' + gScore('v4C'));
 } else console.log('\n(no gauge files in the recording — gauge-madis.jsonl arrives with backend builds from 9 Nov on, or via /admin/verify/madis backfill)');
