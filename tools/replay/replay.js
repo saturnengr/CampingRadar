@@ -135,6 +135,9 @@ const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.i
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
 const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10), BLUE_NEAR_MI = +(process.env.V4_BLUE_NEAR_MI || 25);
 let fizzleSeen4 = 0;
+const SWEEP = [];   // name → settings; scored in the summary when --v4 is given
+for (const blueNear of [0, 15, 25]) for (const blueMin of [75, 90]) for (const close of [10, 15])
+  SWEEP.push({ name: `bn${blueNear}_bm${blueMin}_cl${close}`, blueNear, blueMin, close, near: NEAR_MI, grazeMin: GRAZE_MIN, grazeCells: GRAZE_CELLS, stallMin: 30, recede: RECEDE_MPH });
 const fizzOld = (hit, p) => { const tr = p.trends.get(hit.blob); return !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < hit.etaMin - 2); };
 for (const t of times) {
   if (t - times[0] < 30 * 60000) continue;
@@ -179,7 +182,29 @@ for (const t of times) {
     else if (eta4 > BLUE_MIN && !(nr && nr.distMi <= BLUE_NEAR_MI)) v4C = 'blue';
     else { etaV4 = eta4; v4C = eta4 <= 10 ? 'red' : 'orange'; }
   }
-  rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, etaV4: closingNear ? etaV4 : etaNew, oldC, newC, v4C, graze, closingNear, fizz, fizz4, hitCells: hit ? hit.cells : null, hitDur: hit ? hit.endMin - hit.etaMin : null, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
+  // --sweep: the same V4 logic under several settings at once (rule evaluation is cheap; the frame work above is not)
+  const sweep = {};
+  if (V4) for (const cfg of SWEEP) {
+    let c = 'green'; const cn = edge && edge.rate >= cfg.close && nr && nr.distMi <= cfg.near;
+    if (cn) { const e = nr.distMi / edge.rate * 60; c = e <= 10 ? 'red' : 'orange'; }
+    if (hit) {
+      const ea = edge && (p.res.nearestBlob == null || hit.blob == null || p.res.nearestBlob === hit.blob) && !(hit.maxDbz >= 40 || hit.cells >= 100);
+      let e4 = hit.etaMin; if (ea && edge.verdict === 'slow' && edge.etaMin > hit.etaMin) e4 = Math.min(120, edge.etaMin);
+      const gz = (hit.endMin - hit.etaMin) < cfg.grazeMin && hit.cells < cfg.grazeCells && hit.maxDbz < 40;
+      const lc = DRY && hit.maxDbz < 35, fr = hit.distMi > 50;
+      if (cn) { if (hit.etaMin < nr.distMi / edge.rate * 60) c = hit.etaMin <= 10 ? 'red' : 'orange'; }
+      else if (fizz4 && hit.etaMin > 10 && hit.maxDbz < 40) c = 'yellow';
+      else if (!lc && ea && edge.verdict === 'stalled' && hit.etaMin > cfg.stallMin) c = 'yellow';
+      else if (gz) c = 'blue';
+      else if (ea && edge.rate <= -cfg.recede && hit.etaMin > 10) c = 'blue';
+      else if (fr && !lc) c = 'blue';
+      else if (lc) c = 'yellow';
+      else if (e4 > cfg.blueMin && !(nr && nr.distMi <= cfg.blueNear)) c = 'blue';
+      else c = e4 <= 10 ? 'red' : 'orange';
+    }
+    sweep[cfg.name] = c;
+  }
+  rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, etaV4: closingNear ? etaV4 : etaNew, oldC, newC, v4C, sweep, graze, closingNear, fizz, fizz4, hitCells: hit ? hit.cells : null, hitDur: hit ? hit.endMin - hit.etaMin : null, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
   const eTxt = ` | ${oldC.padEnd(6)} → ${newC.padEnd(6)}` + (edge ? ` edge ${edge.rate.toFixed(0)} vs ${edge.closing.toFixed(0)} mph ${edge.verdict}` : '');
   console.log(`${clock(t)}  | ${m.ok ? (compass(m.headingDeg) + ' ' + m.headingDeg.toFixed(0) + '° ' + m.speedMph.toFixed(0) + ' mph').padEnd(18) + ('(' + (m.baselineMin || 0).toFixed(0) + ' min)').padEnd(10) : ('— ' + (m.reason || '')).padEnd(28)} ${m.global.conf.toFixed(2)} | ${lb ? (compass(lb.headingDeg) + ' ' + lb.headingDeg.toFixed(0) + '° ' + lb.speedMph.toFixed(0) + ' mph').padEnd(17) : ''.padEnd(17)} | ${ct ? (compass(ct.headingDeg) + ' ' + ct.headingDeg.toFixed(0) + '° ' + ct.speedMph.toFixed(0) + ' mph n=' + ct.n).padEnd(18) : ''.padEnd(18)} | ${dH == null ? '    ' : (dH >= 0 ? '+' : '') + dH.toFixed(0).padStart(3) + '°'} ${dS == null ? '     ' : (dS >= 0 ? '+' : '') + dS.toFixed(0).padStart(3) + ' '} | ${etaTxt} → ${actTxt}${eTxt}`);
 }
@@ -205,6 +230,7 @@ if (V4 && process.argv.includes('--why')) {
   for (const r of rows.filter(r => !r.rainingNow && alarm(r.v4C) && (r.actMin == null || r.actMin > 90)))
     console.log(`${clock(r.t)} ${r.actMin == null ? 'no rain' : 'rain in ' + Math.round(r.actMin)} | hit ${Math.round(r.eta)} min ${r.maxDbz} dBZ ${r.hitCells} cells ${Math.round(r.hitDur)} min long | edge ${r.edge ? r.edge.verdict + ' ' + r.edge.rate.toFixed(0) + '/' + r.edge.closing.toFixed(0) : '-'} | nearest ${r.nearest ? Math.round(r.nearest.distMi) + ' mi' : '-'}`);
 }
+if (V4) { console.log('sweep:'); for (const cfg of SWEEP) { const key = cfg.name; const alarm = c => c === 'orange' || c === 'red'; const fa = rows.filter(r => !r.rainingNow && alarm(r.sweep[key]) && (r.actMin == null || r.actMin > 90)).length, miss = rows.filter(r => !r.rainingNow && !alarm(r.sweep[key]) && r.actMin != null && r.actMin <= 60).length; console.log(`  ${key}: ${fa} false alarms, ${miss} misses`); } }
 if (V4) console.log('v4 rules:  ' + score('v4C') + `  [fizzle escape ${RESUME_MPH} mph; graze < ${GRAZE_MIN} min & < ${GRAZE_CELLS} cells (${rows.filter(r => r.graze).length} rows); blue beyond ${BLUE_MIN} min; receding ${RECEDE_MPH} mph]`);
 
 /* ---- ground truth from gauges, when the recording carries them ----
