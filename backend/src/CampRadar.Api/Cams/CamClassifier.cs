@@ -88,7 +88,7 @@ public sealed class CamClassifier
 
     public sealed record Verdict(string Precip, string Intensity, string Ground, string Vis, string Sky, string Lens, string Wind, double Conf, string Cues, string Json);
 
-    private const string System = """
+    private const string Prompt = """
         You are classifying a single still image from a public outdoor webcam for weather verification. Answer ONLY with a JSON object, no prose.
         Fields and allowed values:
           precip: none | rain | snow | mixed | unsure         (precipitation falling NOW in the scene; streaks, drops in the air, snowflakes, haze from heavy rain)
@@ -112,7 +112,7 @@ public sealed class CamClassifier
                                             : new { maxOutputTokens = 300, temperature = 0.1, responseMimeType = "application/json" };
         var body = new
         {
-            system_instruction = new { parts = new[] { new { text = System } } },
+            system_instruction = new { parts = new[] { new { text = Prompt } } },
             contents = new[] { new { role = "user", parts = new object[] { new { text = context }, new { inline_data = new { mime_type = frame.ContentType, data = Convert.ToBase64String(frame.Bytes) } } } } },
             generationConfig = gen
         };
