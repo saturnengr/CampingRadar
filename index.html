@@ -230,6 +230,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 
 /* ---- tablet sidebar layout: forecast and status beside a near-square map (Settings → General → Layout) ---- */
 #side{display:contents}
+/* the status bar leads the screen in every layout (phones, tablets and desktops alike); the NWS warning bar sits above it */
+#warnbar{order:-4}#statusbar{order:-3}
 body.side{flex-direction:row}
 body.side.side-right{flex-direction:row-reverse}
 body.side #side{display:flex;flex-direction:column;flex:none;width:clamp(340px,34vw,420px);overflow:hidden auto;border-right:1px solid var(--line);background:var(--chrome)}
@@ -825,7 +827,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12e';
+const APP_VERSION = '2026.11.12f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
