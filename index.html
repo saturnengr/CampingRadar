@@ -885,7 +885,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12o';
+const APP_VERSION = '2026.11.12p';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -3791,7 +3791,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 /* ------------------------------ voice control ---------------------- */
 const VOICE_LIBS = { porcupine: 'https://cdn.jsdelivr.net/npm/@picovoice/porcupine-web@4.0.1/dist/iife/index.min.js', wvp: 'https://cdn.jsdelivr.net/npm/@picovoice/web-voice-processor@4.0.10/dist/iife/index.min.js',
   model: 'https://cdn.jsdelivr.net/gh/Picovoice/porcupine@v4.0/lib/common/porcupine_params.pv' };
-const BROWSER_WAKE = { 'Bumblebee': /\bbumble\s?bee\b/i, 'Lead Time': /\blead\s?time\b/i, 'Hey Radar': /\b(hey|hi|ok)\s+radar\b/i, 'Radar': /\bradar\b/i };
+const BROWSER_WAKE = { 'Bumblebee': /\bbumble\s?bee\b/i, 'Vantage': /\bvantage\b/i, 'Hey Radar': /\b(hey|hi|ok)\s+radar\b/i, 'Radar': /\bradar\b/i };
 const WAKE_WORDS = ['Bumblebee', 'Computer', 'Jarvis', 'Porcupine', 'Picovoice', 'Grasshopper', 'Terminator', 'Blueberry', 'Americano', 'Grapefruit'];
 const COMMANDS_HELP = 'Say the wake word, then: briefing, zoom in, zoom out, snooze (one, two, four or eight hours), stop, center, ten / thirty / fifty miles, night mode, day mode, status, or help.';
 const voice = { worker: null, running: false, status: 'off', listening: false, rec: null, err: null };

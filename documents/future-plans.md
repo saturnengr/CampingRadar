@@ -1,4 +1,4 @@
-# LeadTime — Future Plans
+# VantageWX — Future Plans
 
 Nov 8, 2026 · @Jeff
 
@@ -6,7 +6,7 @@ Nov 8, 2026 · @Jeff
 
 Notes from a planning conversation on 8 Nov 2026, kept so the ideas are not lost. Nothing here is committed; the shipping roadmap stays in the product plan. The hardware Sentinel (tablet-in-a-case bundle) is assumed to be the next product, and everything below comes after it.
 
-LeadTime is three assets wearing one app, and each one spins off products on its own:
+VantageWX is three assets wearing one app, and each one spins off products on its own:
 
 - **The nowcast engine** — storm tracking, arrival times, the virga/edge rules, and the verification ledger that scores them against airport gauges.
 - **The Sentinel display** — an always-on screen that watches one spot, with the ten-tone sound set and push alerts.
@@ -16,7 +16,7 @@ LeadTime is three assets wearing one app, and each one spins off products on its
 
 ### Closest to what exists (12–18 months)
 
-- **LeadTime for Sites** — construction, roofing, crane and concrete crews, outdoor events. The pitch is “you have 40 minutes to get the pour covered” plus a timestamped log afterwards. OSHA lightning rules, weather-delay contract claims and insurance all want evidence of when a warning was issued; the verification ledger becomes a product feature.
+- **VantageWX for Sites** — construction, roofing, crane and concrete crews, outdoor events. The pitch is “you have 40 minutes to get the pour covered” plus a timestamped log afterwards. OSHA lightning rules, weather-delay contract claims and insurance all want evidence of when a warning was issued; the verification ledger becomes a product feature.
 - **Lightning horn unit** — pools, golf courses, youth sports fields, marinas, beaches. Today that market pays $1,500–4,000 for Thor Guard or Earth Networks horn systems. A Sentinel box with a weatherproof horn and strobe, driven by GLM and the 30-mile strike counter, undercuts them. Schools and parks departments buy on purchase order, which suits a hardware margin.
 - **Fleet / dispatch view** — one account watching twenty leases, job sites or a scout camp’s troop locations on a single map, alerts routed to whoever is at each one. A small backend change (Family with more spots and roles) sold to a different buyer with a budget.
 
@@ -34,8 +34,8 @@ LeadTime is three assets wearing one app, and each one spins off products on its
 
 ### Adjacent, same customer
 
-- **LeadTime Trip** — a planning layer, not a nowcast: “which of the next 10 days is driest at this campsite,” from the same NWS / Open-Meteo feeds, sold as a Pro upsell.
-- **Campground operator edition** — the park office runs Sentinel on a big screen and the app pushes to every guest who scanned a QR code at check-in. The operator gets a liability tool; LeadTime gets a distribution channel that recruits users at every campground that signs up.
+- **VantageWX Trip** — a planning layer, not a nowcast: “which of the next 10 days is driest at this campsite,” from the same NWS / Open-Meteo feeds, sold as a Pro upsell.
+- **Campground operator edition** — the park office runs Sentinel on a big screen and the app pushes to every guest who scanned a QR code at check-in. The operator gets a liability tool; VantageWX gets a distribution channel that recruits users at every campground that signs up.
 
 ## Complementary hardware and software by activity
 
@@ -104,18 +104,18 @@ LeadTime is three assets wearing one app, and each one spins off products on its
 ### Sign-in options
 
 - Email + 6-digit code is live and stays as the fallback. A first-run welcome page (device name, activity, optional email) shipped 8 Nov 2026 (2026.11.10i).
-- **Sign in with Google** is free (Google Identity Services / OAuth client ID in a Cloud project; no billing account). The backend would verify the ID token and map the email onto the existing account record — about a day. An app requesting the email scope starts in testing mode (100 named users) until a short, free verification that needs a homepage and privacy-policy URL on getleadtime.app. Identity Platform (free to 50k MAU, then \~$0.0055/MAU) is a different product we would not need.
+- **Sign in with Google** is free (Google Identity Services / OAuth client ID in a Cloud project; no billing account). The backend would verify the ID token and map the email onto the existing account record — about a day. An app requesting the email scope starts in testing mode (100 named users) until a short, free verification that needs a homepage and privacy-policy URL on vantagewx.com. Identity Platform (free to 50k MAU, then \~$0.0055/MAU) is a different product we would not need.
 - **Sign in with Apple** needs the $99 developer program, domain verification and a services ID; its “hide my email” relay complicates Family invites by email. Apple requires it in any native iOS app that offers Google sign-in.
 
 ### Website
 
-- getleadtime.app is purchased; repo saturnengr/LeadTime (private), to be hosted on SmarterASP.NET. Pages needed: landing, pricing (the app already links to /pricing/), privacy policy, manuals, later the store. Google OAuth verification and the Play Store both want the landing and privacy pages.
+- vantagewx.com is the domain (getleadtime.app also held); repo saturnengr/LeadTime (private; repo keeps the old name), to be hosted on SmarterASP.NET. Pages needed: landing, pricing (the app already links to /pricing/), privacy policy, manuals, later the store. Google OAuth verification and the Play Store both want the landing and privacy pages.
 
 ## Suggested priority
 
 Ranked by effort against likely revenue:
 
-1. **LeadTime for Sites** — reuses everything built; sells to organizations that write checks.
+1. **VantageWX for Sites** — reuses everything built; sells to organizations that write checks.
 2. **Lightning horn unit** — small hardware, an existing market paying far more.
 3. **Campground operator edition** — a liability tool for the operator and a distribution channel for us.
 4. **Weather station + horn relay** — two small boards that touch every activity and both lines of business; the station improves core accuracy.
@@ -132,10 +132,10 @@ Ranked by effort against likely revenue:
 
 ## Locking down the Sentinel tablet (kiosk mode)
 
-Goal: the tablet boots straight into LeadTime, stays there, lets the owner change Wi-Fi, and cannot be turned back into an ordinary Android tablet by the customer.
+Goal: the tablet boots straight into VantageWX, stays there, lets the owner change Wi-Fi, and cannot be turned back into an ordinary Android tablet by the customer.
 
 - **Android’s built-in answer is Device Owner mode.** A tiny Device Policy Controller app (ours) is set as device owner during first setup — either by scanning a QR code at the “Hi there” screen of a fresh tablet (zero-touch style provisioning, no Google account needed) or over ADB (`dpm set-device-owner`) before the tablet ships. Device owner can only be set on a tablet with no accounts added, so it is done at the factory/bench step, and it survives reboots. The only way out is a factory reset, which device owner can **block** (`DISALLOW_FACTORY_RESET`); recovery-mode reset can additionally be stopped with Factory Reset Protection tied to our provisioning.
-- **Lock task mode** (the real kiosk): the DPC whitelists the LeadTime app (the installed PWA shell or the native shell) and starts it in lock task. Home, Back, Recents and the status-bar shade are disabled or limited, notifications are suppressed, and the app relaunches on boot (`PERSISTENT_PREFERRED_ACTIVITY` as the home app). Lock task has feature flags so we can allow the system info bar and global actions (power menu) while keeping everything else off.
+- **Lock task mode** (the real kiosk): the DPC whitelists the VantageWX app (the installed PWA shell or the native shell) and starts it in lock task. Home, Back, Recents and the status-bar shade are disabled or limited, notifications are suppressed, and the app relaunches on boot (`PERSISTENT_PREFERRED_ACTIVITY` as the home app). Lock task has feature flags so we can allow the system info bar and global actions (power menu) while keeping everything else off.
 - **Wi-Fi without the rest of Settings:** two ways. Preferred: our own Wi-Fi screen inside the app (scan, pick a network, enter the password) using the `WifiNetworkSuggestion` / `WifiNetworkSpecifier` APIs, which a device-owner app can use without showing Settings at all. Simpler: lock task whitelists only the Wi-Fi settings activity (`Settings$WifiSettingsActivity`) and the app launches it from a button; user restrictions (`DISALLOW_CONFIG_*`) block everything else in Settings, and `DISALLOW_DEBUGGING_FEATURES` closes ADB.
 - **Still manageable by us:** device owner can install and update the app silently (or we simply keep the PWA, which self-updates), set the screen to stay on while charged, hold brightness, disable the camera, and push a new config from the admin page. An “owner PIN” screen inside the app can expose the Wi-Fi screen, volume and the bottom-gap setting to the customer while keeping the rest closed.
 - **Options that avoid writing a DPC:** Android Enterprise with a free-tier MDM (Google’s Android Management API is free; Scalefusion, Esper and Hexnode charge per device per month) gives the same lock task + Wi-Fi-only policy from a web console, and zero-touch enrollment from a reseller. Worth it if we ship hundreds; for the first batches our own 300-line DPC is cheaper and we own it.

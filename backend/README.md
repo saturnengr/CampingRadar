@@ -61,12 +61,12 @@ Turn on **email sign-in** (6-digit codes) with either transport:
 
 - **Microsoft 365 via Graph** (preferred): an Entra app registration with the `Mail.Send` application permission (admin consent), sending as a mailbox or shared mailbox in the tenant:
   ```json
-  "Graph": { "TenantId": "…", "ClientId": "…", "ClientSecret": "…", "From": "leadtime@yourdomain.com", "FromName": "LeadTime" }
+  "Graph": { "TenantId": "…", "ClientId": "…", "ClientSecret": "…", "From": "vantagewx@yourdomain.com", "FromName": "VantageWX" }
   ```
 - **SMTP** (Office 365 SMTP AUTH, Resend, Postmark, any relay):
 
 ```json
-  "Smtp": { "Host": "mail.yourdomain.com", "Port": 587, "User": "no-reply@yourdomain.com", "Password": "…", "From": "LeadTime <no-reply@yourdomain.com>" }
+  "Smtp": { "Host": "mail.yourdomain.com", "Port": 587, "User": "no-reply@yourdomain.com", "Password": "…", "From": "VantageWX <no-reply@yourdomain.com>" }
 ```
 Without it, people can still sign in with an activation code from the admin page (`/admin`), which is also where Pro is granted.
 
