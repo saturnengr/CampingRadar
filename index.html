@@ -885,7 +885,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12p';
+const APP_VERSION = '2026.11.13a';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2840,7 +2840,7 @@ function pushUpdateBriefPrefs() {
   const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {});
   const body = m.on ? { brief: { at: m.at, days: m.days, offsetMin: -new Date().getTimezoneOffset(), tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), lang: lang(), activity: S.activity } } : { brief: null };
   // the alert thresholds ride along, and the sign-in token lets the server (re)attach the account email to this subscription
-  body.hitMi = S.hitMi; body.threshDbz = threshDbz();
+  body.hitMi = S.hitMi; body.threshDbz = threshDbz(); body.activity = S.activity; body.leadTime = S.leadTime || 'on';   // server push uses the same lead-time windows as the banner
   fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify(body) }, 10000).catch(() => {});
 }
 function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
@@ -4425,7 +4425,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'animate') setAnim(v);
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
-  if (k === 'leadTime' || k === 'activity') renderStatus();
+  if (k === 'leadTime' || k === 'activity') { renderStatus(); pushUpdateBriefPrefs(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice' || e.target.id === 'welDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });

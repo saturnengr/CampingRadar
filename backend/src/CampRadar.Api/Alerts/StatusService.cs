@@ -7,7 +7,27 @@ using CampRadar.Api.Radar;
 
 namespace CampRadar.Api.Alerts;
 
-public sealed record StatusOptions(double HitMi = 3, float ThreshDbz = 20, double LightningAlarmMi = 10);
+public sealed record StatusOptions(double HitMi = 3, float ThreshDbz = 20, double LightningAlarmMi = 10, string Activity = "camping", bool LeadTime = true)
+{
+    // Minutes-to-red by activity and intensity class [light/moderate <40 dBZ, heavy 40–49, very heavy ≥50]: the red ("act now") window is the
+    // time the activity needs to get safe, stretched for stronger storms. Mirrors LEAD_RED in the app; LeadTime=false restores the fixed 10.
+    private static readonly Dictionary<string, double[]> LeadRed = new()
+    {
+        ["sentinel"] = new[] { 10d, 10, 15 }, ["rv"] = new[] { 10d, 10, 15 }, ["camping"] = new[] { 15d, 25, 40 }, ["hunting"] = new[] { 15d, 25, 40 },
+        ["beach"] = new[] { 15d, 25, 40 }, ["trail"] = new[] { 20d, 40, 60 }, ["skiing"] = new[] { 20d, 40, 60 }, ["fishing"] = new[] { 30d, 60, 90 },
+    };
+    private static readonly Dictionary<string, string> LeadAct = new()
+    {
+        ["camping"] = "secure camp now", ["hunting"] = "start back now", ["beach"] = "pack up now", ["trail"] = "start for shelter now", ["skiing"] = "head down now", ["fishing"] = "head for shore now",
+    };
+    public double RedMin(float dbz)
+    {
+        if (!LeadTime) return 10;
+        var row = LeadRed.TryGetValue(Activity ?? "", out var r) ? r : LeadRed["camping"];
+        return row[dbz >= 50 ? 2 : dbz >= 40 ? 1 : 0];
+    }
+    public string LeadNote(double eta) => LeadTime && eta > 10 && LeadAct.TryGetValue(Activity ?? "", out var a) ? " — " + a : "";
+}
 
 public sealed class RainStatus
 {
@@ -258,7 +278,7 @@ public sealed class StatusService
             string edgeNote = edgeSlow ? $" · edge closing at {Math.Max(1, Math.Round(edge!.RateMph))} mph" : "";
             r.EtaMin = eta; r.EndMin = Math.Max(0, hit.EndMin - lag); r.MaxDbz = hit.MaxDbz; r.FromBearing = hit.FromBearing;
             if (hit.EtaMin <= 0.5) { r.Color = "red"; r.Level = "atyou"; r.Main = $"{word} rain at your location"; r.Sub = hit.EndMin < 115 ? $"Likely ending in about {Math.Round(Math.Max(1, hit.EndMin - lag))} min" : "May continue for a while"; }
-            else if (eta <= 10) { r.Color = "red"; r.Level = "imminent"; r.Main = $"Rain arriving in ~{Math.Max(1, Math.Round(eta))} min"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
+            else if (eta <= opt.RedMin(hit.MaxDbz)) { r.Color = "red"; r.Level = "imminent"; r.Main = eta <= 10 ? $"Rain arriving in ~{Math.Max(1, Math.Round(eta))} min" : $"Rain arriving in {FmtDur(eta)}{opt.LeadNote(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : ""); }
             else { r.Color = "orange"; r.Level = "incoming"; r.Main = $"Rain arriving in {FmtDur(eta)}"; r.Sub = $"{word} rain from the {CompassLong(hit.FromBearing)}" + (moving.Length > 0 ? " · " + moving : "") + edgeNote; }
         }
         else if (!m.Ok && p.Nearest is not null && p.Nearest.DistMi <= 10)

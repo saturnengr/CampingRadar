@@ -85,7 +85,8 @@ public sealed class AlertWorker : BackgroundService
             try
             {
                 var prefs = Parse(spot.Prefs);
-                var opt = new StatusOptions(prefs.TryGetValue("hitMi", out var h) ? h : 3, prefs.TryGetValue("threshDbz", out var t) ? (float)t : 20);
+                var (activity, leadTime) = ParseLead(spot.Prefs);
+                var opt = new StatusOptions(prefs.TryGetValue("hitMi", out var h) ? h : 3, prefs.TryGetValue("threshDbz", out var t) ? (float)t : 20, Activity: activity, LeadTime: leadTime);
                 var s = await _status.GetAsync(spot.Lat, spot.Lon, opt, ct);
                 _ledger.Log("spot", "s:" + Ledger.Key(spot.Id), spot.Lat, spot.Lon, s);
                 var prev = JsonSerializer.Deserialize<SentState>(spot.LastState) ?? new SentState();
@@ -267,6 +268,21 @@ public sealed class AlertWorker : BackgroundService
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "site {Id} evaluation failed", site.Id); }
         }
         return n;
+    }
+
+    // activity + lead-time switch ride in the prefs the app posts (top level; the morning-brief block carries activity too, older apps only there)
+    private static (string Activity, bool LeadTime) ParseLead(string json)
+    {
+        string act = "camping"; bool lead = true;
+        try
+        {
+            using var doc = JsonDocument.Parse(json); var root = doc.RootElement;
+            if (root.TryGetProperty("activity", out var a) && a.ValueKind == JsonValueKind.String) act = a.GetString() ?? act;
+            else if (root.TryGetProperty("brief", out var b) && b.ValueKind == JsonValueKind.Object && b.TryGetProperty("activity", out var ba) && ba.ValueKind == JsonValueKind.String) act = ba.GetString() ?? act;
+            if (root.TryGetProperty("leadTime", out var l) && l.ValueKind == JsonValueKind.String) lead = l.GetString() != "off";
+        }
+        catch { }
+        return (act, lead);
     }
 
     private static Dictionary<string, double> Parse(string json)
