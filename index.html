@@ -31,6 +31,17 @@ button:active{filter:brightness(1.3)}
 #nowPlace{font-size:14px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nowDetail{min-width:0}
 #days{display:flex;gap:8px}
+/* A clock for displays that run all day (tablets and desktops; phones have their own): at the right edge of the banner when the
+   forecast is on top, at the foot of the column when it is beside the map. Hidden by fitSidebar when warnings need the room. */
+#clock{text-align:right;line-height:1.05;flex:none;font-variant-numeric:tabular-nums}
+body:not(.side) #clock{position:absolute;right:14px;z-index:5;pointer-events:none}
+@media (min-width:861px){body:not(.side) #banner{padding-right:170px}}
+#clockTime{font-size:38px;font-weight:700;letter-spacing:-.5px}#clockDate{font-size:14px;color:var(--muted);margin-top:2px}
+body.side #clock{order:10;margin:0;padding:10px 14px 14px;text-align:center;border-top:1px solid var(--line)}
+body.side #clockTime{font-size:52px}body.side #clockDate{font-size:16px}
+body.side.compact #clockTime{font-size:40px}body.side.compact2 #clockTime{font-size:32px}
+body.noclock #clock{display:none}
+@media (max-width:860px){#clock{display:none}}
 .day{width:104px;background:var(--chrome2);border-radius:12px;padding:6px 6px 5px;text-align:center;cursor:pointer;border:1px solid transparent}
 .day:active{border-color:var(--accent2)}
 .day .nm{font-size:14px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
@@ -348,6 +359,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <button id="micBtn" title="Tap to talk" hidden><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg></button>
   <button id="snoozeBtn">Snooze</button>
 </div>
+<div id="clock" hidden><div id="clockTime">--:--</div><div id="clockDate"></div></div>
 </div>
 
 <main id="mapwrap">
@@ -827,7 +839,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12f';
+const APP_VERSION = '2026.11.12g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1237,6 +1249,7 @@ function applyLayout() {
   document.body.classList.toggle('side', side);
   document.body.classList.toggle('side-right', side && S.layout === 'right');
   document.body.classList.toggle('side-phone', side && phone);
+  if (typeof tickClock === 'function') tickClock();
   // zoom buttons: inside the column on tablets/desktops (after Settings), their own corner box on phones
   const wide = window.innerWidth > 600 && window.innerHeight > 520, zi = $('#zoomIn'), zo = $('#zoomOut');
   if (wide && zi.parentElement !== $('#controls')) { $('#btnRange').after(zi, zo); }
@@ -1247,11 +1260,24 @@ function applyLayout() {
 window.addEventListener('resize', applyLayout);
 // Sidebar fit: a Sentinel display is never scrolled, so when the column overflows, shrink it in two steps rather than hide the bottom
 let sidebarFitBusy = false;
+function tickClock() {
+  const el = $('#clock'); if (!el) return;
+  const phone = isPhoneDevice(); el.hidden = phone;
+  if (phone) return;
+  const d = new Date(), loc = (typeof S !== 'undefined' && S.brief && S.brief.lang === 'es') ? 'es' : undefined;
+  if (!document.body.classList.contains('side')) { const b = $('#banner').getBoundingClientRect(); el.style.top = Math.round(b.top + (b.height - el.offsetHeight) / 2) + 'px'; } else el.style.top = '';
+  $('#clockTime').textContent = d.toLocaleTimeString(loc, { hour: 'numeric', minute: '2-digit' });
+  $('#clockDate').textContent = d.toLocaleDateString(loc, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+setInterval(tickClock, 10000);
 function fitSidebar() {
   if (sidebarFitBusy || !document.body.classList.contains('side')) return; sidebarFitBusy = true;
   try {
-    const el = $('#side'), b = document.body; b.classList.remove('compact', 'compact2');
-    if (el.scrollHeight > el.clientHeight + 2) { b.classList.add('compact'); if (el.scrollHeight > el.clientHeight + 2) b.classList.add('compact2'); }
+    const el = $('#side'), b = document.body; b.classList.remove('compact', 'compact2', 'noclock');
+    const over = () => el.scrollHeight > el.clientHeight + 2;
+    if (over()) b.classList.add('compact');
+    if (over()) b.classList.add('noclock');      // the clock is the first thing to give way to warnings and watches
+    if (over()) b.classList.add('compact2');
     if (el.scrollHeight <= el.clientHeight + 2 && el.scrollTop) el.scrollTop = 0;   // a column that now fits must not stay scrolled
   } finally { sidebarFitBusy = false; }
 }
@@ -4331,6 +4357,7 @@ applySentinel();
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
 if (new URLSearchParams(location.search).get('brief') === '1') setTimeout(() => { if (!st.pushBrief) openBriefing(true); }, 4000);
 if (st.pendingJoin) setTimeout(() => openSettings(signedIn() ? 'family' : 'account'), 2500);
+tickClock();
 // First run on this device → the welcome page. A device that already has a name or an account was set up before it existed: skip quietly.
 if (!S.welcomed) { if (S.deviceName || signedIn() || st.pendingJoin) { S.welcomed = true; save(); } else setTimeout(openWelcome, 700); }
 updatePickHint();
