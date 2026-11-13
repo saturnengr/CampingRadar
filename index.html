@@ -556,8 +556,12 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
   const gSpeed = Math.hypot(out.global.vx, out.global.vy) * 60;
   out.ok = out.global.conf >= minConf && !g.edge && gSpeed <= maxKmh;
   if (!out.ok) out.reason = g.edge ? 'motion off scale' : 'no clear motion';
-  const nx = 3, ny = 3, rw = (x1 - x0 + 1) / nx, rh = (y1 - y0 + 1) / ny;
-  out.regionSize = Math.max(rw, rh);
+  // Regional refinement grid. 3×3 by default; opts.regions fixes it (4 or 5), opts.regionsAuto picks a finer grid when rain covers
+  // a large share of the window (big systems carry enough texture to support it; small storms do not).
+  let nx = opts.regions || 3;
+  if (opts.regionsAuto) { const cov = cB / ((x1 - x0 + 1) * (y1 - y0 + 1)); nx = cov >= 0.2 ? 5 : cov >= 0.1 ? 4 : 3; }
+  const ny = nx, rw = (x1 - x0 + 1) / nx, rh = (y1 - y0 + 1) / ny;
+  out.regionSize = Math.max(rw, rh); out.regionsUsed = nx;
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const rx0 = x0 + Math.round(i * rw), rx1 = x0 + Math.round((i + 1) * rw) - 1;
     const ry0 = y0 + Math.round(j * rh), ry1 = y0 + Math.round((j + 1) * rh) - 1;
@@ -574,6 +578,36 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
       reg.ok = r.conf >= Math.max(minConf, 0.7 * out.global.conf) && !r.edge && sp <= maxKmh && (!out.ok || (devKmh <= 40 && cosA >= 0.5));
     }
     out.regions.push(reg);
+  }
+  // Long lines (opts.segments): a blob whose major axis is longer than opts.segMinKm is split along that axis into pieces of about
+  // opts.segKm, and each piece gets its own match. A line whose ends move at different speeds, or that is pivoting, then gets a
+  // velocity field that bends with it instead of one that only varies at the fixed-grid scale.
+  if (opts.segments) {
+    const segKm = opts.segKm || 50, segMinKm = opts.segMinKm || 100, segCells = segKm / cellKm;
+    const lb = labelBlobs(gB, opts.thresh || 20, 3);
+    const big = lb.blobs.filter(b => !b.tiny && b.n * cellKm * cellKm >= 800).sort((a, b) => b.n - a.n).slice(0, 4);
+    for (const b of big) {
+      // principal axis of the blob's cells
+      let sxx = 0, syy = 0, sxy = 0; const pts = [];
+      for (let i = 0; i < lb.labels.length; i++) if (lb.labels[i] === b.id) { const x = i % w, y = (i / w) | 0; pts.push([x, y]); const dx = x - b.cx, dy = y - b.cy; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+      sxx /= pts.length; syy /= pts.length; sxy /= pts.length;
+      const th = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(th), uy = Math.sin(th);
+      let pmin = Infinity, pmax = -Infinity; for (const [x, y] of pts) { const p = (x - b.cx) * ux + (y - b.cy) * uy; if (p < pmin) pmin = p; if (p > pmax) pmax = p; }
+      const lenKm = (pmax - pmin) * cellKm; if (lenKm < segMinKm) continue;
+      const nseg = Math.max(2, Math.round((pmax - pmin) / segCells)), segLen = (pmax - pmin) / nseg;
+      for (let k = 0; k < nseg; k++) {
+        const p0 = pmin + k * segLen, p1 = p0 + segLen; let sx0 = Infinity, sy0 = Infinity, sx1 = -Infinity, sy1 = -Infinity, n = 0, mx = 0, my = 0;
+        for (const [x, y] of pts) { const p = (x - b.cx) * ux + (y - b.cy) * uy; if (p < p0 || p >= p1) continue; n++; mx += x; my += y; if (x < sx0) sx0 = x; if (x > sx1) sx1 = x; if (y < sy0) sy0 = y; if (y > sy1) sy1 = y; }
+        if (n < minCells) continue;
+        const pad = Math.ceil(S * 0.5), rx0 = Math.max(x0, sx0 - pad), rx1 = Math.min(x1, sx1 + pad), ry0 = Math.max(y0, sy0 - pad), ry1 = Math.min(y1, sy1 + pad);
+        if (rx1 - rx0 < 4 || ry1 - ry0 < 4) continue;
+        const r = bestShift(A, B, w, rx0, ry0, rx1, ry1, S), seg = { cx: mx / n, cy: my / n, vx: toV(r.u), vy: toV(r.v), conf: r.conf, ok: false, seg: true, size: Math.max(rx1 - rx0, ry1 - ry0) };
+        const sp = Math.hypot(seg.vx, seg.vy) * 60, devKmh = Math.hypot(seg.vx - out.global.vx, seg.vy - out.global.vy) * 60, gsp = Math.hypot(out.global.vx, out.global.vy) * 60;
+        const cosA = gsp > 8 && sp > 8 ? (seg.vx * out.global.vx + seg.vy * out.global.vy) / (sp * gsp) : 1;
+        seg.ok = r.conf >= Math.max(minConf, 0.7 * out.global.conf) && !r.edge && sp <= maxKmh && (!out.ok || (devKmh <= 40 && cosA >= 0.5));
+        out.regions.push(seg);
+      }
+    }
   }
   if (!out.ok && out.regions.some(r => r.ok)) {   // global failed but some regions are solid
     const rs = out.regions.filter(r => r.ok);
@@ -597,7 +631,8 @@ function makeVelocityField(motion, fineToCoarse) {
     const X = x / fineToCoarse, Y = y / fineToCoarse;
     let sw = Math.max(0.3, motion.global.conf) / s2, vx = g.vx * sw, vy = g.vy * sw;     // pull toward the whole-window motion, stronger when it is confident
     for (const r of regs) {
-      const dx = X - r.cx, dy = Y - r.cy, w = r.conf / (dx * dx + dy * dy + s2);
+      const rs2 = r.size ? r.size * r.size * 0.25 : s2;   // line segments carry their own (smaller) footprint
+      const dx = X - r.cx, dy = Y - r.cy, w = r.conf / (dx * dx + dy * dy + rs2);
       sw += w; vx += w * r.vx; vy += w * r.vy;
     }
     return { vx: vx / sw, vy: vy / sw };

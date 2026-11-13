@@ -14,6 +14,8 @@ const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = 20, hitM
 const times = fs.readdirSync(dir).filter(f => /^\d+\.png$/.test(f)).map(f => +f.slice(0, -4)).sort((a, b) => a - b);
 const tz = 'America/Chicago', clock = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
 
+// motion-field variants (env): MOTION_REGIONS=3|4|5, MOTION_REGIONS_AUTO=1, MOTION_SEGMENTS=1 (+ MOTION_SEG_KM, MOTION_SEG_MIN_KM)
+const MOPTS = { maxKmh: 110, regions: +(process.env.MOTION_REGIONS || 0) || undefined, regionsAuto: !!process.env.MOTION_REGIONS_AUTO, segments: !!process.env.MOTION_SEGMENTS, segKm: +(process.env.MOTION_SEG_KM || 50), segMinKm: +(process.env.MOTION_SEG_MIN_KM || 100), thresh: 20 };
 const cache = new Map();
 function frame(t) {
   if (cache.has(t)) return cache.get(t);
@@ -97,8 +99,8 @@ function pageRun(latest) {
   const fr = [snap(latest - 30 * 60000), snap(latest - 15 * 60000), latest];
   const dt1 = (fr[2] - fr[0]) / 60000, dt2 = (fr[2] - fr[1]) / 60000;
   const F = fr.map(frame), coarse = F.map(f => f.coarse);
-  let motion = dt1 >= 10 ? C.estimateMotion(coarse[0], coarse[2], dt1, coarseKm, { maxKmh: 110 }) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
-  if (dt2 >= 6) { const m2 = C.estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: 110 }); if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1; }
+  let motion = dt1 >= 10 ? C.estimateMotion(coarse[0], coarse[2], dt1, coarseKm, MOPTS) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
+  if (dt2 >= 6) { const m2 = C.estimateMotion(coarse[1], coarse[2], dt2, coarseKm, MOPTS); if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1; }
   const vel = C.makeVelocityField(motion, coarseF);
   const labelled = F.map(f => C.labelBlobs(f.cleaned, thresh));
   const res = C.predictRain(F[2].cleaned, fineKm, c, c, vel, { thresh, hitRadiusMi: hitMi, horizonMin: 120, maxRingMi: 50 }, labelled[2].labels);
@@ -108,13 +110,14 @@ function pageRun(latest) {
 
 // ---------------- run ----------------
 const tracks = coreTracks(35);
+console.log('motion variant: ' + JSON.stringify(MOPTS));
 console.log(`${times.length} frames ${clock(times[0])}–${clock(times[times.length - 1])}, window ±${radiusMi} mi, ${tracks.length} core tracks (≥35 dBZ, ≥25 min)`);
 const rainSeries = times.map(t => ({ t, dbz: rainAt(frame(t)) }));
 const firstRain = rainSeries.find(r => r.dbz >= thresh);
 console.log('rain (≥20 dBZ) at the centre: ' + (firstRain ? 'first at ' + clock(firstRain.t) : 'never') + ' — ' + rainSeries.map(r => r.dbz >= thresh ? '#' : r.dbz >= 5 ? '.' : ' ').join(''));
 
 console.log('\n time   | page motion (baseline)          conf | 60-min NCC        | core tracks        | Δhdg Δspd | page ETA → actual');
-const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.includes('--dry');
+const rows = []; const hist = []; let segFrames = 0, segRegs = 0, regGrid = {}; let fizzleSeen = 0; const DRY = process.argv.includes('--dry');
 /* ---- V4 candidate rules (harness only; nothing in the app changes until these win on the whole batch) ----
    --v4 scores a third colour column:
    1. fizzle escape: the 20-minute "it fizzled" memory holds only while the edge is NOT observed closing (edge rate < 5 mph);
@@ -142,6 +145,7 @@ const fizzOld = (hit, p) => { const tr = p.trends.get(hit.blob); return !!(tr &&
 for (const t of times) {
   if (t - times[0] < 30 * 60000) continue;
   const p = pageRun(t), m = p.motion;
+  { const ns = (m.regions || []).filter(r => r.seg && r.ok).length; if (ns) { segFrames++; segRegs += ns; } if (m.regionsUsed) regGrid[m.regionsUsed] = (regGrid[m.regionsUsed] || 0) + 1; }
   const tA = nearestTime(times.filter(x => x < t), t - 60 * 60000), lb = (t - tA) >= 40 * 60000 ? longBaseline(tA, t) : null;
   const ct = coreTruthAt(tracks, t);
   const truth = ct && ct.n >= 3 ? ct : lb;
@@ -211,7 +215,8 @@ for (const t of times) {
 const scored = rows.filter(r => r.dH != null);
 if (scored.length) {
   const absH = scored.map(r => Math.abs(r.dH)).sort((a, b) => a - b), absS = scored.map(r => Math.abs(r.dS)).sort((a, b) => a - b);
-  console.log(`\nheading: median |error| ${absH[absH.length >> 1].toFixed(0)}°, 90th pct ${absH[Math.floor(absH.length * 0.9)].toFixed(0)}°, reversed (>120°) in ${scored.filter(r => Math.abs(r.dH) > 120).length}/${scored.length}`);
+  console.log(`\nmotion field: segments active in ${segFrames} frames (${segRegs} segment vectors), region grid use ${JSON.stringify(regGrid)}`);
+console.log(`\nheading: median |error| ${absH[absH.length >> 1].toFixed(0)}°, 90th pct ${absH[Math.floor(absH.length * 0.9)].toFixed(0)}°, reversed (>120°) in ${scored.filter(r => Math.abs(r.dH) > 120).length}/${scored.length}`);
   console.log(`speed:   median |error| ${absS[absS.length >> 1].toFixed(0)} mph, 90th pct ${absS[Math.floor(absS.length * 0.9)].toFixed(0)} mph`);
 }
 const etaRows = rows.filter(r => !r.rainingNow && r.eta != null && r.actMin != null);
