@@ -41,7 +41,7 @@ public sealed class CamDirectory
         catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append(" · caltrans failed: " + ex.Message); _log.LogWarning(ex, "caltrans registry"); }
         foreach (var src in _cfg.GetSection("Cams:Sources").GetChildren())
         {
-            var name = src["Name"] ?? src.Key, url = src["Url"] ?? "", kind = (src["Kind"] ?? "511").ToLowerInvariant();
+            string name = src["Name"] ?? src.Key, url = src["Url"] ?? "", kind = (src["Kind"] ?? "511").ToLowerInvariant();
             if (url.Length == 0 || url.Contains("YOUR_KEY") || url.Contains("{key}")) { sb.Append($" · {name}: no key yet"); continue; }
             try { var n = await ConfiguredAsync(name, url, kind, src, ct); sb.Append($" · {name} {n} cams"); if (n > 0) _store.RetireMissing(name, started); }
             catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append($" · {name} failed: {Trim(ex.Message)}"); _log.LogWarning(ex, "{Name} registry", name); }
