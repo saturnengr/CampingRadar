@@ -49,6 +49,7 @@ public sealed class CamObs
     public string? StatusLevel { get; set; }      // our status level at the target this camera was looked at for
     public string Target { get; set; } = "";      // recording name or spot key that triggered the look
     public string Json { get; set; } = "{}";      // the model's full answer
+    public string? Frame { get; set; }            // file name of the saved frame under <DataDir>/cams, kept a few days for review
 }
 
 public sealed class CamStore
@@ -74,6 +75,25 @@ public sealed class CamStore
               PRIMARY KEY(cam_id, t_ms));
             CREATE INDEX IF NOT EXISTS cam_obs_t ON cam_obs(t_ms);
             """);
+        try { Exec(c, "ALTER TABLE cam_obs ADD COLUMN frame TEXT"); } catch (SqliteException) { }
+        FramesDir = Path.Combine(dir, "cams"); Directory.CreateDirectory(FramesDir);
+    }
+
+    public string FramesDir { get; }
+
+    /// <summary>Keep the frame that produced a verdict so a person can check the classifier; pruned after <paramref name="keepDays"/>.</summary>
+    public string SaveFrame(string camId, long tMs, byte[] bytes, string contentType)
+    {
+        var ext = contentType.Contains("png") ? ".png" : contentType.Contains("gif") ? ".gif" : ".jpg";
+        var name = tMs + "_" + camId.Replace(':', '_').Replace('/', '_') + ext;
+        File.WriteAllBytes(Path.Combine(FramesDir, name), bytes); return name;
+    }
+    public string? FramePath(string name) { if (name.Contains("..") || name.Contains('/') || name.Contains('\\')) return null; var p = Path.Combine(FramesDir, name); return File.Exists(p) ? p : null; }
+    public int PruneFrames(int keepDays = 7)
+    {
+        int n = 0; var cutoff = DateTime.UtcNow.AddDays(-keepDays);
+        foreach (var f in Directory.EnumerateFiles(FramesDir)) { try { if (File.GetLastWriteTimeUtc(f) < cutoff) { File.Delete(f); n++; } } catch { } }
+        return n;
     }
 
     private SqliteConnection Open() { var c = new SqliteConnection(_cs); c.Open(); return c; }
@@ -152,9 +172,10 @@ public sealed class CamStore
     {
         using var c = Open(); using var q = c.CreateCommand();
         q.CommandText = """
-            INSERT OR REPLACE INTO cam_obs(cam_id,t_ms,img_ms,stale,day,precip,intensity,ground,vis,sky,lens,wind,conf,model,radar_dbz,status_level,target,json)
-            VALUES($cam,$t,$img,$stale,$day,$precip,$int,$ground,$vis,$sky,$lens,$wind,$conf,$model,$dbz,$lvl,$target,$json)
+            INSERT OR REPLACE INTO cam_obs(cam_id,t_ms,img_ms,stale,day,precip,intensity,ground,vis,sky,lens,wind,conf,model,radar_dbz,status_level,target,json,frame)
+            VALUES($cam,$t,$img,$stale,$day,$precip,$int,$ground,$vis,$sky,$lens,$wind,$conf,$model,$dbz,$lvl,$target,$json,$frame)
             """;
+        q.Parameters.AddWithValue("$frame", (object?)o.Frame ?? DBNull.Value);
         q.Parameters.AddWithValue("$cam", o.CamId); q.Parameters.AddWithValue("$t", o.TMs); q.Parameters.AddWithValue("$img", o.ImgMs); q.Parameters.AddWithValue("$stale", o.Stale ? 1 : 0);
         q.Parameters.AddWithValue("$day", o.Day); q.Parameters.AddWithValue("$precip", o.Precip); q.Parameters.AddWithValue("$int", o.Intensity); q.Parameters.AddWithValue("$ground", o.Ground);
         q.Parameters.AddWithValue("$vis", o.Vis); q.Parameters.AddWithValue("$sky", o.Sky); q.Parameters.AddWithValue("$lens", o.Lens); q.Parameters.AddWithValue("$wind", o.Wind);
@@ -180,16 +201,24 @@ public sealed class CamStore
     public List<CamObs> Obs(string? camId, long fromMs, int limit = 500)
     {
         using var c = Open(); using var q = c.CreateCommand();
-        q.CommandText = "SELECT * FROM cam_obs WHERE t_ms>=$t" + (camId is null ? "" : " AND cam_id=$id") + " ORDER BY t_ms DESC LIMIT $n";
+        q.CommandText = "SELECT cam_id,t_ms,img_ms,stale,day,precip,intensity,ground,vis,sky,lens,wind,conf,model,radar_dbz,status_level,target,json,frame FROM cam_obs WHERE t_ms>=$t" + (camId is null ? "" : " AND cam_id=$id") + " ORDER BY t_ms DESC LIMIT $n";
         q.Parameters.AddWithValue("$t", fromMs); if (camId is not null) q.Parameters.AddWithValue("$id", camId); q.Parameters.AddWithValue("$n", limit);
         var list = new List<CamObs>(); using var r = q.ExecuteReader();
         while (r.Read()) list.Add(new CamObs
         {
             CamId = r.GetString(0), TMs = r.GetInt64(1), ImgMs = r.GetInt64(2), Stale = r.GetInt32(3) == 1, Day = r.GetString(4), Precip = r.GetString(5), Intensity = r.GetString(6),
             Ground = r.GetString(7), Vis = r.GetString(8), Sky = r.GetString(9), Lens = r.GetString(10), Wind = r.GetString(11), Conf = r.GetDouble(12), Model = r.GetString(13),
-            RadarDbz = r.IsDBNull(14) ? null : r.GetDouble(14), StatusLevel = r.IsDBNull(15) ? null : r.GetString(15), Target = r.GetString(16), Json = r.GetString(17)
+            RadarDbz = r.IsDBNull(14) ? null : r.GetDouble(14), StatusLevel = r.IsDBNull(15) ? null : r.GetString(15), Target = r.GetString(16), Json = r.GetString(17), Frame = r.IsDBNull(18) ? null : r.GetString(18)
         });
         return list;
+    }
+
+    /// <summary>Latest non-stale verdict per camera, for colouring the map.</summary>
+    public Dictionary<string, CamObs> LatestByCam(long sinceMs)
+    {
+        var d = new Dictionary<string, CamObs>();
+        foreach (var o in Obs(null, sinceMs, 5000)) if (!o.Stale && !d.ContainsKey(o.CamId)) d[o.CamId] = o;
+        return d;
     }
 
     public object Stats()

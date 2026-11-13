@@ -39,7 +39,7 @@ public static class AdminPage
   <div class="card"><h2>Alerts on</h2><div class="big" id="push">–</div><div class="sub">devices with push subscriptions</div></div>
   <div id="map"></div>
   <div class="card half"><h2>Activities (7 days)</h2><table id="acts"></table></div>
-  <div class="card half"><h2>Server</h2><table id="health"></table></div>
+  <div class="card half"><h2>Server</h2><table id="health"></table><p style="margin:8px 0 0"><a href="/admin/cams/page" style="color:var(--blue,#4fc3f7)">Cameras →</a> <span class="sub">directory, verdicts and frames</span></p></div>
   <div class="card wide"><h2>Pro access</h2>
     <p class="sub">Grant Pro to an email and hand the person the activation code (Settings → Account in the app). Months add to any time they already have; 0 months removes Pro and signs their devices out.</p>
     <p><input id="gEmail" type="email" placeholder="email" style="width:260px"> <input id="gMonths" type="number" value="12" min="0" max="120" style="width:80px"> months <input id="gNote" placeholder="note (optional)" style="width:200px"> <button id="grant">Grant Pro</button> <span id="gOut" class="sub"></span></p>

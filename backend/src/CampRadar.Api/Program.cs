@@ -499,6 +499,20 @@ app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Result
 app.MapGet("/admin/cams", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, CampRadar.Api.Cams.CamDirectory dir, CampRadar.Api.Cams.CamWorker w, double? lat, double? lon, double mi = 15) =>
     !IsAdmin(r) ? Results.Unauthorized() : Results.Ok(new { directory = new { dir.LastRun, dir.LastRunAt, stats = cs.Stats() }, worker = new { w.LastCycle, w.LastCycleAt, targets = w.Targets(), recent = w.Recent.Values.OrderByDescending(x => x).Take(30) },
         near = lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 25).Select(c => new { c.Id, c.Name, c.Lat, c.Lon, c.HeadingDeg, c.Url, c.Quality, c.Attempts, c.Good, c.LastGoodMs, distMi = Math.Round(CampRadar.Api.Cams.CamStore.Haversine(la, lo, c.Lat, c.Lon), 1) }) : null }));
+app.MapGet("/admin/cams/page", () => Results.Content(CampRadar.Api.Cams.CamsPage.Html, "text/html"));
+app.MapGet("/admin/cams/list", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, double? lat, double? lon, double mi = 25, string? id = null) =>
+{
+    if (!IsAdmin(r)) return Results.Unauthorized();
+    var list = id is not null ? (cs.Get(id) is { } one ? new List<CampRadar.Api.Cams.Cam> { one } : new()) : lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 400) : new();
+    return Results.Ok(list.Select(c => new { c.Id, c.Name, c.Source, c.Lat, c.Lon, c.HeadingDeg, c.Url, c.Quality, c.Attempts, c.Good, c.LastGoodMs, c.Cues, c.Licence }));
+});
+// frames are loaded by <img>, which cannot send a header: the key rides as a query parameter on this one endpoint
+app.MapGet("/admin/cams/frame", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, string name, string? key) =>
+{
+    if (!(IsAdmin(r) || (adminKey.Length > 0 && key == adminKey))) return Results.Unauthorized();
+    var p = cs.FramePath(name); if (p is null) return Results.NotFound();
+    return Results.File(p, name.EndsWith(".png") ? "image/png" : name.EndsWith(".gif") ? "image/gif" : "image/jpeg");
+});
 app.MapPost("/admin/cams/refresh", async (HttpRequest r, CampRadar.Api.Cams.CamDirectory dir, CancellationToken ct) => IsAdmin(r) ? Results.Ok(new { result = await dir.RefreshAsync(ct) }) : Results.Unauthorized());
 app.MapPost("/admin/cams/classify", async (HttpRequest r, CampRadar.Api.Cams.CamWorker w, string id, CancellationToken ct) => IsAdmin(r) ? Results.Ok(await w.ClassifyNowAsync(id, ct)) : Results.Unauthorized());
 app.MapGet("/admin/cams/obs", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, string? id, int hours = 24) => IsAdmin(r) ? Results.Ok(cs.Obs(id, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - hours * 3_600_000L)) : Results.Unauthorized());

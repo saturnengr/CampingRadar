@@ -37,7 +37,7 @@ public sealed class CamWorker : BackgroundService
         {
             try
             {
-                if (_dir.Due) { var r = await _dir.RefreshAsync(ct); _log.LogInformation("cam directory: {R}", r); }
+                if (_dir.Due) { var r = await _dir.RefreshAsync(ct); _log.LogInformation("cam directory: {R}", r); _store.PruneFrames(); }
                 LastCycle = await CycleAsync(ct); LastCycleAt = DateTimeOffset.UtcNow;
             }
             catch (OperationCanceledException) { break; }
@@ -99,6 +99,7 @@ public sealed class CamWorker : BackgroundService
                 var v = await _cls.ClassifyAsync(frame, cam, obs.Day, ct);
                 if (v is null) { obs.Precip = obs.Ground = obs.Vis = obs.Sky = obs.Wind = "unsure"; obs.Intensity = "none"; obs.Lens = "error"; obs.Json = "{}"; _store.AddObs(obs); continue; }
                 obs.Precip = v.Precip; obs.Intensity = v.Intensity; obs.Ground = v.Ground; obs.Vis = v.Vis; obs.Sky = v.Sky; obs.Lens = v.Lens; obs.Wind = v.Wind; obs.Conf = v.Conf; obs.Json = v.Json;
+                try { obs.Frame = _store.SaveFrame(cam.Id, now, frame.Bytes, frame.ContentType); } catch (Exception ex) { _log.LogDebug(ex, "save frame"); }
                 _store.AddObs(obs); classified++;
                 if (v.Cues.Length > 0 && (cam.RefMs == 0 || now - cam.RefMs > 30L * 86_400_000) && v.Precip == "none" && v.Vis == "clear" && v.Lens == "ok" && obs.Day == "day")
                     _store.SetReference(cam.Id, frame.Hash, v.Cues);   // a clear daytime frame becomes the camera's reference
@@ -125,7 +126,9 @@ public sealed class CamWorker : BackgroundService
         var v = await _cls.ClassifyAsync(frame, cam, day, ct);
         if (v is null) return new { cam.Id, cam.Name, cam.Url, bytes = frame.Bytes.Length, day, error = "classifier gave no answer" };
         var obs = new CamObs { CamId = cam.Id, TMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ImgMs = frame.ImgMs, Day = day, Precip = v.Precip, Intensity = v.Intensity, Ground = v.Ground, Vis = v.Vis, Sky = v.Sky, Lens = v.Lens, Wind = v.Wind, Conf = v.Conf, Model = _cls.Model, Target = "admin", Json = v.Json };
+        try { var s = await _status.GetAsync(cam.Lat, cam.Lon, new StatusOptions(), ct); obs.RadarDbz = s.Rain.Nearest is { } n && n.DistMi <= 1.5 ? n.Dbz : (s.Rain.Faint is { } f && f.DistMi <= 1.5 ? f.Dbz : 0); } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "cam radar"); }
+        try { obs.Frame = _store.SaveFrame(cam.Id, obs.TMs, frame.Bytes, frame.ContentType); } catch (Exception ex) { _log.LogDebug(ex, "save frame"); }
         _store.AddObs(obs);
-        return new { cam.Id, cam.Name, cam.Url, bytes = frame.Bytes.Length, hash = frame.Hash, identicalToLast = frame.Hash == cam.LastHash, day, verdict = JsonDocument.Parse(v.Json).RootElement.Clone() };
+        return new { cam.Id, cam.Name, cam.Url, bytes = frame.Bytes.Length, hash = frame.Hash, identicalToLast = frame.Hash == cam.LastHash, day, radarDbz = obs.RadarDbz, frame = obs.Frame, t = obs.TMs, verdict = JsonDocument.Parse(v.Json).RootElement.Clone() };
     }
 }
