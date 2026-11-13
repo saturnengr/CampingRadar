@@ -839,7 +839,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12h';
+const APP_VERSION = '2026.11.12i';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2148,7 +2148,10 @@ function drawMotion() {
     [[60, GHOST_COLORS[60], 0.55], [30, GHOST_COLORS[30], 0.7], [15, GHOST_COLORS[15], 0.85]].forEach(([min, col, alpha]) => {
       const dx = v.vx * min / fineKm, dy = v.vy * min / fineKm;
       const h = hull(sample.map(([x, y]) => [x + dx, y + dy])); if (h.length < 3) return;
-      L.polygon(h.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: col, weight: isFocus ? 3 : 2, dashArray: min === 15 ? '2 6' : min === 30 ? '6 6' : '12 8', opacity: alpha * op * dim, fillColor: col, fillOpacity: (isFocus ? 0.1 : 0.06) * op * dim, interactive: false }).addTo(motionLayer);
+      // outlines ignore the radar opacity slider (they are the point of the overlay) and sit on a dark halo so the pastels read on a light basemap in daylight
+      const ll = h.map(([x, y]) => toLL(x, y)), dash = min === 15 ? '3 7' : min === 30 ? '7 7' : '14 9', w = isFocus ? 3.5 : 2.5;
+      L.polygon(ll, { pane: 'hazards', color: '#1a1a1a', weight: w + 2.5, dashArray: dash, opacity: 0.55 * alpha * dim, fillColor: col, fillOpacity: (isFocus ? 0.16 : 0.1) * dim, interactive: false }).addTo(motionLayer);
+      L.polygon(ll, { pane: 'hazards', color: col, weight: w, dashArray: dash, opacity: Math.min(1, alpha + 0.25) * dim, fill: false, interactive: false }).addTo(motionLayer);
     });
     // arrow = 30 minutes of travel from the centroid
     const a0 = toLL(b.cx, b.cy), a1 = toLL(b.cx + v.vx * 30 / fineKm, b.cy + v.vy * 30 / fineKm);
