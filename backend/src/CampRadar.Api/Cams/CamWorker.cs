@@ -38,6 +38,7 @@ public sealed class CamWorker : BackgroundService
             try
             {
                 if (_dir.Due) { var r = await _dir.RefreshAsync(ct); _log.LogInformation("cam directory: {R}", r); _store.PruneFrames(); }
+                else { try { await _dir.IemAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "iem online"); } }
                 LastCycle = await CycleAsync(ct); LastCycleAt = DateTimeOffset.UtcNow;
             }
             catch (OperationCanceledException) { break; }

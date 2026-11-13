@@ -30,7 +30,7 @@ public sealed class CamDirectory
         var sb = new StringBuilder(); long started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try { var n = await OtcmAsync(ct); sb.Append($"otcm {n} cams"); _store.RetireMissing("otcm", started); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append("otcm failed: " + ex.Message); _log.LogWarning(ex, "otcm registry"); }
-        try { var n = await IemAsync(ct); sb.Append($" · iem {n} cams (" + string.Join(", ", _perNet.Select(kv => kv.Key + " " + kv.Value)) + ")"); _store.RetireMissing("iem", started); }
+        try { var n = await IemAsync(ct); sb.Append($" · iem {n} online now (directory accumulates every cycle)"); }   // never retire IEM cams on one read: most are simply not reporting this minute
         catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append(" · iem failed: " + ex.Message); _log.LogWarning(ex, "iem registry"); }
         LastRun = sb.ToString(); LastRunAt = DateTimeOffset.UtcNow; return LastRun;
     }
@@ -56,7 +56,7 @@ public sealed class CamDirectory
                     if (Math.Abs(lat) < 1 && Math.Abs(lon) < 1 || snap.Length < 12 || !snap.StartsWith("http")) continue;
                     var desc = c.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
                     var hdg = c.TryGetProperty("direction", out var dir) && dir.ValueKind == JsonValueKind.String ? HeadingFrom(dir.GetString()) : null;
-                    var rate = c.TryGetProperty("updateRate", out var ur) && ur.TryGetInt64(out var ms) && ms > 0 ? (int)Math.Clamp(ms / 1000, 30, 3600) : 300;
+                    var rate = c.TryGetProperty("updateRate", out var ur) && ur.ValueKind == JsonValueKind.Number && ur.TryGetInt64(out var ms) && ms > 0 ? (int)Math.Clamp(ms / 1000, 30, 3600) : 300;
                     cams.Add(new Cam
                     {
                         Id = "otcm:" + Hash(snap), Source = "otcm", Name = (state.Name + " · " + (county.Name == "other" ? "" : county.Name + " · ") + desc).Trim(' ', '·'),
@@ -68,16 +68,19 @@ public sealed class CamDirectory
         _store.UpsertMany(cams); return cams.Select(c => c.Id).Distinct().Count();
     }
 
-    private async Task<int> IemAsync(CancellationToken ct)
+    /// <summary>
+    /// IEM's webcam GeoJSON lists the cameras that reported in the last few minutes (the network parameter is ignored), so one weekly
+    /// read sees a handful. The worker calls this every cycle instead; the directory fills in over a day as cameras come and go.
+    /// </summary>
+    public async Task<int> IemAsync(CancellationToken ct)
     {
-        var nets = (_cfg["Cams:IemNetworks"] ?? "KCCI,KCRG,KELO,IDOT,ISUC,WOI,MCFC,KCAU,KHSI").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var cams = new List<Cam>();
-        foreach (var net in nets)
+        foreach (var net in new[] { "all" })
         {
             ct.ThrowIfCancellationRequested();
             string json;
-            try { json = await _f.CreateClient("obs").GetStringAsync($"https://mesonet.agron.iastate.edu/geojson/webcam.py?network={Uri.EscapeDataString(net)}", ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "iem webcams {Net}", net); continue; }
+            try { json = await _f.CreateClient("obs").GetStringAsync("https://mesonet.agron.iastate.edu/geojson/webcam.py", ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "iem webcams"); continue; }
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("features", out var feats)) continue;
             int before = cams.Count;
@@ -91,7 +94,7 @@ public sealed class CamDirectory
                     Id = "iem:" + cid, Source = "iem", Name = (p.TryGetProperty("name", out var n) ? n.GetString() : cid) + (p.TryGetProperty("state", out var st) ? ", " + st.GetString() : ""),
                     Lon = g[0].GetDouble(), Lat = g[1].GetDouble(), HeadingDeg = p.TryGetProperty("angle", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetDouble() : null,
                     // the current frame is always at this path; the geojson's imgurl is the archive copy of the same frame
-                    Url = $"https://mesonet.agron.iastate.edu/data/camera/stills/{cid}.jpg", RefreshSec = 300, Licence = "Iowa Environmental Mesonet webcam (" + net + ")"
+                    Url = $"https://mesonet.agron.iastate.edu/data/camera/stills/{cid}.jpg", RefreshSec = 300, Licence = "Iowa Environmental Mesonet webcam (" + cid.Split('-')[0] + ")"
                 });
             }
             _perNet[net] = cams.Count - before;
