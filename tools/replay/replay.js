@@ -122,7 +122,8 @@ const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.i
    2. grazing gate: a projected hit that only clips the circle (in and out within 12 min with few cells) and carries no heavy
       core is a passing storm, not an arrival → blue instead of orange.
    3. horizon colour: an arrival projected more than V4_BLUE_MIN (75) minutes out is blue ("could reach you"), not orange —
-      orange means within about an hour. Far-out projections are where the motion estimate's errors compound.
+      orange means within about an hour. Far-out projections are where the motion estimate's errors compound. Not applied when
+      echo is already within V4_BLUE_NEAR_MI (25) miles: nearby echo develops and accelerates faster than the projection sees.
    4. receding edge: when the nearest echo has been moving AWAY at V4_RECEDE_MPH (5) or more for 20+ minutes, a projected hit is
       not believed (blue) — the storm is dissipating or sliding by whatever the motion field says.
    5. observed closing: when the nearest echo is within V4_NEAR_MI (15) and has been closing at V4_CLOSE_MPH (10) or more for
@@ -132,7 +133,7 @@ const rows = []; const hist = []; let fizzleSeen = 0; const DRY = process.argv.i
    6. the edge rules (stalled / slow / receding) describe the NEAREST echo; they only speak for the arrival when that echo is part of
       the storm projected to hit, and never override a big strong arrival (≥ 40 dBZ or ≥ 100 cells, which the projection gets right).
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
-const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10);
+const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10), BLUE_NEAR_MI = +(process.env.V4_BLUE_NEAR_MI || 25);
 let fizzleSeen4 = 0;
 const fizzOld = (hit, p) => { const tr = p.trends.get(hit.blob); return !!(tr && tr.word === 'weakening' && tr.fizzleMin != null && tr.fizzleMin < hit.etaMin - 2); };
 for (const t of times) {
@@ -175,7 +176,7 @@ for (const t of times) {
     else if (edgeApplies && edge.rate <= -RECEDE_MPH && hit.etaMin > 10) v4C = 'blue';
     else if (far && !lowConf) v4C = 'blue';
     else if (lowConf) v4C = 'yellow';
-    else if (eta4 > BLUE_MIN) v4C = 'blue';
+    else if (eta4 > BLUE_MIN && !(nr && nr.distMi <= BLUE_NEAR_MI)) v4C = 'blue';
     else { etaV4 = eta4; v4C = eta4 <= 10 ? 'red' : 'orange'; }
   }
   rows.push({ t, m, truth, dH, dS, eta: p.res.hit ? p.res.hit.etaMin : null, etaNew, etaV4: closingNear ? etaV4 : etaNew, oldC, newC, v4C, graze, closingNear, fizz, fizz4, hitCells: hit ? hit.cells : null, hitDur: hit ? hit.endMin - hit.etaMin : null, actMin, rainingNow: rainAt(frame(t)) >= thresh, edge, nearest: nr, maxDbz: p.res.hit ? p.res.hit.maxDbz : null });
