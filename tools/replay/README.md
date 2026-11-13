@@ -47,3 +47,10 @@ Recordings on hand
   misses 206 → 244 (new) → 222 (v4); gauge misses 74 → 84 → 71. `--v4` also prints a 12-setting sweep (horizon 75/90 min,
   near-echo exception off/15/25 mi, closing 10/15 mph) for choosing the next adjustment. The near-echo exception at 25 mi gave
   misses 202 but false alarms 388 — rejected for now in favour of the strict horizon.
+
+## Webcam verdicts (`cam.jsonl`)
+
+Backend builds from 13 Nov 2026 on write `cam.jsonl` beside `gauge-madis.jsonl` while a recording runs: one line per classified frame from
+the nearest public webcams within 10 mi — `{t, img, cam, name, lat, lon, distMi, day, precip, intensity, ground, vis, sky, lens, wind, conf, radarDbz}`.
+The harness prints an agreement table (camera vs radar over the camera; wet ground with dry radar = drizzle reaching the ground unseen;
+radar over dry ground = not reaching the ground; fog frames). Verdicts at night or with a bad lens or low confidence are excluded.

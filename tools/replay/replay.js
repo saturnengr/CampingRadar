@@ -305,3 +305,20 @@ if (gauges.length) {
   console.log('new rules vs gauges: ' + gScore('newC'));
   if (V4) console.log('v4 rules vs gauges:  ' + gScore('v4C'));
 } else console.log('\n(no gauge files in the recording — gauge-madis.jsonl arrives with backend builds from 9 Nov on, or via /admin/verify/madis backfill)');
+
+// ---- webcam verdicts (cam.jsonl from the backend CamWorker): how the pictures agree with the radar over the camera, and with the gauges
+{
+  const camFile = path.join(dir, 'cam.jsonl');
+  if (fs.existsSync(camFile)) {
+    const rows = fs.readFileSync(camFile, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(r => r && r.lens !== 'stale' && r.lens !== 'error');
+    const usable = rows.filter(r => r.lens === 'ok' && r.conf >= 0.4 && r.day !== 'night');
+    const wet = r => r.precip === 'rain' || r.precip === 'snow' || r.precip === 'mixed';
+    const radarWet = r => r.radarDbz != null && r.radarDbz >= thresh;
+    const both = usable.filter(r => wet(r) && radarWet(r)).length, camOnly = usable.filter(r => wet(r) && !radarWet(r)).length, radarOnly = usable.filter(r => !wet(r) && radarWet(r)).length, neither = usable.filter(r => !wet(r) && !radarWet(r)).length;
+    const groundWetNoRadar = usable.filter(r => !radarWet(r) && (r.ground === 'wet' || r.ground === 'puddled')).length, radarDryGround = usable.filter(r => radarWet(r) && r.ground === 'dry').length;
+    const fog = usable.filter(r => r.vis === 'fog' || r.vis === 'dense').length;
+    console.log(`\nwebcams: ${rows.length} verdicts, ${usable.length} usable (lens ok, conf ≥ 0.4, not night) from ${new Set(rows.map(r => r.cam)).size} cameras`);
+    console.log(`  camera vs radar over the camera (≥${thresh} dBZ): both wet ${both} · camera wet, radar dry ${camOnly} (radar missed / below threshold) · radar wet, camera dry ${radarOnly} (virga or lag) · both dry ${neither}`);
+    console.log(`  ground wet with radar dry ${groundWetNoRadar} (drizzle reaching the ground unseen) · radar wet over dry ground ${radarDryGround} (not reaching the ground) · fog/dense visibility frames ${fog}`);
+  }
+}
