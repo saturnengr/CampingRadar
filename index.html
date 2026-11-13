@@ -66,8 +66,8 @@ body.noclock #clock{display:none}
 #rings{display:flex;gap:6px}
 .ring{font-size:13px;font-weight:750;padding:4px 9px;border-radius:999px;background:rgba(0,0,0,.18);opacity:.5;white-space:nowrap}
 .ring.on{opacity:1;background:rgba(0,0,0,.42)}
-.ring.on::before{content:"\25CF";margin-right:4px;color:var(--accent2);text-shadow:0 0 2px rgba(0,0,0,.6);transition:color .5s}
-#rings[data-lvl=green] .ring.on::before{color:#3ddc84}#rings[data-lvl=blue] .ring.on::before{color:#64b5f6}#rings[data-lvl=yellow] .ring.on::before{color:#ffd54f}#rings[data-lvl=orange] .ring.on::before{color:#ff9100}#rings[data-lvl=red] .ring.on::before{color:#ff5252}
+.ring::before{content:"\25CB";margin-right:4px;color:var(--rc,#e8eef3);opacity:.6;text-shadow:0 0 2px rgba(0,0,0,.6);transition:color .5s}
+.ring[data-rs=dotted]::before{content:"\25CC";opacity:1}.ring[data-rs=solid]::before{content:"\25CF";opacity:1}
 #snoozeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
 #snoozeMenu{position:fixed;right:12px;z-index:1500;background:var(--chrome2);border:1px solid var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 #snoozeMenu .hdr{font-size:13px;color:var(--muted);padding:0 4px}
@@ -674,6 +674,15 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
+  // Per-ring entry times (minutes) for the range rings: ringIn[r] = {t, maxDbz} earliest a cell that will HIT you enters the circle of
+  // radius r (t = 0 when already inside); ringMiss[r] = earliest a cell that will NOT hit you enters it. Drives the ring styling.
+  const RR = opts.ringRadii || [10, 30, 50], ringIn = {}, ringMiss = {};
+  const enterT = (e, n, ve, vn, a, dist, r) => {
+    if (dist <= r) return 0;
+    if (a < 1e-9) return null;
+    const b = 2 * (e * ve + n * vn), c = dist * dist - r * r, disc = b * b - 4 * a * c; if (disc < 0) return null;
+    const t = (-b - Math.sqrt(disc)) / (2 * a); return t >= 0 && t <= horizon ? t : null;
+  };
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
     const d = grid.d[y * grid.w + x];
     if (d < thresh) continue;
@@ -697,6 +706,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
         if (t2 >= 0 && t1 <= horizon) { tIn = Math.max(0, t1); tOut = Math.min(horizon, t2); }
       }
     }
+    if (dist <= farRing) for (const r of RR) { const t = enterT(e, n, ve, vn, a, dist, r); if (t == null) continue; if (tIn !== null) { const q = ringIn[r]; if (!q || t < q.t) ringIn[r] = { t, maxDbz: q && q.maxDbz > d ? q.maxDbz : d }; else if (d > q.maxDbz) q.maxDbz = d; } else if (ringMiss[r] == null || t < ringMiss[r]) ringMiss[r] = t; }
     if (tIn !== null) {
       hits++;
       if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitDist = dist; hitBlob = labels ? labels[y * grid.w + x] : null; }
@@ -711,7 +721,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
     }
   }
   const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, distMi: hitDist, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
-  return { rings, nearest, passing, hit, nearestBlob };
+  return { rings, nearest, passing, hit, nearestBlob, ringIn, ringMiss };
 }
 /* ---- intensity trends: track each storm cell across frames ---- */
 // Connected rain blobs (8-neighbour) above thresh; returns labels per cell and per-blob stats.
@@ -875,7 +885,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12n';
+const APP_VERSION = '2026.11.12o';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1253,10 +1263,13 @@ function drawRings() {
   if (!st.loc) return;
   const night = document.body.classList.contains('night');
   const col = night ? '#e8eef3' : '#17324b';
+  st.ringShapes = {};
   for (const r of ranges()) {
-    L.circle([st.loc.lat, st.loc.lon], { radius: r * MI, color: col, weight: r === S.range ? 2.5 : 1.5, opacity: 0.75, dashArray: '6 7', fill: false, interactive: false }).addTo(ringLayer);
-    L.marker([st.loc.lat + (r * MI) / 111320, st.loc.lon], { interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl">' + r + ' mi</span>', iconSize: [0, 0] }) }).addTo(ringLayer);
+    const circ = L.circle([st.loc.lat, st.loc.lon], { radius: r * MI, color: col, weight: r === S.range ? 2.5 : 1.5, opacity: 0.75, dashArray: '6 7', fill: false, interactive: false }).addTo(ringLayer);
+    const mk = L.marker([st.loc.lat + (r * MI) / 111320, st.loc.lon], { interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl" data-r="' + r + '">' + r + ' mi</span>', iconSize: [0, 0] }) }).addTo(ringLayer);
+    st.ringShapes[r] = { circ, mk };
   }
+  if (st.ringStates) styleRings(st.ringStates);
   if (!meMarker) meMarker = L.marker([st.loc.lat, st.loc.lon], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map);
   else meMarker.setLatLng([st.loc.lat, st.loc.lon]);
 }
@@ -1803,7 +1816,7 @@ async function runNowcast() {
     const labelled = cleaned.map(g => labelBlobs(g, threshDbz()));
     const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, threshDbz());
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
-      { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
+      { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges() }, labelled[2].labels);
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, threshDbz(), radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
@@ -2636,7 +2649,7 @@ function computeStatus() {
   const receding = edgeApplies && edge.rate <= -NC.recedeMph && hit.etaMin - lat > 10;
   const etaProj = hit ? Math.max(0, (edgeSlow ? Math.min(NC.horizonMin, edge.etaMin) : hit.etaMin) - lat) : null;
   if (hit && !lowConf && (graze || receding)) {
-    out.cls = 'blue'; out.level = 'passing';
+    out.cls = 'blue'; out.level = 'passing'; out.receding = !!receding;
     out.main = 'Rain ' + Math.round(hit.distMi) + ' mi ' + compass(hit.fromBearing) + (receding ? ' is moving away' : ' — likely brushing past');
     out.sub = (receding ? 'Its edge has been pulling back at ' + Math.round(-edge.rate) + ' mph for ' + Math.round(edge.spanMin) + ' min' : 'Only a sliver of it crosses your spot, ≈ ' + etaClock(etaProj) + ' for a few minutes') + (moving ? ' · ' + moving : '');
   } else if (hit && !lowConf && (hit.distMi > ALERT_RANGE_MI || etaProj > NC.blueMin) && !(etaProj <= leadRed(hit.maxDbz) && hit.distMi <= ALERT_RANGE_MI)) {
@@ -2692,10 +2705,43 @@ function computeStatus() {
   }
   return overlayLightning(out);
 }
+/* Range-ring styling. Line style = where the rain is: dashed = nothing that will hit you is projected inside this ring within 60 min
+   (also after a storm has passed); dotted = projected to cross into it within 60 min; solid = already inside it. Colour = strength of
+   the part that will reach you (light stays white; yellow moderate, orange heavy, red very heavy). A storm that will miss shows blue
+   dotted on the rings it enters; a hit outranks a miss on the same ring. */
+const RING_COL = { white: null, yellow: '#ffd54f', orange: '#ff9100', red: '#ff5252', blue: '#64b5f6' };
+function ringStates(s) {
+  const out = {}, res = st.nc && st.nc.res; if (!res) return out;
+  const lag = radarLag(), SOON = 60;
+  const hitOk = res.hit && ['atyou', 'imminent', 'incoming', 'low', 'watch'].includes(s.level);   // not passing/receding/fizzled
+  const missOk = !!(res.passing || (res.hit && s.level === 'passing' && !s.receding));
+  const col = res.hit ? (res.hit.maxDbz >= 50 ? 'red' : res.hit.maxDbz >= 40 ? 'orange' : res.hit.maxDbz >= 30 ? 'yellow' : 'white') : 'white';
+  for (const r of ranges()) {
+    let style = 'dashed', c = 'white';
+    const hi = hitOk && res.ringIn ? res.ringIn[r] : null, mi = res.ringMiss ? res.ringMiss[r] : null;
+    if (hi && hi.t - lag <= SOON) { style = hi.t - lag <= 0.5 ? 'solid' : 'dotted'; c = col; }
+    else if (missOk && mi != null && mi - lag <= SOON) { style = 'dotted'; c = 'blue'; }
+    out[r] = { style, c };
+  }
+  return out;
+}
+function styleRings(states) {
+  const night = document.body.classList.contains('night'), base = night ? '#e8eef3' : '#17324b';
+  for (const r of ranges()) {
+    const sh = st.ringShapes && st.ringShapes[r], stt = states[r] || { style: 'dashed', c: 'white' }; if (!sh) continue;
+    const col = RING_COL[stt.c] || base, sel = r === S.range;
+    sh.circ.setStyle(stt.style === 'solid' ? { color: col, weight: sel ? 3.5 : 3, dashArray: null, opacity: 0.95, lineCap: 'butt' }
+      : stt.style === 'dotted' ? { color: col, weight: sel ? 3.5 : 3, dashArray: '1 7', opacity: 0.95, lineCap: 'round' }
+      : { color: base, weight: sel ? 2.5 : 1.5, dashArray: '6 7', opacity: 0.75, lineCap: 'butt' });
+    const lbl = sh.mk.getElement && sh.mk.getElement(); const span = lbl && lbl.querySelector('.ringlbl'); if (span) span.style.color = stt.style === 'dashed' ? '' : col;
+    const pill = document.querySelector('.ring[data-r="' + r + '"]'); if (pill) { pill.dataset.rs = stt.style; pill.style.setProperty('--rc', stt.c === 'white' ? '#e8eef3' : col); }
+  }
+}
 function renderStatus() {
   const s = computeStatus();
+  st.ringStates = ringStates(s); styleRings(st.ringStates);
   const bar = $('#statusbar');
-  bar.className = s.cls; const rg = $('#rings'); if (rg) rg.dataset.lvl = s.cls;   // the selected-range dot takes the status colour
+  bar.className = s.cls;
   const urgent = isPhone();   // phones: the status bar always leads and the banner stays compact, green included, so the screen never rearranges itself
   if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); $('#daysToggle').hidden = !urgent; setTimeout(checkMapSize, 60); }
   // the three day cards show by default while the sky is clear (green) and fold away when something is going on; a manual tap on the
@@ -2714,7 +2760,7 @@ function renderStatus() {
   const hz = hazardLines(); if (hz.length) sub = hz.join(' · ') + (sub ? ' · ' + sub : '');
   if (Date.now() < S.snoozeUntil) sub = (sub ? sub + ' · ' : '') + 'Rain chime snoozed';
   $('#statusSub').textContent = sub;
-  document.querySelectorAll('.ring').forEach(el => el.classList.toggle('on', !!s.rings[el.dataset.r]));
+  document.querySelectorAll('.ring').forEach(el => el.classList.toggle('on', +el.dataset.r === S.range));
   renderSnooze();
   $('#updated').textContent = 'Radar checked ' + ago(st.ncAt) + (st.loc && st.loc.src === 'manual' ? ' · manual location' : '');
   return s;
