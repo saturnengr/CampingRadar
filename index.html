@@ -804,7 +804,7 @@ const NC = { coreDbz: 45,   // a heavy core: downpour / thunderstorm cell, track
 const overviewAllowed = () => typeof isPro === 'function' && isPro();
 const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
 const KEY = 'campRadar.v1';
-const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 20, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
+const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 15, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
   locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping',
   layers: { motion: true, storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
@@ -839,7 +839,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12g';
+const APP_VERSION = '2026.11.12h';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -981,7 +981,14 @@ function distMi(a, b) {
 function fmtDurExact(min) { min = Math.round(min); if (min < 60) return min + ' min'; const h = Math.floor(min / 60), m = min % 60; return h + ' h' + (m ? ' ' + m + ' min' : ''); }
 // Rounded the way people say it, in 10-minute steps: 1–4 past a mark is "just over" it, 5–9 past is "just under" the next (62 → just over 1 h; 67 → just under 1 h 10 min). Under 10 minutes stays exact.
 function fmtDur(min, exact) { min = Math.round(min); if (exact || min < 10) return fmtDurExact(min); const d = min % 10; return d === 0 ? fmtDurExact(min) : d < 5 ? 'just over ' + fmtDurExact(min - d) : 'just under ' + fmtDurExact(min - d + 10); }
-function intensityWord(dbz) { return dbz < 30 ? 'Light' : dbz < 40 ? 'Moderate' : dbz < 50 ? 'Heavy' : 'Very heavy'; }
+function intensityWord(dbz) { return dbz < 20 ? 'Very light' : dbz < 30 ? 'Light' : dbz < 40 ? 'Moderate' : dbz < 50 ? 'Heavy' : 'Very heavy'; }
+/* The tracking threshold in use. "Light rain and up" is 15 dBZ: on MRMS base reflectivity, November drizzle and cold-season
+   stratiform rain sit at 10–20 dBZ and do wet the ground (the gauge record shows it), so 20 missed whole shields of it. In warm
+   air (≥ 60 °F at the surface) a 15 dBZ echo is more often virga, so the threshold rides up to 20 there unless the setting is lower. */
+function threshDbz() {
+  const t = +S.threshDbz || 15, ob = st.wx && st.wx.obs, warm = ob && ob.tempF != null && ob.tempF >= 60;
+  return t === 15 && warm ? 20 : t;
+}
 function ago(ms) { if (!ms) return 'never'; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m + ' min ago'; }
 async function fetchT(url, opts, ms) {
   const c = new AbortController(), t = setTimeout(() => c.abort(), ms || 15000);
@@ -1744,13 +1751,13 @@ async function runNowcast() {
     }
     const vel = makeVelocityField(motion, NC.coarse);
     const c = R / NC.fineCellPx;
-    const cleaned = fine.map(g => despeckle(g, S.threshDbz));
-    const labelled = cleaned.map(g => labelBlobs(g, S.threshDbz));
-    const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, S.threshDbz);
+    const cleaned = fine.map(g => despeckle(g, threshDbz()));
+    const labelled = cleaned.map(g => labelBlobs(g, threshDbz()));
+    const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, threshDbz());
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
-      { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
+      { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50 }, labelled[2].labels);
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
-    res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, S.threshDbz, radiusMi);   // nearest real rain anywhere in the tracking window
+    res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, threshDbz(), radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
     // Inside a large rain area the heavy cores (≥ 45 dBZ: downpours, thunderstorm cells) are tracked on their own, so the status can say
     // whether the strong part reaches you or slides by while the lighter rain does arrive.
@@ -1758,7 +1765,7 @@ async function runNowcast() {
       res.core = sres.hit ? { hit: true, etaMin: sres.hit.etaMin, endMin: sres.hit.endMin, maxDbz: sres.hit.maxDbz, fromBearing: sres.hit.fromBearing, distMi: sres.hit.distMi }
         : sres.passing && sres.passing.distMi <= 40 ? { hit: false, distMi: sres.passing.distMi, bearing: sres.passing.bearing, passBearing: sres.passing.passBearing, closestMi: sres.passing.closestMi, maxDbz: sres.nearest ? sres.nearest.dbz : NC.coreDbz } : null; }
     // beyond the two hours the tracker trusts, a straight-line look out to three hours: informational only (blue), never an alert
-    if (!res.hit) { const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: S.threshDbz, hitRadiusMi: S.hitMi, horizonMin: 180, maxRingMi: 50, minHitCells: 6 }, labelled[2].labels); res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null; }
+    if (!res.hit) { const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: 180, maxRingMi: 50, minHitCells: 6 }, labelled[2].labels); res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null; }
     // how the nearest rain's edge has actually moved over the last hour (reset when the location changes)
     if (!st.edgeHist || !st.edgeLoc || distMi(st.edgeLoc, st.loc) > 2) { st.edgeHist = []; st.edgeLoc = { ...st.loc }; st.fizzleSeen = 0; }
     const tNow = fr[2].t;
@@ -2687,7 +2694,7 @@ async function pushEnable() {
   let sub = await reg.pushManager.getSubscription();
   if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
   const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
+    body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: threshDbz() } }) }, 15000);
   if (r.status === 402) throw new Error('Alerts with the screen off are a Pro feature — Settings → Account.');
   if (!r.ok) throw new Error('Backend refused: ' + r.status);
   S.pushId = (await r.json()).id; S.pushEndpoint = sub.endpoint; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
@@ -2703,7 +2710,7 @@ async function ensurePushSubscription(force) {
     if (sub && !force) { const chk = await fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: '{}' }, 10000).catch(() => null); if (chk && chk.ok) return true; }
     if (sub && force && (!S.pushEndpoint || sub.endpoint === S.pushEndpoint)) { try { await sub.unsubscribe(); } catch (e) {} sub = null; }   // a rotated subscription is kept and simply re-registered
     if (!sub) { const key = (await (await fetchT(BE() + '/push/vapid-public-key', {}, 10000)).text()).trim(); sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) }); }
-    const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: S.threshDbz } }) }, 15000);
+    const r = await fetchT(BE() + '/push/subscribe', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ subscription: sub.toJSON(), lat: st.loc.lat, lon: st.loc.lon, prefs: { hitMi: S.hitMi, threshDbz: threshDbz() } }) }, 15000);
     if (!r.ok) return false;
     S.pushId = (await r.json()).id; S.pushEndpoint = sub.endpoint; save(); pushUpdateBriefPrefs(); if (typeof storeBackendForSw === 'function') storeBackendForSw();
     return true;
@@ -2725,7 +2732,7 @@ function pushUpdateBriefPrefs() {
   const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {});
   const body = m.on ? { brief: { at: m.at, days: m.days, offsetMin: -new Date().getTimezoneOffset(), tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), lang: lang(), activity: S.activity } } : { brief: null };
   // the alert thresholds ride along, and the sign-in token lets the server (re)attach the account email to this subscription
-  body.hitMi = S.hitMi; body.threshDbz = S.threshDbz;
+  body.hitMi = S.hitMi; body.threshDbz = threshDbz();
   fetchT(BE() + '/push/' + S.pushId + '/prefs', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify(body) }, 10000).catch(() => {});
 }
 function pushUpdateSnooze() { if (S.pushId && BE()) fetchT(BE() + '/push/' + S.pushId + '/snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ untilMs: S.snoozeUntil }) }, 10000).catch(() => {}); }
@@ -3815,7 +3822,7 @@ const SETTINGS = {
   alerts: [
     ['sound', 'Sound (chimes and warning alarm)', [[true, 'On'], [false, 'Off']]],
     ['hitMi', 'Hit zone — rain counts as "hitting you" within', [[2, '2 mi'], [3, '3 mi'], [5, '5 mi']]],
-    ['threshDbz', 'Count as rain', [[10, 'Any echo'], [20, 'Light and up'], [30, 'Moderate and up']]],
+    ['threshDbz', 'Count as rain', [[10, 'Any echo (10 dBZ — drizzle, flurries)'], [15, 'Light rain and up (15 dBZ; 20 in warm air)'], [20, 'Steady rain and up (20 dBZ)'], [30, 'Moderate and up (30 dBZ)']]],
   ],
   data: [
     ['lowData', 'Low-data mode — half the radar frames, slower refreshes, no topo, trails, smoke or cloud tiles (roughly a third of the data). For cellular tablets and hotspots', [['off', 'Off'], ['on', 'On']]],
@@ -4357,6 +4364,7 @@ applySentinel();
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => { const d = ev.data || {}; if (d.type === 'brief' && d.text) { st.pushBrief = d.text; openBriefing(true); } });
 if (new URLSearchParams(location.search).get('brief') === '1') setTimeout(() => { if (!st.pushBrief) openBriefing(true); }, 4000);
 if (st.pendingJoin) setTimeout(() => openSettings(signedIn() ? 'family' : 'account'), 2500);
+if (!S.threshMigrated) { if (+S.threshDbz === 20) S.threshDbz = 15; S.threshMigrated = true; save(); }   // 20 dBZ was the old default; 15 is the new "light rain"
 tickClock();
 // First run on this device → the welcome page. A device that already has a name or an account was set up before it existed: skip quietly.
 if (!S.welcomed) { if (S.deviceName || signedIn() || st.pendingJoin) { S.welcomed = true; save(); } else setTimeout(openWelcome, 700); }
