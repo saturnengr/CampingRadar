@@ -66,7 +66,8 @@ body.noclock #clock{display:none}
 #rings{display:flex;gap:6px}
 .ring{font-size:13px;font-weight:750;padding:4px 9px;border-radius:999px;background:rgba(0,0,0,.18);opacity:.5;white-space:nowrap}
 .ring.on{opacity:1;background:rgba(0,0,0,.42)}
-.ring.on::before{content:"\25CF";margin-right:4px;color:var(--accent2)}
+.ring.on::before{content:"\25CF";margin-right:4px;color:var(--accent2);text-shadow:0 0 2px rgba(0,0,0,.6);transition:color .5s}
+#rings[data-lvl=green] .ring.on::before{color:#3ddc84}#rings[data-lvl=blue] .ring.on::before{color:#64b5f6}#rings[data-lvl=yellow] .ring.on::before{color:#ffd54f}#rings[data-lvl=orange] .ring.on::before{color:#ff9100}#rings[data-lvl=red] .ring.on::before{color:#ff5252}
 #snoozeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
 #snoozeMenu{position:fixed;right:12px;z-index:1500;background:var(--chrome2);border:1px solid var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 #snoozeMenu .hdr{font-size:13px;color:var(--muted);padding:0 4px}
@@ -874,7 +875,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12l';
+const APP_VERSION = '2026.11.12m';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2680,7 +2681,7 @@ function computeStatus() {
 function renderStatus() {
   const s = computeStatus();
   const bar = $('#statusbar');
-  bar.className = s.cls;
+  bar.className = s.cls; const rg = $('#rings'); if (rg) rg.dataset.lvl = s.cls;   // the selected-range dot takes the status colour
   const urgent = isPhone();   // phones: the status bar always leads and the banner stays compact, green included, so the screen never rearranges itself
   if (document.body.classList.contains('urgent') !== urgent) { document.body.classList.toggle('urgent', urgent); $('#daysToggle').hidden = !urgent; setTimeout(checkMapSize, 60); }
   // the three day cards show by default while the sky is clear (green) and fold away when something is going on; a manual tap on the
