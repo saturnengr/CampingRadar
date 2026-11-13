@@ -503,7 +503,7 @@ app.MapGet("/admin/cams/page", () => Results.Content(CampRadar.Api.Cams.CamsPage
 app.MapGet("/admin/cams/list", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, double? lat, double? lon, double mi = 25, string? id = null) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
-    var list = id is not null ? (cs.Get(id) is { } one ? new List<CampRadar.Api.Cams.Cam> { one } : new()) : lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 400) : new();
+    var list = id is not null ? (cs.Get(id) is { } one ? new List<CampRadar.Api.Cams.Cam> { one } : new()) : lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 400) : cs.Near(42, -93.5, 400, 400, true);
     return Results.Ok(list.Select(c => new { c.Id, c.Name, c.Source, c.Lat, c.Lon, c.HeadingDeg, c.Url, c.Quality, c.Attempts, c.Good, c.LastGoodMs, c.Cues, c.Licence }));
 });
 // frames are loaded by <img>, which cannot send a header: the key rides as a query parameter on this one endpoint

@@ -17,6 +17,8 @@ public sealed class CamDirectory
 {
     private readonly IHttpClientFactory _f; private readonly IConfiguration _cfg; private readonly CamStore _store; private readonly ILogger<CamDirectory> _log;
     public string LastRun { get; private set; } = "never";
+    private readonly Dictionary<string, int> _perNet = new();
+    public IReadOnlyDictionary<string, int> IemPerNetwork => _perNet;
     public DateTimeOffset LastRunAt { get; private set; }
 
     public CamDirectory(IHttpClientFactory f, IConfiguration cfg, CamStore store, ILogger<CamDirectory> log) { _f = f; _cfg = cfg; _store = store; _log = log; }
@@ -28,7 +30,7 @@ public sealed class CamDirectory
         var sb = new StringBuilder(); long started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try { var n = await OtcmAsync(ct); sb.Append($"otcm {n} cams"); _store.RetireMissing("otcm", started); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append("otcm failed: " + ex.Message); _log.LogWarning(ex, "otcm registry"); }
-        try { var n = await IemAsync(ct); sb.Append($" · iem {n} cams"); _store.RetireMissing("iem", started); }
+        try { var n = await IemAsync(ct); sb.Append($" · iem {n} cams (" + string.Join(", ", _perNet.Select(kv => kv.Key + " " + kv.Value)) + ")"); _store.RetireMissing("iem", started); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sb.Append(" · iem failed: " + ex.Message); _log.LogWarning(ex, "iem registry"); }
         LastRun = sb.ToString(); LastRunAt = DateTimeOffset.UtcNow; return LastRun;
     }
@@ -49,11 +51,11 @@ public sealed class CamDirectory
                 {
                     if (!c.TryGetProperty("format", out var f) || f.GetString() != "IMAGE_STREAM") continue;
                     if (c.TryGetProperty("markedForReview", out var mr) && mr.ValueKind == JsonValueKind.True) continue;
-                    if (!c.TryGetProperty("latitude", out var la) || !c.TryGetProperty("longitude", out var lo) || !c.TryGetProperty("url", out var u)) continue;
+                    if (!c.TryGetProperty("latitude", out var la) || la.ValueKind != JsonValueKind.Number || !c.TryGetProperty("longitude", out var lo) || lo.ValueKind != JsonValueKind.Number || !c.TryGetProperty("url", out var u) || u.ValueKind != JsonValueKind.String) continue;
                     double lat = la.GetDouble(), lon = lo.GetDouble(); var snap = u.GetString() ?? "";
                     if (Math.Abs(lat) < 1 && Math.Abs(lon) < 1 || snap.Length < 12 || !snap.StartsWith("http")) continue;
-                    var desc = c.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
-                    var hdg = c.TryGetProperty("direction", out var dir) ? HeadingFrom(dir.GetString()) : null;
+                    var desc = c.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
+                    var hdg = c.TryGetProperty("direction", out var dir) && dir.ValueKind == JsonValueKind.String ? HeadingFrom(dir.GetString()) : null;
                     var rate = c.TryGetProperty("updateRate", out var ur) && ur.TryGetInt64(out var ms) && ms > 0 ? (int)Math.Clamp(ms / 1000, 30, 3600) : 300;
                     cams.Add(new Cam
                     {
@@ -63,7 +65,7 @@ public sealed class CamDirectory
                 }
             }
         }
-        return _store.UpsertMany(cams);
+        _store.UpsertMany(cams); return cams.Select(c => c.Id).Distinct().Count();
     }
 
     private async Task<int> IemAsync(CancellationToken ct)
@@ -78,10 +80,12 @@ public sealed class CamDirectory
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "iem webcams {Net}", net); continue; }
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("features", out var feats)) continue;
+            int before = cams.Count;
             foreach (var f in feats.EnumerateArray())
             {
-                var p = f.GetProperty("properties"); var g = f.GetProperty("geometry").GetProperty("coordinates");
-                var cid = p.TryGetProperty("cid", out var c) ? c.GetString() ?? "" : ""; if (cid.Length == 0) continue;
+                if (!f.TryGetProperty("properties", out var p) || !f.TryGetProperty("geometry", out var geo) || geo.ValueKind != JsonValueKind.Object || !geo.TryGetProperty("coordinates", out var g) || g.GetArrayLength() < 2) continue;
+                var cid = p.TryGetProperty("cid", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : ""; if (cid.Length == 0) continue;
+                if (cams.Any(x => x.Id == "iem:" + cid)) continue;   // the service may answer the same set for several network names
                 cams.Add(new Cam
                 {
                     Id = "iem:" + cid, Source = "iem", Name = (p.TryGetProperty("name", out var n) ? n.GetString() : cid) + (p.TryGetProperty("state", out var st) ? ", " + st.GetString() : ""),
@@ -90,8 +94,9 @@ public sealed class CamDirectory
                     Url = $"https://mesonet.agron.iastate.edu/data/camera/stills/{cid}.jpg", RefreshSec = 300, Licence = "Iowa Environmental Mesonet webcam (" + net + ")"
                 });
             }
+            _perNet[net] = cams.Count - before;
         }
-        return _store.UpsertMany(cams);
+        _store.UpsertMany(cams); return cams.Count;
     }
 
     private static string Hash(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)))[..16].ToLowerInvariant();
