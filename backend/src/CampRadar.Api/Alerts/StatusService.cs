@@ -207,7 +207,7 @@ public sealed class StatusService
         r.Motion = new { motion.Ok, motion.Reason, motion.SpeedMph, motion.HeadingDeg, motion.Conf, Regions = motion.Regions.Count(x => x.Ok) };
         r.RainNow = p.Nearest is not null && p.Nearest.DistMi <= opt.HitMi; r.MotionOk = motion.Ok; r.SpeedMph = motion.SpeedMph; r.HeadingDeg = motion.HeadingDeg; r.MotionConf = motion.Conf;
         r.EdgeVerdict = edge?.Verdict; r.EdgeRateMph = edge?.RateMph; r.Fizzles = p.Hit?.Fizzles ?? false; r.Pop2h = pop2h; r.DewSpread = dewSpread;
-        Describe(r, p, motion, edge, pop2h, dewSpread);
+        Describe(r, p, motion, edge, pop2h, dewSpread, opt);
         return r;
     }
 
@@ -233,7 +233,7 @@ public sealed class StatusService
     }
 
     /// <summary>Same wording rules as the page's computeStatus().</summary>
-    private static void Describe(RainStatus r, Prediction p, Motion m, EdgeCheck? edge, int? pop2h, double? dewSpread)
+    private static void Describe(RainStatus r, Prediction p, Motion m, EdgeCheck? edge, int? pop2h, double? dewSpread, StatusOptions opt)
     {
         double lag = r.RadarLagMin;
         string moving = m.Ok && m.SpeedMph >= 3 ? $"Storms moving {Compass(m.HeadingDeg)} at {Math.Round(m.SpeedMph)} mph" : m.Ok ? "Rain nearly stationary" : "";
