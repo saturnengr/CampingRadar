@@ -839,7 +839,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.12i';
+const APP_VERSION = '2026.11.12j';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2145,9 +2145,13 @@ function drawMotion() {
     const isFocus = b.id === focus, dim = focus && !isFocus ? 0.7 : 1;
     if (isFocus) { const h0 = hull(sample); if (h0.length >= 3) L.polygon(h0.map(([x, y]) => toLL(x, y)), { pane: 'hazards', color: '#fff', weight: 2.5, opacity: 0.9 * op, fill: false, interactive: false }).addTo(motionLayer); }
     // ghost outlines
+    // Each sample point rides the local velocity field in 15-minute steps (re-reading the field where it lands), so a long
+    // line whose ends move at different speeds, or that is pivoting, projects as a rotated/stretched shape rather than a
+    // rigid copy slid along the blob's average vector. The hit prediction already advects cells this way; this matches it.
+    const hulls = {}; let moved = sample;
+    for (let t = 0; t < 60; t += 15) { moved = moved.map(([x, y]) => { const q = vel(x, y); return [x + q.vx * 15 / fineKm, y + q.vy * 15 / fineKm]; }); if (t + 15 === 15 || t + 15 === 30 || t + 15 === 60) hulls[t + 15] = hull(moved); }
     [[60, GHOST_COLORS[60], 0.55], [30, GHOST_COLORS[30], 0.7], [15, GHOST_COLORS[15], 0.85]].forEach(([min, col, alpha]) => {
-      const dx = v.vx * min / fineKm, dy = v.vy * min / fineKm;
-      const h = hull(sample.map(([x, y]) => [x + dx, y + dy])); if (h.length < 3) return;
+      const h = hulls[min]; if (!h || h.length < 3) return;
       // outlines ignore the radar opacity slider (they are the point of the overlay) and sit on a dark halo so the pastels read on a light basemap in daylight
       const ll = h.map(([x, y]) => toLL(x, y)), dash = min === 15 ? '3 7' : min === 30 ? '7 7' : '14 9', w = isFocus ? 3.5 : 2.5;
       L.polygon(ll, { pane: 'hazards', color: '#1a1a1a', weight: w + 2.5, dashArray: dash, opacity: 0.55 * alpha * dim, fillColor: col, fillOpacity: (isFocus ? 0.16 : 0.1) * dim, interactive: false }).addTo(motionLayer);
