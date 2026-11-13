@@ -20,7 +20,7 @@ public sealed record StatusOptions(double HitMi = 3, float ThreshDbz = 20, doubl
     {
         ["camping"] = "secure camp now", ["hunting"] = "start back now", ["beach"] = "pack up now", ["trail"] = "start for shelter now", ["skiing"] = "head down now", ["fishing"] = "head for shore now",
     };
-    public double RedMin(float dbz)
+    public double RedMin(double dbz)
     {
         if (!LeadTime) return 10;
         var row = LeadRed.TryGetValue(Activity ?? "", out var r) ? r : LeadRed["camping"];
