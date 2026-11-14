@@ -661,7 +661,7 @@ function rememberMotion(hist, result, nowMs) {   // bookkeeping for reconcileMot
   return hist;
 }
 function loadMotionHist() {   // the track survives a reload on an always-on display; it is tied to the location it was built for
-  try { const j = JSON.parse(localStorage.getItem('campRadar.motionHist') || 'null'); if (j && st.loc && Math.abs(j.lat - st.loc.lat) < 0.02 && Math.abs(j.lon - st.loc.lon) < 0.02 && Date.now() - j.saved < 3 * 3600000) { const h = j.hist || []; h.disagree = j.disagree || 0; return h; } } catch (e) { }
+  try { const j = JSON.parse(localStorage.getItem('campRadar.motionHist') || 'null'); if (j && st.loc && Math.abs(j.lat - st.loc.lat) < 0.6 && Math.abs(j.lon - st.loc.lon) < 0.8 && Date.now() - j.saved < 3 * 3600000) { const h = j.hist || []; h.disagree = j.disagree || 0; return h; } } catch (e) { }
   return [];
 }
 function saveMotionHist(h) { try { if (st.loc) localStorage.setItem('campRadar.motionHist', JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon, saved: Date.now(), hist: h, disagree: h.disagree || 0 })); } catch (e) { } }
@@ -931,7 +931,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13c';
+const APP_VERSION = '2026.11.13d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1490,7 +1490,7 @@ function applyNight() {
 /* ----------------------------- location ---------------------------- */
 function setLocation(lat, lon, src) {
   const moved = !st.loc || distMi(st.loc, { lat, lon }) > 0.3;
-  if (moved && st.loc && distMi(st.loc, { lat, lon }) > 5) st.motionHist = [];   // a new place gets a fresh track; a drive within town keeps it
+  if (moved && st.loc && distMi(st.loc, { lat, lon }) > 40) st.motionHist = [];   // a different weather system gets a fresh track; storm motion is the same across the window, so a drive keeps it
   st.loc = { lat, lon, src };
   S.lastLoc = { lat, lon, src }; save();
   drawRings();
