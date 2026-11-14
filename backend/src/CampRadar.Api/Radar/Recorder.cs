@@ -18,12 +18,12 @@ public sealed class Recorder
         public DateTimeOffset StartedAt { get; init; } public DateTimeOffset EndsAt { get; init; }
         public int Frames { get; set; } public long LastT { get; set; } public string? LastError { get; set; } public bool Running { get; set; } public long Bytes { get; set; }
     }
-    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly ILogger<Recorder> _log; private readonly string _dir;
+    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly Nws.NwsForecastClient _fc; private readonly ILogger<Recorder> _log; private readonly string _dir;
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cts = new();
 
-    public Recorder(MrmsClient mrms, StatusService status, IConfiguration cfg, ILogger<Recorder> log)
-    { _mrms = mrms; _status = status; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
+    public Recorder(MrmsClient mrms, StatusService status, Nws.NwsForecastClient fc, IConfiguration cfg, ILogger<Recorder> log)
+    { _mrms = mrms; _status = status; _fc = fc; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
 
     public IEnumerable<object> List()
     {
@@ -119,6 +119,7 @@ public sealed class Recorder
     private async Task RunAsync(Job job, string dir, CancellationToken ct)
     {
         var seen = new HashSet<long>(Directory.EnumerateFiles(dir, "*.png").Select(f => long.TryParse(Path.GetFileNameWithoutExtension(f), out var t) ? t : 0));
+        long lastNws = Directory.EnumerateFiles(dir, "*.nws.json").Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var t) ? t : 0).DefaultIfEmpty(0).Max();
         var failures = new Dictionary<long, int>();
         try
         {
@@ -143,6 +144,16 @@ public sealed class Recorder
                         {
                             try { var s = await _status.GetAsync(job.Lat, job.Lon, new StatusOptions(), ct); await File.WriteAllTextAsync(Path.Combine(dir, t + ".status.json"), JsonSerializer.Serialize(s), ct); }
                             catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "status: " + ex.Message; }
+                            // the NWS hourly forecast as it stood at the time, once an hour, so radar-track ETAs can later be scored against what the forecast said
+                            if (t - lastNws >= 3600_000)
+                            {
+                                try
+                                {
+                                    var f = await _fc.GetAsync(job.Lat, job.Lon, ct);
+                                    if (f is not null) { await File.WriteAllTextAsync(Path.Combine(dir, t + ".nws.json"), JsonSerializer.Serialize(new { fetched = f.FetchedAt.ToUnixTimeMilliseconds(), hours = f.Hours.Select(h => new { t = h.T.ToUnixTimeMilliseconds(), h.Pop, h.Thunder, h.Sky, h.Temp, h.WindMph, h.GustMph }), periods = f.Periods.Select(p => new { p.Name, start = p.Start.ToUnixTimeMilliseconds(), p.Pop, p.ShortForecast }) }), ct); lastNws = t; }
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "nws: " + ex.Message; }
+                            }
                         }
                     }
                     job.LastError = null;
