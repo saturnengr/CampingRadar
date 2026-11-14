@@ -4,6 +4,7 @@
 const fs = require('fs'), path = require('path');
 const { PNG } = require('pngjs');
 const C = require('./core.js');
+const RULES = require('./rules.js');   // the deployed rules as one function, shared with tools/video; cross-checked against the inline V4 column below
 
 const HELP = `VantageWX replay harness — runs the app's nowcast core over a recorded storm and scores it.
 
@@ -219,7 +220,7 @@ const rows = []; const hist = []; let segFrames = 0, segRegs = 0, regGrid = {}; 
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
 const ETAH = process.argv.includes('--eta-horizon');
 const V4 = process.argv.includes('--v4'), GRAZE_MIN = +opt('v4-graze-min', 12), GRAZE_CELLS = +opt('v4-graze-cells', 6), RESUME_MPH = +opt('v4-resume-mph', 5), BLUE_MIN = +opt('v4-blue-min', 75), RECEDE_MPH = +opt('v4-recede-mph', 5), NEAR_MI = +opt('v4-near-mi', 15), CLOSE_MPH = +opt('v4-close-mph', 10), BLUE_NEAR_MI = +opt('v4-blue-near-mi', 25);
-let fizzleSeen4 = 0;
+let fizzleSeen4 = 0; const rulesState = { fizzleSeen: 0 }; let rulesMismatch = 0, rulesFrames = 0;
 const SWEEP = [];   // name → settings; scored in the summary when --v4 is given
 for (const blueNear of [0, 15, 25]) for (const blueMin of [75, 90]) for (const close of [10, 15])
   SWEEP.push({ name: `bn${blueNear}_bm${blueMin}_cl${close}`, blueNear, blueMin, close, near: NEAR_MI, grazeMin: GRAZE_MIN, grazeCells: GRAZE_CELLS, stallMin: 30, recede: RECEDE_MPH });
@@ -280,6 +281,8 @@ for (const t of times) {
   }
   const prox = PROX_MI > 0 && !hit && !closingNear && nr && nr.distMi <= PROX_MI && nr.dbz >= thresh && !(edge && edge.rate <= -5);
   if (prox) v4C = 'orange';
+  { const d = RULES.decide({ res: p.res, trends: p.trends, edge, nearest: nr, rainingNow: false, nowDbz: 0, motion: m, far: null, t }, rulesState, { thresh, proxMi: PROX_MI, blueMin: BLUE_MIN, blueNearMi: BLUE_NEAR_MI, closeMph: CLOSE_MPH, nearMi: NEAR_MI, grazeMin: GRAZE_MIN, grazeCells: GRAZE_CELLS, recedeMph: RECEDE_MPH, resumeMph: RESUME_MPH });
+    const alarmOf = x => x === 'red' || x === 'orange' || x === 'yellow'; if (!DRY && (alarmOf(d.cls) !== alarmOf(v4C) || (alarmOf(d.cls) && d.cls !== v4C))) { rulesMismatch++; if (process.env.RULES_DEBUG) console.log('RULES', clock(t), 'v4', v4C, 'rules', d.cls, d.reason); } rulesFrames++; }
   // --sweep: the same V4 logic under several settings at once (rule evaluation is cheap; the frame work above is not)
   const sweep = {};
   if (V4) for (const cfg of SWEEP) {
@@ -307,6 +310,7 @@ for (const t of times) {
   const eTxt = ` | ${oldC.padEnd(6)} → ${newC.padEnd(6)}` + (edge ? ` edge ${edge.rate.toFixed(0)} vs ${edge.closing.toFixed(0)} mph ${edge.verdict}` : '');
   console.log(`${clock(t)}  | ${m.ok ? (compass(m.headingDeg) + ' ' + m.headingDeg.toFixed(0) + '° ' + m.speedMph.toFixed(0) + ' mph').padEnd(18) + ('(' + (m.baselineMin || 0).toFixed(0) + ' min)').padEnd(10) : ('— ' + (m.reason || '')).padEnd(28)} ${m.global.conf.toFixed(2)} | ${lb ? (compass(lb.headingDeg) + ' ' + lb.headingDeg.toFixed(0) + '° ' + lb.speedMph.toFixed(0) + ' mph').padEnd(17) : ''.padEnd(17)} | ${ct ? (compass(ct.headingDeg) + ' ' + ct.headingDeg.toFixed(0) + '° ' + ct.speedMph.toFixed(0) + ' mph n=' + ct.n).padEnd(18) : ''.padEnd(18)} | ${dH == null ? '    ' : (dH >= 0 ? '+' : '') + dH.toFixed(0).padStart(3) + '°'} ${dS == null ? '     ' : (dS >= 0 ? '+' : '') + dS.toFixed(0).padStart(3) + ' '} | ${etaTxt} → ${actTxt}${eTxt}`);
 }
+if (rulesFrames) console.log(`\nshared rules.js vs inline V4 column (alarm colours): ${rulesMismatch} of ${rulesFrames} frames differ` + (rulesMismatch ? '  ← keep rules.js and the harness in step' : ''));
 const scored = rows.filter(r => r.dH != null);
 if (scored.length) {
   const absH = scored.map(r => Math.abs(r.dH)).sort((a, b) => a - b), absS = scored.map(r => Math.abs(r.dS)).sort((a, b) => a - b);

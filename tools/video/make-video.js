@@ -20,6 +20,7 @@ const fs = require('fs'), path = require('path'), os = require('os'), { execFile
 module.paths.push(path.join(__dirname, '..', 'replay', 'node_modules'));
 const { PNG } = require('pngjs');
 const C = require(path.join(__dirname, '..', 'replay', 'core.js'));
+const RULES = require(path.join(__dirname, '..', 'replay', 'rules.js'));   // the deployed arrival rules, shared with the harness
 const { chromium } = require('playwright');
 
 const opt = (n, d) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.slice(n.length + 3) : d; };
@@ -71,26 +72,23 @@ function analyse(latest) {
   if (dt2 >= 6) { const m2 = C.estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: 110 }); if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) motion = m2; }
   const rec = C.reconcileMotion(memHist, motion, latest); memHist = C.rememberMotion(memHist, rec, latest); if (rec.held) motion = rec.motion;
   const vel = C.makeVelocityField(motion, coarseF);
-  const lab = C.labelBlobs(F[2].cleaned, thresh);
+  const labelled = F.map(f => C.labelBlobs(f.cleaned, thresh)), lab = labelled[2];
   const res = C.predictRain(F[2].cleaned, fineKm, c, c, vel, { thresh, hitRadiusMi: hitMi, horizonMin: 120, maxRingMi: 50, ringRadii: [10, 30, 50] }, lab.labels);
+  const trends = C.blobTrends(labelled, [dt1, dt2], vel, fineKm, thresh);
   let far = null;
   if (!res.hit) { const fr2 = C.predictRain(F[2].cleaned, fineKm, c, c, vel, { thresh, hitRadiusMi: hitMi, horizonMin: 360, maxRingMi: RADIUS_MI, minHitCells: 6 }, lab.labels); far = fr2.hit && fr2.hit.etaMin > 115 ? fr2.hit : null; }
-  return { fr, motion, vel, res, far, lab, grid: F[2].cleaned, now: rainAt(F[2]) };
+  // the nearest echo's edge over the last hour (as the app keeps st.edgeHist)
+  const nr = res.nearest; if (nr && !edgeHist.some(h => h.t === latest)) edgeHist.push({ t: latest, d: nr.distMi, b: nr.bearing });
+  while (edgeHist.length && latest - edgeHist[0].t > 60 * 60000) edgeHist.shift();
+  const edge = C.edgeCheck(edgeHist, latest, nr, motion);
+  const now = rainAt(F[2]);
+  const d = RULES.decide({ res, trends, edge, nearest: nr, rainingNow: now >= thresh, nowDbz: now, motion, far, t: latest }, rulesState, { thresh, clock });
+  return { fr, motion, vel, res, far, lab, trends, edge, grid: F[2].cleaned, now, d };
 }
+const edgeHist = [], rulesState = { fizzleSeen: 0 };
 
-// ---- the app's status wording (the same branches as computeStatus, trimmed to what a recording can show) ----
-function status(a, t) {
-  const { res, far, motion, now } = a;
-  if (now >= thresh) { const w = now < 30 ? 'Light' : now < 40 ? 'Moderate' : now < 50 ? 'Heavy' : 'Very heavy'; return { cls: 'red', main: w + ' rain at your location', sub: res.hit && res.hit.endMin > 0 ? 'rain ending in ~' + Math.round(res.hit.endMin) + ' min' : 'raining now' }; }
-  if (res.hit) {
-    const h = res.hit, eta = h.etaMin, when = t + eta * 60000;
-    const cls = eta <= 15 ? 'red' : 'orange';
-    return { cls, main: eta < 10 ? 'Rain arriving in ~' + Math.round(eta) + ' min' : 'Rain arriving ≈ ' + clock(when) + ' (in ' + fmtDur(eta) + ')', sub: (h.maxDbz < 30 ? 'Light' : h.maxDbz < 40 ? 'Moderate' : h.maxDbz < 50 ? 'Heavy' : 'Very heavy') + ' rain ' + Math.round(h.distMi) + ' mi ' + compass(h.fromBearing) + (motion.ok ? ' · moving ' + compass(motion.headingDeg) + ' ' + Math.round(motion.speedMph) + ' mph' : ''), eta: when };
-  }
-  if (far && motion.ok) { const eta = far.etaMin; return { cls: 'blue', main: 'Rain ' + Math.round(far.distMi) + ' mi ' + compass(far.fromBearing) + ' could reach you in ' + (/^just/.test(fmtDur(eta)) ? '' : 'about ') + fmtDur(eta), sub: 'Straight-line track, ≈ ' + clock(t + eta * 60000) + ' — beyond the two hours the tracker trusts', eta: t + eta * 60000 }; }
-  if (res.passing) return { cls: 'blue', main: 'Rain ' + Math.round(res.passing.distMi) + ' mi ' + compass(res.passing.bearing) + ' — passing to the ' + compass(res.passing.passBearing).toLowerCase(), sub: 'Not on track for you' };
-  return { cls: 'green', main: 'No rain heading your way', sub: res.nearest ? 'Nearest rain ' + Math.round(res.nearest.distMi) + ' mi ' + compass(res.nearest.bearing) : 'Clear within 50 miles' };
-}
+// ---- status: the shared rules' wording and colour; eta kept for the payoff caption
+function status(a, t) { const d = a.d; return { cls: d.cls, main: d.main, sub: d.sub, eta: d.etaMin != null && d.etaMin > 0 && ['hit', 'closing', 'far', 'horizon', 'far6h'].includes(d.reason) ? t + d.etaMin * 60000 : null }; }
 
 // ---- geometry for the overlay, in recording pixels (origin top-left of the 1236 frame) ----
 const pxPerMi = MI / mpp;
@@ -98,21 +96,29 @@ function hull(pts) { if (pts.length < 3) return pts; pts = pts.slice().sort((a, 
 function overlay(a, t) {
   const { lab, vel, grid, motion, res, far } = a, o = { blobs: [], rings: {}, arrival: null };
   const toPx = (gx, gy) => [HALF + (gx - c) * fineCellPx, HALF + (gy - c) * fineCellPx];
-  const big = lab.blobs.filter(b => !b.tiny && b.n >= 40).sort((p, q) => q.n - p.n).slice(0, 4);
-  const hitBlob = res.hit ? res.hit.blob : far ? far.blob : null;
-  for (const b of big) {
-    // sample the blob's cells (every 3rd) and advect through the velocity field for 15/30/60 min
-    const cells = []; for (let y = 0; y < grid.h; y += 2) for (let x = 0; x < grid.w; x += 2) if (lab.labels[y * grid.w + x] === b.id) cells.push([x + 0.5, y + 0.5]);
-    if (cells.length < 6) continue;
+  // the app's choice of areas (drawMotion): the one that hits you, the focus, and the significant ones; outlines fade with motion confidence
+  if (!motion.ok) { o.conf = 0; }
+  const hitBlob = res.hit ? res.hit.blob : null, focus = hitBlob || (far ? far.blob : null) || (res.passing ? res.nearestBlob : null);
+  const ranked = lab.blobs.filter(b => b.id === hitBlob || b.id === focus || (b.edge ? b.n >= 40 : b.n >= 12)).sort((p, q) => (q.vol || q.n) - (p.vol || p.n)).slice(0, 14);
+  o.op = motion.ok ? 0.35 + 0.65 * Math.max(0.25, Math.min(1, motion.global.conf * 2)) : 0;
+  if (motion.ok) for (const b of ranked) {
+    const cells = []; for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) if (lab.labels[y * grid.w + x] === b.id) cells.push([x + 0.5, y + 0.5]);
+    const step = Math.max(1, Math.floor(cells.length / 400)), sample = cells.filter((_, i) => i % step === 0);
+    if (sample.length < 6) continue;
     const v = vel(b.cx, b.cy), spd = Math.hypot(v.vx, v.vy) * 60 * 0.621371, hd = (Math.atan2(v.vx, -v.vy) * 180 / Math.PI + 360) % 360;
-    const outlines = {};
-    for (const m of [15, 30, 60]) { const pts = cells.map(([x, y]) => { let px = x, py = y; for (let k = 0; k < m / 5; k++) { const vv = vel(px, py); px += vv.vx * 5 / fineKm; py += vv.vy * 5 / fineKm; } return toPx(px, py); }); outlines[m] = hull(pts); }
+    // each sample point rides the local field in 15-minute steps (as the app and the hit prediction do)
+    const outlines = {}; let moved = sample;
+    for (let m = 15; m <= 60; m += 15) { moved = moved.map(([x, y]) => { const q = vel(x, y); return [x + q.vx * 15 / fineKm, y + q.vy * 15 / fineKm]; }); if (m === 15 || m === 30 || m === 60) outlines[m] = hull(moved.map(([x, y]) => toPx(x, y))); }
+    const isFocus = b.id === focus, present = isFocus ? hull(sample.map(([x, y]) => toPx(x, y))) : null;
     const [ax, ay] = toPx(b.cx, b.cy), len = spd * 0.5 * pxPerMi;   // arrow = 30 minutes of travel
-    o.blobs.push({ id: b.id, toward: b.id === hitBlob, arrow: { x: ax, y: ay, dx: Math.sin(hd * Math.PI / 180) * len, dy: -Math.cos(hd * Math.PI / 180) * len, label: compass(hd) + ' ' + Math.round(spd) + ' mph' }, outlines });
+    const showArrow = isFocus || b.n >= 60;   // presentation only: the app labels every ranked area, a 1080-px frame cannot
+    o.blobs.push({ id: b.id, toward: b.id === hitBlob, focus: isFocus, present, arrow: !showArrow ? null : { x: ax, y: ay, dx: Math.sin(hd * Math.PI / 180) * len, dy: -Math.cos(hd * Math.PI / 180) * len, label: compass(hd) + ' ' + Math.round(spd) + ' mph' }, outlines });
   }
-  // rings: solid inside now, dotted projected within 60, dashed otherwise; colour by strength of the hitting part
-  for (const r of [10, 30, 50]) { const q = res.ringIn && res.ringIn[r]; const st = q ? (q.t <= 0 ? 'solid' : q.t <= 60 ? 'dotted' : 'dashed') : 'dashed'; const col = q && q.t <= 60 ? (q.maxDbz >= 50 ? '#ff5252' : q.maxDbz >= 40 ? '#ff9100' : q.maxDbz >= 30 ? '#ffd54f' : '#ffffff') : res.ringMiss && res.ringMiss[r] != null && res.ringMiss[r] <= 60 ? '#64b5f6' : '#ffffff'; o.rings[r] = { style: q && q.t <= 60 ? st : res.ringMiss && res.ringMiss[r] != null && res.ringMiss[r] <= 60 ? 'dotted' : 'dashed', col }; }
-  const h = res.hit || far; if (h && h.fromBearing != null) { const a2 = h.fromBearing * Math.PI / 180, d = hitMi * pxPerMi; o.arrival = { x: HALF + Math.sin(a2) * d, y: HALF - Math.cos(a2) * d, label: clock(t + h.etaMin * 60000) }; }
+  // rings exactly as the app styles them, from the same decision
+  const RC = { white: '#ffffff', yellow: '#ffd54f', orange: '#ff9100', red: '#ff5252', blue: '#64b5f6' };
+  const rs = RULES.ringStates(a.d, res, [10, 30, 50], 0);
+  for (const r of [10, 30, 50]) { const q = rs[r] || { style: 'dashed', c: 'white' }; o.rings[r] = { style: q.style, col: RC[q.c] || '#ffffff' }; }
+  const h = ['hit', 'closing', 'far', 'horizon', 'far6h'].includes(a.d.reason) ? (res.hit || far) : null; if (h && h.fromBearing != null) { const a2 = h.fromBearing * Math.PI / 180, d = hitMi * pxPerMi; o.arrival = { x: HALF + Math.sin(a2) * d, y: HALF - Math.cos(a2) * d, label: clock(t + h.etaMin * 60000) }; }
   return o;
 }
 
@@ -137,16 +143,17 @@ async function draw(d){
     g.font='600 22px system-ui'; g.fillStyle=q.col; g.fillText(r+' mi',cx+r*ppm*0.707+8,cy-r*ppm*0.707-8);}
   // outlines + arrows
   const GC={15:'#ffd54f',30:'#ff9100',60:'#f48fb1'};
-  for(const b of d.ov.blobs){ for(const m of [15,30,60]){const h=b.outlines[m]; if(!h||h.length<3)continue; g.beginPath(); h.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1]))); g.closePath(); g.setLineDash(m===15?[3,7]:m===30?[7,7]:[14,9]); g.lineWidth=m===60?3.5:2.5; g.strokeStyle='rgba(0,0,0,.55)'; g.lineWidth+=2; g.stroke(); g.lineWidth-=2; g.strokeStyle=GC[m]; g.globalAlpha=b.toward?.95:.55; g.stroke(); g.globalAlpha=1; g.setLineDash([]);}
-    const a=b.arrow, x0=X(a.x),y0=Y(a.y),x1=X(a.x+a.dx),y1=Y(a.y+a.dy); if(y0<175||y1<175||x1>S-40||x1<40||y1>S-100)continue; g.lineWidth=7; g.strokeStyle='rgba(0,0,0,.6)'; g.beginPath(); g.moveTo(x0,y0); g.lineTo(x1,y1); g.stroke(); g.lineWidth=4; g.strokeStyle='#fff'; g.beginPath(); g.moveTo(x0,y0); g.lineTo(x1,y1); g.stroke();
+  for(const b of d.ov.blobs){ if(b.present&&b.present.length>=3){g.beginPath(); b.present.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1]))); g.closePath(); g.lineWidth=2.5; g.strokeStyle='rgba(255,255,255,'+(0.9*d.ov.op)+')'; g.stroke();}
+    for(const m of [15,30,60]){const h=b.outlines[m]; if(!h||h.length<3)continue; g.beginPath(); h.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1]))); g.closePath(); g.setLineDash(m===15?[3,7]:m===30?[7,7]:[14,9]); g.lineWidth=m===60?3.5:2.5; g.strokeStyle='rgba(0,0,0,.55)'; g.lineWidth+=2; g.stroke(); g.lineWidth-=2; g.strokeStyle=GC[m]; g.globalAlpha=(b.focus?.95:.55)*d.ov.op; g.stroke(); g.globalAlpha=1; g.setLineDash([]);}
+    const a=b.arrow; if(!a) continue; const x0=X(a.x),y0=Y(a.y),x1=X(a.x+a.dx),y1=Y(a.y+a.dy); if(y0<175||y1<175||x1>S-40||x1<40||y1>S-100)continue; g.lineWidth=7; g.strokeStyle='rgba(0,0,0,.6)'; g.beginPath(); g.moveTo(x0,y0); g.lineTo(x1,y1); g.stroke(); g.lineWidth=4; g.strokeStyle='#fff'; g.beginPath(); g.moveTo(x0,y0); g.lineTo(x1,y1); g.stroke();
     const an=Math.atan2(y1-y0,x1-x0); g.fillStyle='#fff'; g.beginPath(); g.moveTo(x1,y1); g.lineTo(x1-16*Math.cos(an-.5),y1-16*Math.sin(an-.5)); g.lineTo(x1-16*Math.cos(an+.5),y1-16*Math.sin(an+.5)); g.closePath(); g.fill();
-    g.font='700 24px system-ui'; const lbl=a.label+(b.toward?' · toward you':''); const tw=g.measureText(lbl).width; g.fillStyle='rgba(0,0,0,.6)'; g.fillRect(x1+10,y1-18,tw+14,32); g.fillStyle=b.toward?'#ffd54f':'#fff'; g.fillText(lbl,x1+17,y1+6);}
+    g.font='700 24px system-ui'; const lbl=a.label+(b.toward?' · toward you':b.focus&&d.st.cls==='blue'&&/could reach|heading this way/.test(d.st.main)?' · could reach you':b.focus?' · nearest':''); const tw=g.measureText(lbl).width; g.fillStyle='rgba(0,0,0,.6)'; g.fillRect(x1+10,y1-18,tw+14,32); g.fillStyle=b.toward||b.focus?'#ffd54f':'#fff'; g.fillText(lbl,x1+17,y1+6);}
   // you
   g.beginPath(); g.arc(cx,cy,11,0,Math.PI*2); g.fillStyle='#4fc3f7'; g.fill(); g.lineWidth=4; g.strokeStyle='#fff'; g.stroke();
   g.font='700 24px system-ui'; g.fillStyle='#fff'; g.shadowColor='#000'; g.shadowBlur=6; g.fillText(d.place,cx+16,cy+34); g.shadowBlur=0;
   if(d.ov.arrival){const p=d.ov.arrival; g.beginPath(); g.arc(X(p.x),Y(p.y),8,0,Math.PI*2); g.fillStyle='#ff9100'; g.fill(); g.lineWidth=3; g.strokeStyle='#fff'; g.stroke(); g.font='700 22px system-ui'; g.fillStyle='#ffb74d'; g.shadowColor='#000'; g.shadowBlur=6; g.fillText('arrives ≈ '+p.label,X(p.x)+14,Y(p.y)-16); g.shadowBlur=0;}
   // banner
-  const BC={green:'#1b5e20',blue:'#0d47a1',orange:'#e65100',red:'#b71c1c'}; g.fillStyle=BC[d.st.cls]; g.globalAlpha=.94; g.fillRect(0,0,S,150); g.globalAlpha=1;
+  const BC={green:'#1b5e20',blue:'#0d47a1',yellow:'#8d6e00',orange:'#e65100',red:'#b71c1c'}; g.fillStyle=BC[d.st.cls]; g.globalAlpha=.94; g.fillRect(0,0,S,150); g.globalAlpha=1;
   g.fillStyle='#fff'; let fs=44; g.font='800 '+fs+'px system-ui'; while(g.measureText(d.st.main).width>S-56&&fs>28){fs-=2; g.font='800 '+fs+'px system-ui';} g.fillText(d.st.main,32,62); fs=27; g.font='500 '+fs+'px system-ui'; while(g.measureText(d.st.sub).width>S-56&&fs>17){fs-=1; g.font='500 '+fs+'px system-ui';} g.fillStyle='rgba(255,255,255,.88)'; g.fillText(d.st.sub,32,108);
   // clock + legend
   g.fillStyle='rgba(0,0,0,.6)'; g.fillRect(0,S-84,S,84); g.fillStyle='#fff'; g.font='800 40px system-ui'; g.fillText(d.clock,32,S-30); const cw=g.measureText(d.clock).width; g.font='500 24px system-ui'; g.fillStyle='#9fb3c2'; g.fillText(d.date,32+cw+22,S-30);
