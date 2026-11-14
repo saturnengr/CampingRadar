@@ -500,6 +500,7 @@ app.MapGet("/admin/cams", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, CampRa
     !IsAdmin(r) ? Results.Unauthorized() : Results.Ok(new { directory = new { dir.LastRun, dir.LastRunAt, stats = cs.Stats() }, worker = new { w.LastCycle, w.LastCycleAt, targets = w.Targets(), recent = w.Recent.Values.OrderByDescending(x => x).Take(30) },
         near = lat is { } la && lon is { } lo ? cs.Near(la, lo, mi, 25).Select(c => new { c.Id, c.Name, c.Lat, c.Lon, c.HeadingDeg, c.Url, c.Quality, c.Attempts, c.Good, c.LastGoodMs, distMi = Math.Round(CampRadar.Api.Cams.CamStore.Haversine(la, lo, c.Lat, c.Lon), 1) }) : null }));
 app.MapGet("/admin/cams/page", () => Results.Content(CampRadar.Api.Cams.CamsPage.Html, "text/html"));
+app.MapGet("/admin/record/page", () => Results.Content(CampRadar.Api.Admin.RecordPage.Html, "text/html"));
 app.MapGet("/admin/cams/list", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, double? lat, double? lon, double mi = 25, string? id = null) =>
 {
     if (!IsAdmin(r)) return Results.Unauthorized();
