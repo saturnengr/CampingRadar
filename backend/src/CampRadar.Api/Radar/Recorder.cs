@@ -18,12 +18,12 @@ public sealed class Recorder
         public DateTimeOffset StartedAt { get; init; } public DateTimeOffset EndsAt { get; init; }
         public int Frames { get; set; } public long LastT { get; set; } public string? LastError { get; set; } public bool Running { get; set; } public long Bytes { get; set; }
     }
-    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly Nws.NwsForecastClient _fc; private readonly ILogger<Recorder> _log; private readonly string _dir;
+    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly Nws.NwsForecastClient _fc; private readonly IHttpClientFactory _http; private readonly ILogger<Recorder> _log; private readonly string _dir;
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cts = new();
 
-    public Recorder(MrmsClient mrms, StatusService status, Nws.NwsForecastClient fc, IConfiguration cfg, ILogger<Recorder> log)
-    { _mrms = mrms; _status = status; _fc = fc; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
+    public Recorder(MrmsClient mrms, StatusService status, Nws.NwsForecastClient fc, IHttpClientFactory http, IConfiguration cfg, ILogger<Recorder> log)
+    { _mrms = mrms; _status = status; _fc = fc; _http = http; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
 
     public IEnumerable<object> List()
     {
@@ -119,6 +119,7 @@ public sealed class Recorder
     private async Task RunAsync(Job job, string dir, CancellationToken ct)
     {
         var seen = new HashSet<long>(Directory.EnumerateFiles(dir, "*.png").Select(f => long.TryParse(Path.GetFileNameWithoutExtension(f), out var t) ? t : 0));
+        long lastOm = Directory.EnumerateFiles(dir, "*.om.json").Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var t) ? t : 0).DefaultIfEmpty(0).Max();
         long lastNws = Directory.EnumerateFiles(dir, "*.nws.json").Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var t) ? t : 0).DefaultIfEmpty(0).Max();
         var failures = new Dictionary<long, int>();
         try
@@ -145,6 +146,19 @@ public sealed class Recorder
                             try { var s = await _status.GetAsync(job.Lat, job.Lon, new StatusOptions(), ct); await File.WriteAllTextAsync(Path.Combine(dir, t + ".status.json"), JsonSerializer.Serialize(s), ct); }
                             catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "status: " + ex.Message; }
                             // the NWS hourly forecast as it stood at the time, once an hour, so radar-track ETAs can later be scored against what the forecast said
+                            // Open-Meteo baseline (free, no key): 15-minute precipitation for the next 6 h plus hourly PoP for 12 h, every 15 min,
+                            // so the harness can score a third-party nowcast against the same truth as ours
+                            if (t - lastOm >= 15 * 60_000)
+                            {
+                                try
+                                {
+                                    var ci = System.Globalization.CultureInfo.InvariantCulture;
+                                    var url = $"https://api.open-meteo.com/v1/forecast?latitude={job.Lat.ToString("F4", ci)}&longitude={job.Lon.ToString("F4", ci)}&minutely_15=precipitation&hourly=precipitation_probability,precipitation&forecast_minutely_15=24&forecast_hours=12&timeformat=unixtime&timezone=UTC";
+                                    var om = await _http.CreateClient("obs").GetStringAsync(url, ct);
+                                    await File.WriteAllTextAsync(Path.Combine(dir, t + ".om.json"), om, ct); lastOm = t;
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "open-meteo: " + ex.Message; }
+                            }
                             if (t - lastNws >= 3600_000)
                             {
                                 try
