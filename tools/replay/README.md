@@ -54,3 +54,18 @@ Backend builds from 13 Nov 2026 on write `cam.jsonl` beside `gauge-madis.jsonl` 
 the nearest public webcams within 10 mi — `{t, img, cam, name, lat, lon, distMi, day, precip, intensity, ground, vis, sky, lens, wind, conf, radarDbz}`.
 The harness prints an agreement table (camera vs radar over the camera; wet ground with dry radar = drizzle reaching the ground unseen;
 radar over dry ground = not reaching the ground; fog frames). Verdicts at night or with a bad lens or low confidence are excluded.
+
+## Sites: many evaluation points from one recording (`--site`)
+
+A recording is the whole radar disc around its centre, so any point inside it can be scored as "you":
+
+    node replay.js <recording> 100 --v4 --site=43.08,-79.48:niagara-s40
+
+`--site=lat,lon[:name]` re-centres the crop window on that point (Web Mercator at the recording's zoom), recomputes gauge
+distances from it, and labels the output. The window must stay inside the frame: with a 200-mile recording, a 100-mile
+evaluation radius allows sites up to ~100 miles from the centre. Score a line of sites across a storm's track — direct hit,
+two flanks, two misses — from one set of frames rather than recording three overlapping discs.
+
+Caveat: gauge and camera ground truth are collected by the backend around the recording's sample points, so a site far from
+the centre may have little gauge truth nearby; the radar-truth columns are always available. Site names appear in the output
+header; the batch scripts can loop over `--site` values per recording.

@@ -8,6 +8,14 @@ const C = require('./core.js');
 const dir = process.argv[2]; const radiusMi = +(process.argv[3] || 120);
 const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const MI = 1609.344, mpp = meta.metersPerPx, size = meta.sizePx, half = size / 2;
+// --site=lat,lon[:name] evaluates a different "you" point inside the same recording: the crop window is re-centred on that point
+// (Web Mercator at the recording's zoom), gauge distances are recomputed from it, and the output is labelled with its name.
+// One recording, many sites: direct hit, flanks, clean misses, all from the same frames. Must stay inside the frame (radius + margin).
+const SITE = (() => { const a = process.argv.find(x => x.startsWith('--site=')); if (!a) return null; const [ll, nm] = a.slice(7).split(':'); const [la, lo] = ll.split(',').map(Number); if (!isFinite(la) || !isFinite(lo)) throw new Error('--site=lat,lon[:name]'); return { lat: la, lon: lo, name: nm || (la.toFixed(3) + ',' + lo.toFixed(3)) }; })();
+const merc = (lat, lon, z) => { const n = 256 * 2 ** z, x = (lon + 180) / 360 * n, s = Math.sin(lat * Math.PI / 180), y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n; return [x, y]; };
+const [cxPx, cyPx] = (() => { if (!SITE || meta.lat == null) return [half, half]; const [x0, y0] = merc(meta.lat, meta.lon, meta.zoom), [x1, y1] = merc(SITE.lat, SITE.lon, meta.zoom); return [half + (x1 - x0), half + (y1 - y0)]; })();
+const haversineMi = (la1, lo1, la2, lo2) => { const R = 3958.8, dLa = (la2 - la1) * Math.PI / 180, dLo = (lo2 - lo1) * Math.PI / 180, a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(a)); };
+if (SITE) console.log(`site ${SITE.name} (${SITE.lat}, ${SITE.lon}): ${haversineMi(meta.lat, meta.lon, SITE.lat, SITE.lon).toFixed(0)} mi from the recording centre, crop centre px ${cxPx.toFixed(0)},${cyPx.toFixed(0)}`);
 const fineCellPx = 4, coarseF = 2;                 // zoom 8 × 4 px = the page's zoom 7 × 2 px (≈2.05 km)
 const fineKm = mpp * fineCellPx / 1000, coarseKm = fineKm * coarseF;
 const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = +(process.env.THRESH || 20), hitMi = 3;   // THRESH = the app's alert threshold (10 any echo / 15 light / 20 / 30 moderate); radar truth uses the same bar
@@ -30,7 +38,8 @@ function frame(t) {
   if (cache.has(t)) return cache.get(t);
   const png = PNG.sync.read(fs.readFileSync(path.join(dir, t + '.png')));
   // crop the central 2R px (the page builds its composite exactly 2R wide around the point)
-  const w = 2 * R, out = Buffer.alloc(w * w * 4), x0 = Math.round(half - R), y0 = Math.round(half - R);
+  const w = 2 * R, out = Buffer.alloc(w * w * 4), x0 = Math.round(cxPx - R), y0 = Math.round(cyPx - R);
+  if (x0 < 0 || y0 < 0 || x0 + w > png.width || y0 + w > png.height) throw new Error(`site window leaves the frame: need ${radiusMi} mi around the site inside the recording's ${meta.radiusMi} mi radius — pick a site nearer the centre or a smaller radius argument`);
   for (let y = 0; y < w; y++) png.data.copy(out, y * w * 4, ((y0 + y) * png.width + x0) * 4, ((y0 + y) * png.width + x0 + w) * 4);
   const fine = C.despeckle(C.gridFromRGBA(out, w, w, fineCellPx), Math.min(15, thresh));
   const f = { t, fine, coarse: C.downsampleMax(fine, coarseF), cleaned: C.despeckle(fine, thresh) };
@@ -279,7 +288,7 @@ function loadGauges() {
       if (!line.trim()) continue;
       try {
         const g = JSON.parse(line);
-        const dist = kind === 'madis' ? g.distMi : 0;
+        const dist = kind === 'madis' ? (SITE && g.lat != null ? haversineMi(SITE.lat, SITE.lon, g.lat, g.lon) : g.distMi) : (SITE ? 999 : 0);   // airport gauge is the centre's own station: not a site truth
         const inches = kind === 'madis' ? g.pcp1hIn : g.precipMm != null ? g.precipMm / 25.4 : null;
         const wx = (kind === 'madis' ? g.wx : (g.present || g.wx)) || '';
         out.push({ t: g.t, id: g.id || g.station, dist, inches, wx, wet: (inches != null && inches >= 0.01) || /RA|DZ|TS|SN|UP/.test(wx), kind });
