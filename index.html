@@ -64,6 +64,8 @@ body.noclock #clock{display:none}
 #statusMain{font-size:22px;font-weight:750;line-height:1.15}
 #statusSub{font-size:15px;opacity:.92;margin-top:2px}
 #rings{display:flex;gap:6px}
+#tripLine{flex-basis:100%;font-size:14px;line-height:1.3;color:rgba(255,255,255,.92);display:flex;gap:6px 14px;flex-wrap:wrap;align-items:baseline}#tripLine b{font-weight:750}#tripLine .eta{font-size:17px;font-weight:800}#tripLine small{opacity:.8}
+@media (max-width:860px){#statusbar{flex-wrap:wrap}}
 .ring{font-size:13px;font-weight:750;padding:4px 9px;border-radius:999px;background:rgba(0,0,0,.18);opacity:.5;white-space:nowrap}
 .ring.on{opacity:1;background:rgba(0,0,0,.42)}
 .ring::before{content:"\25CB";margin-right:4px;color:var(--rc,#e8eef3);opacity:.6;text-shadow:0 0 2px rgba(0,0,0,.6);transition:color .5s}
@@ -373,6 +375,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <button id="micBtn" title="Tap to talk" hidden><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg></button>
   <button id="routeBtn" title="Set a destination so rain is judged along your road" hidden>Where to?</button>
   <button id="snoozeBtn">Snooze</button>
+  <div id="tripLine" hidden></div>
 </div>
 <div id="clock" hidden><div id="clockTime">--:--</div><div id="clockDate"></div></div>
 </div>
@@ -967,7 +970,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14e';
+const APP_VERSION = '2026.11.14f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1657,6 +1660,18 @@ function routeProgress() {   // index of the nearest route vertex to the current
   for (let i = 0; i < rt.coords.length; i++) { const d = distMi(st.loc, { lat: rt.coords[i][0], lon: rt.coords[i][1] }); if (d < bd) { bd = d; bi = i; } }
   return { i: bi, offMi: bd };
 }
+/* Miles and minutes left to the destination. Moving: at the current speed; parked: the router's drive time for what is left. */
+function tripEstimate() {
+  const d = S.destination, rt = st.route; if (!d || !rt || !st.loc) return null;
+  const pr = routeProgress(), tv = travelling();
+  const done = pr && pr.offMi <= 1 ? rt.cum[pr.i] : 0, remainMi = Math.max(0, rt.distanceMi - done);
+  const arrived = remainMi < 0.3 || distMi(st.loc, d) < 0.3;
+  const moving = !!(tv.moving && tv.mph >= 10);
+  const minutes = arrived ? 0 : moving ? remainMi / tv.mph * 60 : rt.durationMin * (remainMi / Math.max(0.1, rt.distanceMi));
+  let wetAhead = null;
+  const ra = (st.roadAhead || [])[0]; if (ra && ra.title) wetAhead = ra.title.replace(/^Ahead:\s*/, '');
+  return { name: d.name || 'destination', remainMi, minutes: isFinite(minutes) ? Math.round(minutes) : null, eta: isFinite(minutes) ? Date.now() + minutes * 60000 : null, moving, mph: tv.mph || 0, arrived, wetAhead };
+}
 /* Observer path for predictRain: [{t, e, n}] in minutes and miles east/north of the current location. Along the route when there is
    one and we are on it; a straight line along the travel heading otherwise. Every 3 minutes out to the horizon. */
 function travelPath(mph, headingDeg, horizonMin) {
@@ -1687,6 +1702,13 @@ function updateRouteUi() {
   btn.hidden = !S.backend; btn.textContent = S.destination ? '→ ' + (S.destination.name || 'destination').slice(0, 18) : tv.moving ? 'Where to?' : 'Trip';
   const now = $('#routeNow'); if (now) now.textContent = S.destination ? ('Heading to ' + S.destination.name + (st.route ? ' · ' + st.route.summary : st.routeErr ? ' · ' + st.routeErr : st.routeBusy ? ' · finding the road…' : '') + (!tv.moving ? ' · the road is on the map; rain is judged along it once you are moving' : '')) : '';
   const clr = $('#routeClear'); if (clr) clr.hidden = !S.destination;
+  const tl = $('#tripLine');
+  if (tl) {
+    const trip = tripEstimate();
+    tl.hidden = !trip;
+    if (trip) tl.innerHTML = '<b>→ ' + esc(trip.name) + '</b><span>' + (trip.remainMi >= 10 ? Math.round(trip.remainMi) : trip.remainMi.toFixed(1)) + ' mi' + (trip.minutes != null ? ' · ' + fmtDur(trip.minutes, true) : '') + '</span>' +
+      (trip.eta ? '<span class="eta">ETA ' + clock(trip.eta) + '</span>' : '') + '<small>' + (trip.arrived ? 'arrived' : trip.moving ? 'at ' + Math.round(trip.mph) + ' mph' : 'parked · road time') + (trip.wetAhead ? ' · ' + trip.wetAhead : '') + '</small>';
+  }
   document.querySelectorAll('#routeMode button').forEach(b => b.classList.toggle('on', b.dataset.m === S.travelMode));
   const mn = $('#routeModeNow'); if (mn) mn.textContent = S.travelMode === 'auto' ? ('Auto · ' + (st.travel.moving ? 'moving' : 'stationary') + ' now' + (st.travel.mph >= 1 ? ' · ' + Math.round(st.travel.mph) + ' mph' : '')) : S.travelMode === 'mobile' ? 'Pinned: rain judged along your heading or road' : 'Pinned: rain judged at this spot';
 }
@@ -3156,6 +3178,7 @@ $('#routeQ').addEventListener('input', e => { clearTimeout(routeSearchTimer); ro
 $('#routeClear').onclick = () => { $('#routeSheet').hidden = true; setDestination(null); };
 document.querySelectorAll('#routeMode button').forEach(b => b.onclick = () => { S.travelMode = b.dataset.m; save(); st.ncAt = 0; runNowcast(); updateRouteUi(); });
 updateRouteUi();   // show the Trip button from the start, not only once motion is detected
+setInterval(() => { if (S.destination) updateRouteUi(); }, 60000);
 $('#snoozeBtn').addEventListener('click', ev => {
   ev.stopPropagation();
   const m = $('#snoozeMenu'); m.style.top = ($('#statusbar').getBoundingClientRect().bottom + 6) + 'px';
