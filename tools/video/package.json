@@ -1,1 +1,1 @@
-{ "name": "vantagewx-video", "private": true, "dependencies": { "pngjs": "7.0.0", "playwright": "1.49.1" } }
+{"name":"vantagewx-video","private":true,"dependencies":{"leaflet":"^1.9.4","playwright":"1.49.1","pngjs":"7.0.0"}}
