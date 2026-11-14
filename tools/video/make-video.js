@@ -16,7 +16,7 @@
      --night              render the OSM basemap as a dark map (inverted, desaturated) — the look of the app at night
      --fps=30 --size=1080 --tz=America/Chicago
    Needs: pngjs (tools/replay/node_modules), playwright + chromium, ffmpeg. */
-const fs = require('fs'), path = require('path'), os = require('os'), { execFileSync } = require('child_process');
+const fs = require('fs'), path = require('path'), os = require('os'), { execFileSync } = require('child_process'), { pathToFileURL } = require('url');
 module.paths.push(path.join(__dirname, '..', 'replay', 'node_modules'));
 const { PNG } = require('pngjs');
 const C = require(path.join(__dirname, '..', 'replay', 'core.js'));
@@ -172,8 +172,8 @@ function card(h,p){document.getElementById('h1').textContent=h;document.getEleme
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vwx-video-')), pageFile = path.join(work, 'page.html');
   fs.writeFileSync(pageFile, PAGE);
   const browser = await chromium.launch(); const page = await browser.newPage({ viewport: { width: OUT_PX, height: OUT_PX }, deviceScaleFactor: 1 });
-  await page.goto('file://' + pageFile);
-  const basemap = opt('basemap', ''); if (basemap && fs.existsSync(basemap)) await page.evaluate(src => setBase(src), 'file://' + path.resolve(basemap));
+  await page.goto(pathToFileURL(pageFile).href);
+  const basemap = opt('basemap', ''); if (basemap && fs.existsSync(basemap)) await page.evaluate(src => setBase(src), pathToFileURL(path.resolve(basemap)).href);
   const cropPx = Math.round(2 * RADIUS_MI * pxPerMi);
   const shots = [];   // {file, dur}
   const shot = async (name, dur) => { const f = path.join(work, name + '.jpg'); await page.screenshot({ path: f, type: 'jpeg', quality: 92 }); shots.push({ file: f, dur }); };
@@ -187,7 +187,7 @@ function card(h,p){document.getElementById('h1').textContent=h;document.getEleme
     let note = null;
     if (clearedAt && t >= clearedAt) note = 'Storm passed · ' + clock(clearedAt) + (arrivedAt ? ' — ' + fmtDurExact((clearedAt - arrivedAt) / 60000) + ' of rain' : '');
     else if (arrivedAt && t >= arrivedAt && t < arrivedAt + 26 * 60000 && calls.length) { const b = bestCall(); const off = Math.round((arrivedAt - b.eta) / 60000); note = 'Rain arrived ' + clock(arrivedAt) + ' — called ' + fmtDurExact((arrivedAt - b.t) / 60000) + ' ahead' + (Math.abs(off) <= 3 ? ', on time' : ', ' + Math.abs(off) + ' min ' + (off > 0 ? 'late' : 'early')); }
-    await page.evaluate(d => draw(d), { radar: 'file://' + path.join(dir, t + '.png'), size: SIZE, cropPx, pxPerMi, ov, st, clock: clock(t), date: dateLine(t), place: PLACE, note, night: NIGHT });
+    await page.evaluate(d => draw(d), { radar: pathToFileURL(path.join(dir, t + '.png')).href, size: SIZE, cropPx, pxPerMi, ov, st, clock: clock(t), date: dateLine(t), place: PLACE, note, night: NIGHT });
     const hold = note ? HOLD_EFF * 2.2 : (i === 0 ? HOLD_EFF * 2.5 : HOLD_EFF);
     await shot('f' + String(i).padStart(4, '0'), hold); lastSt = st;
     process.stdout.write(`\r${i + 1}/${show.length} ${clock(t)}  ${st.main.padEnd(60)}`);
