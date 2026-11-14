@@ -16,6 +16,7 @@ public sealed class RouteService
     private readonly ConcurrentDictionary<string, (DateTimeOffset At, RouteResult R)> _cache = new();
     public RouteService(IHttpClientFactory f, IConfiguration cfg, ILogger<RouteService> log) { _f = f; _cfg = cfg; _log = log; }
 
+    private string OrsBase => (_cfg["Routing:OrsBase"] ?? "https://api.heigit.org/openrouteservice").TrimEnd('/');
     public bool Enabled => !string.IsNullOrEmpty(_cfg["Routing:OrsKey"]) || string.Equals(_cfg["Routing:Provider"], "osrm", StringComparison.OrdinalIgnoreCase);
 
     public sealed record RouteResult(double[][] Coords, double DistanceMi, double DurationMin, string Provider, string Summary);
@@ -33,10 +34,10 @@ public sealed class RouteService
     private async Task<RouteResult?> OrsAsync(double fromLat, double fromLon, double toLat, double toLon, CancellationToken ct)
     {
         var keyOrs = _cfg["Routing:OrsKey"]; if (string.IsNullOrEmpty(keyOrs)) return null;
-        using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.openrouteservice.org/v2/directions/driving-car/geojson");
-        req.Headers.TryAddWithoutValidation("Authorization", keyOrs); req.Headers.TryAddWithoutValidation("Accept", "application/geo+json");
-        var body = JsonSerializer.Serialize(new { coordinates = new[] { new[] { fromLon, fromLat }, new[] { toLon, toLat } }, instructions = false, geometry_simplify = true, units = "mi" });
-        req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        // openrouteservice now lives at api.heigit.org/openrouteservice (Routing:OrsBase overrides); the documented GET form: api_key, start, end as lon,lat
+        var ci = CultureInfo.InvariantCulture;
+        var url = $"{OrsBase}/v2/directions/driving-car?api_key={Uri.EscapeDataString(keyOrs)}&start={fromLon.ToString(ci)},{fromLat.ToString(ci)}&end={toLon.ToString(ci)},{toLat.ToString(ci)}";
+        using var req = new HttpRequestMessage(HttpMethod.Get, url); req.Headers.TryAddWithoutValidation("Accept", "application/geo+json, application/json");
         using var resp = await _f.CreateClient("obs").SendAsync(req, ct);
         var json = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode) { _log.LogWarning("ors directions {Code}: {Body}", (int)resp.StatusCode, json.Length > 300 ? json[..300] : json); return null; }
@@ -44,7 +45,7 @@ public sealed class RouteService
         var feat = doc.RootElement.GetProperty("features")[0];
         var coords = feat.GetProperty("geometry").GetProperty("coordinates").EnumerateArray().Select(c => new[] { Math.Round(c[1].GetDouble(), 5), Math.Round(c[0].GetDouble(), 5) }).ToArray();   // [lat, lon]
         var sum = feat.GetProperty("properties").GetProperty("summary");
-        double distMi = sum.GetProperty("distance").GetDouble(), durMin = sum.GetProperty("duration").GetDouble() / 60;
+        double distMi = sum.GetProperty("distance").GetDouble() / 1609.344, durMin = sum.GetProperty("duration").GetDouble() / 60;   // metres and seconds
         return new RouteResult(Thin(coords, 400), distMi, durMin, "openrouteservice", $"{distMi:0} mi · {durMin:0} min by road");
     }
 
@@ -66,7 +67,7 @@ public sealed class RouteService
     {
         var keyOrs = _cfg["Routing:OrsKey"]; var list = new List<Place>();
         if (string.IsNullOrEmpty(keyOrs) || string.IsNullOrWhiteSpace(text)) return list;
-        var url = $"https://api.openrouteservice.org/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text.Trim())}&size=6&boundary.country=US,CA" +
+        var url = $"{OrsBase}/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text.Trim())}&size=6&boundary.country=US,CA" +
                   (nearLat is { } la && nearLon is { } lo ? $"&focus.point.lat={la.ToString(CultureInfo.InvariantCulture)}&focus.point.lon={lo.ToString(CultureInfo.InvariantCulture)}" : "");
         try
         {
