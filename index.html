@@ -897,7 +897,7 @@ const overviewAllowed = () => typeof isPro === 'function' && isPro();
 const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 15, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping', leadTime: 'on',
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping', leadTime: 'on', travelMode: 'auto',
   layers: { motion: true, storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
@@ -931,7 +931,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13d';
+const APP_VERSION = '2026.11.13e';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1494,7 +1494,11 @@ function setLocation(lat, lon, src) {
   st.loc = { lat, lon, src };
   S.lastLoc = { lat, lon, src }; save();
   drawRings();
-  if (moved) { if (!st.lastTouch || !st.restoreView) fitRange(); refreshWeather(true); refreshAlerts(); runNowcast(); refreshLightning(); pushUpdateLocation(); scheduleHazards(); }
+  if (moved) {
+    const tv = travelling(), sinceNc = Date.now() - (st.ncAt || 0), farFromNc = !st.ncLoc || distMi(st.ncLoc, { lat, lon }) > 3;
+    const rerun = !tv.moving || sinceNc > 120000 || farFromNc;   // driving: recompute every couple of minutes or 3 miles, not every 0.3-mile fix
+    if (!st.lastTouch || !st.restoreView) fitRange(); refreshWeather(true); refreshAlerts(); if (rerun) runNowcast(); refreshLightning(); pushUpdateLocation(); scheduleHazards();
+  }
   updatePickHint();
 }
 function updatePickHint() {
@@ -1559,6 +1563,37 @@ function openLocation() {
   setTimeout(() => { const i = $('#locQ'); if (i && !st.loc) i.focus(); }, 50);
 }
 let lastGps = null, gpsAnswered = false;
+/* Travel detector. Speed from successive fixes (and the fix's own speed when the phone gives one), smoothed over ~2 minutes; fixes with
+   poor accuracy, or a displacement smaller than their error circle, are ignored so arm-swing and GPS wander cannot trigger it.
+   Mobile after a sustained 12+ mph for a minute; back to stationary after three minutes under 5 mph. Settings → General →
+   Travel pins it to Stationary or Mobile. In mobile mode the hit/miss math runs in the moving observer's frame (see runNowcast). */
+const TRAVEL = { enterMph: 12, enterSec: 60, exitMph: 5, exitSec: 180, maxAccM: 60 };
+st.travel = { moving: false, mph: 0, headingDeg: null, emaMph: 0, aboveSince: 0, belowSince: 0, last: null };
+function travelFix(p) {
+  const t = p.timestamp || Date.now(), c = p.coords, tr = st.travel;
+  if (!(c.accuracy <= TRAVEL.maxAccM)) return;
+  let mph = null, hdg = null;
+  if (tr.last) {
+    const dt = (t - tr.last.t) / 1000; if (dt < 2) return;
+    const dMi = distMi({ lat: tr.last.lat, lon: tr.last.lon }, { lat: c.latitude, lon: c.longitude }), dM = dMi * MI;
+    if (dM > 1.5 * Math.max(c.accuracy, tr.last.acc)) { mph = dMi / dt * 3600; hdg = bearingTo(tr.last.lat, tr.last.lon, c.latitude, c.longitude); }
+    else mph = 0;   // did not move further than the error circle: stationary as far as we can tell
+    if (dt > 120) { tr.emaMph = mph; }   // a long gap: restart the average rather than blend across it
+  }
+  if (c.speed != null && c.speed >= 0 && isFinite(c.speed)) { const sm = c.speed * 2.23694; mph = mph == null ? sm : (mph + sm) / 2; if (c.heading != null && isFinite(c.heading) && sm > 3) hdg = c.heading; }
+  tr.last = { t, lat: c.latitude, lon: c.longitude, acc: c.accuracy };
+  if (mph == null) return;
+  tr.emaMph = tr.emaMph ? tr.emaMph * 0.7 + mph * 0.3 : mph; tr.mph = tr.emaMph; if (hdg != null && mph > 3) tr.headingDeg = hdg;
+  const now = t;
+  if (tr.emaMph >= TRAVEL.enterMph) { tr.belowSince = 0; if (!tr.aboveSince) tr.aboveSince = now; } else tr.aboveSince = 0;
+  if (tr.emaMph < TRAVEL.exitMph) { if (!tr.belowSince) tr.belowSince = now; } else tr.belowSince = 0;
+  const was = tr.moving;
+  if (!tr.moving && tr.aboveSince && now - tr.aboveSince >= TRAVEL.enterSec * 1000) tr.moving = true;
+  if (tr.moving && tr.belowSince && now - tr.belowSince >= TRAVEL.exitSec * 1000) tr.moving = false;
+  if (was !== tr.moving) { st.ncAt = 0; runNowcast(); }
+}
+function travelling() { return S.travelMode === 'mobile' ? { moving: true, mph: Math.max(st.travel.mph, 1), headingDeg: st.travel.headingDeg } : S.travelMode === 'stationary' ? { moving: false } : st.travel; }
+function bearingTo(lat1, lon1, lat2, lon2) { const f1 = lat1 * Math.PI / 180, f2 = lat2 * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(dl) * Math.cos(f2), x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
 // Permissions are requested in order on first load: location first, then the microphone once the browser has answered
 // about location (granted or refused), so the two prompts never fight for the screen.
 function afterGpsAnswer() { if (gpsAnswered) return; gpsAnswered = true; setTimeout(requestMicrophone, 800); }
@@ -1567,6 +1602,7 @@ function startGps() {
   navigator.geolocation.watchPosition(p => {
     st.gpsErr = null; st.gpsAcc = p.coords.accuracy;
     lastGps = { lat: p.coords.latitude, lon: p.coords.longitude };
+    try { travelFix(p); } catch (e) { }
     if (S.locMode === 'gps') { setLocation(lastGps.lat, lastGps.lon, 'gps'); if (S.activity === 'sentinel') applySentinel(); }
     if (typeof reportPosition === 'function') reportPosition(false);
     afterGpsAnswer();
@@ -1868,8 +1904,16 @@ async function runNowcast() {
     const cleaned = fine.map(g => despeckle(g, threshDbz()));
     const labelled = cleaned.map(g => labelBlobs(g, threshDbz()));
     const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, threshDbz());
-    const res = predictRain(cleaned[2], fineKm, c, c, vel,
+    // Moving observer: hit/miss, ETA and the rings are computed in the phone's own frame — the rain's velocity minus yours, you at the
+    // origin — which is exact as long as you hold your heading and speed. The map layers keep the ground-relative field.
+    const tv = travelling(); let hitVel = vel;
+    if (tv.moving && tv.headingDeg != null && tv.mph >= 3) {
+      const v = tv.mph * 1.609344 / 60, ox = v * Math.sin(tv.headingDeg * Math.PI / 180), oy = -v * Math.cos(tv.headingDeg * Math.PI / 180);
+      hitVel = (x, y) => { const q = vel(x, y); return { vx: q.vx - ox, vy: q.vy - oy }; };
+    }
+    const res = predictRain(cleaned[2], fineKm, c, c, hitVel,
       { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges() }, labelled[2].labels);
+    res.movingFrame = hitVel !== vel ? { mph: Math.round(tv.mph), headingDeg: Math.round(tv.headingDeg) } : null;
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, threshDbz(), radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
@@ -1901,7 +1945,7 @@ async function runNowcast() {
     }
     if (res.nearestBlob) res.nearestTrend = trends.get(res.nearestBlob) || null;
     st.nc = { res, motion, trends: [...trends.values()], geo: { center, R, z, cellPx: NC.fineCellPx, fineKm }, grid: cleaned[2], labels: labelled[2].labels, blobs: labelled[2].blobs, vel };
-    st.ncAt = Date.now(); st.ncErr = null;
+    st.ncAt = Date.now(); st.ncLoc = { lat: st.loc.lat, lon: st.loc.lon }; st.ncErr = null;
     drawHail(); drawMotion();
   } catch (e) { st.ncErr = e.message; console.warn('nowcast', e); }
   finally { st.ncBusy = false; }
@@ -2661,8 +2705,9 @@ function computeStatus() {
   if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return overlayLightning(out); }
   const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
   out.rings = Object.assign({}, res.rings);
-  const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph' + (motion.held ? ' (track held)' : '')
-    : motion.ok ? 'Rain nearly stationary' : '';
+  const mf = res.movingFrame;
+  const stormsMoving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph' + (motion.held ? ' (track held)' : '') : motion.ok ? 'Rain nearly stationary' : '';
+  const moving = stormsMoving + (mf ? (stormsMoving ? ' · ' : '') + 'you ' + compass(mf.headingDeg) + ' at ' + mf.mph + ' mph (arrival allows for your travel)' : '');
   // Light echoes with a dry forecast or dry air underneath mostly evaporate before they reach the ground (virga)
   const ob = st.wx.obs, dewSpread = ob && ob.tempF != null && ob.dewF != null ? ob.tempF - ob.dewF : null, dryAir = dewSpread != null && dewSpread >= 15;
   const lowConf = hit && st.wx.pop2h != null && st.wx.pop2h < 10 && (dryAir ? hit.maxDbz < 35 : hit.etaMin > 15 && hit.maxDbz < 30);
@@ -3981,6 +4026,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
+    ['travelMode', 'Travel — when you are moving (12+ mph for a minute), rain is judged against where you are heading, not just where you are; Auto detects it from GPS', [['auto', 'Auto'], ['stationary', 'Stationary'], ['mobile', 'Mobile']]],
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: extra space under the toolbar (Auto measures what Android covers; use a fixed value only if Auto leaves the toolbar under the navigation bar)', [['auto', 'Auto'], ['0', 'None'], ['24', '+24 px'], ['48', '+48 px']]],
     isPhoneDevice()
@@ -4382,6 +4428,7 @@ function renderDiag() {
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ((st.tileStats || {}).lastAlt ? ' · last retry went to: ' + (st.tileStats || {}).lastAlt : '') + ((st.tileStats || {}).altErr ? ' · retry error: ' + (st.tileStats || {}).altErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
+    'Travel: ' + (S.travelMode !== 'auto' ? 'pinned ' + S.travelMode : (st.travel.moving ? 'mobile' : 'stationary')) + ' · ' + Math.round(st.travel.mph || 0) + ' mph' + (st.travel.headingDeg != null ? ' ' + compass(st.travel.headingDeg) : '') + (st.nc && st.nc.res && st.nc.res.movingFrame ? ' · hit/miss computed in the moving frame' : ''),
     'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' + (m.held ? ' · ' + m.heldReason : '') + (st.motionHist && st.motionHist.length ? ' · track memory ' + st.motionHist.length + ' scans over ' + Math.round((Date.now() - st.motionHist[0].t) / 60000) + ' min' : '') : 'unclear — ' + (m.reason || '')) : '—'),
     'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + ' · precip type ' + precipType() + (st.wx.visMi != null ? ' · visibility ' + st.wx.visMi.toFixed(1) + ' mi' : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
     'NWS alerts: ' + (st.alertsErr ? 'ERROR — ' + st.alertsErr : ago(st.alertsAt) + ', ' + st.alerts.length + ' active'),
@@ -4489,6 +4536,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
   if (k === 'leadTime' || k === 'activity') { renderStatus(); pushUpdateBriefPrefs(); }
+  if (k === 'travelMode') { st.ncAt = 0; runNowcast(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice' || e.target.id === 'welDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
