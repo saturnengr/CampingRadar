@@ -62,28 +62,66 @@ public sealed class RouteService
         return new RouteResult(Thin(coords, 400), distMi, durMin, "osrm", $"{distMi:0} mi · {durMin:0} min by road");
     }
 
-    /// <summary>Place search near the traveller (ORS geocoding, Pelias). Returns a handful of candidates to pick from.</summary>
+    /// <summary>Place search near the traveller: ORS geocoding (Pelias) first, Nominatim (OSM) when that errors or finds nothing.
+    /// Returns a handful of candidates to pick from.</summary>
     public async Task<List<Place>> SearchAsync(string text, double? nearLat, double? nearLon, CancellationToken ct)
     {
-        var keyOrs = _cfg["Routing:OrsKey"]; var list = new List<Place>();
-        if (string.IsNullOrEmpty(keyOrs) || string.IsNullOrWhiteSpace(text)) return list;
-        var url = $"{OrsBase}/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text.Trim())}&size=10&boundary.country=US,CA&layers=locality,localadmin,borough,neighbourhood,venue,address,street" +
-                  (nearLat is { } la && nearLon is { } lo ? $"&focus.point.lat={la.ToString(CultureInfo.InvariantCulture)}&focus.point.lon={lo.ToString(CultureInfo.InvariantCulture)}" : "");
+        var list = new List<Place>();
+        if (string.IsNullOrWhiteSpace(text)) return list;
+        text = text.Trim();
+        var keyOrs = _cfg["Routing:OrsKey"];
+        if (!string.IsNullOrEmpty(keyOrs))
+        {
+            var url = $"{OrsBase}/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text)}&size=10&boundary.country=US,CA" +
+                      (nearLat is { } la && nearLon is { } lo ? $"&focus.point.lat={la.ToString(CultureInfo.InvariantCulture)}&focus.point.lon={lo.ToString(CultureInfo.InvariantCulture)}" : "");
+            try
+            {
+                using var resp = await _f.CreateClient("obs").GetAsync(url, ct);
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                if (!resp.IsSuccessStatusCode) _log.LogWarning("ors geocode {Code}: {Body}", (int)resp.StatusCode, json.Length > 300 ? json[..300] : json);
+                else
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    foreach (var f in doc.RootElement.GetProperty("features").EnumerateArray())
+                    {
+                        var p = f.GetProperty("properties"); var g = f.GetProperty("geometry").GetProperty("coordinates");
+                        list.Add(new Place(p.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "", g[1].GetDouble(), g[0].GetDouble(), p.TryGetProperty("label", out var l) ? l.GetString() ?? "" : ""));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "ors geocode failed"); }
+        }
+        // Pelias is fuzzy: keep the ones that actually contain what was typed (first word at least), fall back to the raw list
+        var first = text.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+        var tight = list.Where(p => (p.Name + " " + p.Label).Contains(first, StringComparison.OrdinalIgnoreCase)).ToList();
+        var picked = (tight.Count >= 1 ? tight : list).Take(6).ToList();
+        if (picked.Count > 0) return picked;
+        return await NominatimAsync(text, nearLat, nearLon, ct);
+    }
+
+    private async Task<List<Place>> NominatimAsync(string text, double? nearLat, double? nearLon, CancellationToken ct)
+    {
+        var list = new List<Place>();
         try
         {
-            var json = await _f.CreateClient("obs").GetStringAsync(url, ct);
+            var ci = CultureInfo.InvariantCulture;
+            var url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&countrycodes=us,ca&q=" + Uri.EscapeDataString(text) +
+                      (nearLat is { } la && nearLon is { } lo ? $"&viewbox={(lo - 3).ToString(ci)},{(la + 3).ToString(ci)},{(lo + 3).ToString(ci)},{(la - 3).ToString(ci)}" : "");   // soft bias, not bounded
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("User-Agent", "VantageWX/1.0 (+https://vantagewx.com)"); req.Headers.TryAddWithoutValidation("Accept-Language", "en");
+            using var resp = await _f.CreateClient("obs").SendAsync(req, ct);
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode) { _log.LogWarning("nominatim {Code}: {Body}", (int)resp.StatusCode, json.Length > 200 ? json[..200] : json); return list; }
             using var doc = JsonDocument.Parse(json);
-            foreach (var f in doc.RootElement.GetProperty("features").EnumerateArray())
+            foreach (var r in doc.RootElement.EnumerateArray())
             {
-                var p = f.GetProperty("properties"); var g = f.GetProperty("geometry").GetProperty("coordinates");
-                list.Add(new Place(p.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "", g[1].GetDouble(), g[0].GetDouble(), p.TryGetProperty("label", out var l) ? l.GetString() ?? "" : ""));
+                var label = r.GetProperty("display_name").GetString() ?? "";
+                var name = r.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && n.GetString()!.Length > 0 ? n.GetString()! : label.Split(',')[0];
+                list.Add(new Place(name, double.Parse(r.GetProperty("lat").GetString()!, ci), double.Parse(r.GetProperty("lon").GetString()!, ci), label));
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "ors geocode"); }
-        // Pelias is fuzzy: keep the ones that actually contain what was typed (first word at least) unless that leaves almost nothing
-        var first = text.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        var tight = list.Where(p => (p.Name + " " + p.Label).Contains(first, StringComparison.OrdinalIgnoreCase)).ToList();
-        return (tight.Count >= 1 ? tight : list).Take(6).ToList();
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "nominatim failed"); }
+        return list;
     }
 
     /// <summary>Keep at most n points, dropping the least significant (the app only needs the shape to a few hundred metres).</summary>
