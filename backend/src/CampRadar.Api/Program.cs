@@ -65,6 +65,7 @@ builder.Services.AddSingleton<StatusService>();
 builder.Services.AddSingleton<BriefingWriter>();
 builder.Services.AddSingleton<AlertWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertWorker>());
+builder.Services.AddSingleton<CampRadar.Api.Routing.RouteService>();
 builder.Services.AddSingleton<CampRadar.Api.Cams.CamStore>();
 builder.Services.AddSingleton<CampRadar.Api.Cams.CamDirectory>();
 builder.Services.AddSingleton<CampRadar.Api.Cams.CamClassifier>();
@@ -494,6 +495,16 @@ app.MapPost("/admin/brief/test", async (HttpRequest r, BriefingWriter w, Cancell
 });
 // Which outside services can this host actually reach? (shared hosts block or black-hole some destinations)
 // ---------- radar recordings for offline verification ----------
+// ---- travel mode: a driving route and place search, through the routing provider (key stays on the server) ----
+app.MapGet("/route", async (CampRadar.Api.Routing.RouteService rs, double fromLat, double fromLon, double toLat, double toLon, CancellationToken ct) =>
+{
+    if (!rs.Enabled) return Results.Json(new { error = "routing is not configured" }, statusCode: 503);
+    if (Math.Abs(fromLat) > 90 || Math.Abs(toLat) > 90 || Math.Abs(fromLon) > 180 || Math.Abs(toLon) > 180) return Results.BadRequest();
+    var r = await rs.RouteAsync(fromLat, fromLon, toLat, toLon, ct);
+    return r is null ? Results.Json(new { error = "no route" }, statusCode: 404) : Results.Ok(new { coords = r.Coords, distanceMi = Math.Round(r.DistanceMi, 1), durationMin = Math.Round(r.DurationMin), r.Provider, r.Summary });
+});
+app.MapGet("/route/search", async (CampRadar.Api.Routing.RouteService rs, string q, double? lat, double? lon, CancellationToken ct) =>
+    rs.Enabled ? Results.Ok(await rs.SearchAsync(q, lat, lon, ct)) : Results.Json(new { error = "routing is not configured" }, statusCode: 503));
 app.MapGet("/admin/record", (HttpRequest r, Recorder rec) => IsAdmin(r) ? Results.Ok(rec.List()) : Results.Unauthorized());
 // ---- webcams as ground truth: our directory, what the worker is looking at, and one-off checks ----
 app.MapGet("/admin/cams", (HttpRequest r, CampRadar.Api.Cams.CamStore cs, CampRadar.Api.Cams.CamDirectory dir, CampRadar.Api.Cams.CamWorker w, double? lat, double? lon, double mi = 15) =>

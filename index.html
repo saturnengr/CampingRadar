@@ -69,6 +69,17 @@ body.noclock #clock{display:none}
 .ring::before{content:"\25CB";margin-right:4px;color:var(--rc,#e8eef3);opacity:.6;text-shadow:0 0 2px rgba(0,0,0,.6);transition:color .5s}
 .ring[data-rs=dotted]::before{content:"\25CC";opacity:1}.ring[data-rs=solid]::before{content:"\25CF";opacity:1}
 #snoozeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
+#routeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
+#routeSheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+#routeSheet[hidden]{display:none}
+.rs-box{background:#141a20;color:#e8eef3;width:min(560px,100%);border-radius:14px 14px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom,0px));box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+@media (min-width:700px){#routeSheet{align-items:center}.rs-box{border-radius:14px}}
+.rs-head{display:flex;justify-content:space-between;align-items:center;font-size:16px}.rs-x{background:transparent;border:0;color:#9fb3c2;font-size:18px;cursor:pointer}
+.rs-sub{color:#9fb3c2;font-size:13px;margin:6px 0 10px}
+#routeQ{width:100%;font:inherit;font-size:16px;padding:10px 12px;border-radius:8px;border:1px solid #2a3642;background:#0f1317;color:#e8eef3}
+#routeResults{margin-top:6px}#routeResults button{display:block;width:100%;text-align:left;font:inherit;background:#1b232b;color:#e8eef3;border:1px solid #2a3642;border-radius:8px;padding:9px 12px;margin-top:6px;cursor:pointer}
+#routeResults button small{display:block;color:#9fb3c2;font-size:12px}
+.rs-actions{margin:10px 0 0}.rs-actions button{font:inherit;background:#223040;color:#e8eef3;border:1px solid #34506a;border-radius:8px;padding:8px 12px;cursor:pointer}
 #snoozeMenu{position:fixed;right:12px;z-index:1500;background:var(--chrome2);border:1px solid var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 #snoozeMenu .hdr{font-size:13px;color:var(--muted);padding:0 4px}
 #snoozeMenu .opts{display:flex;gap:8px}
@@ -358,7 +369,18 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <span class="ring" data-r="10">10 mi</span><span class="ring" data-r="30">30 mi</span><span class="ring" data-r="50">50 mi</span>
   </div>
   <button id="micBtn" title="Tap to talk" hidden><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg></button>
+  <button id="routeBtn" title="Set a destination so rain is judged along your road" hidden>Where to?</button>
   <button id="snoozeBtn">Snooze</button>
+</div>
+<div id="routeSheet" hidden>
+  <div class="rs-box">
+    <div class="rs-head"><b>Where are you heading?</b><button id="routeClose" class="rs-x" aria-label="Close">✕</button></div>
+    <p class="rs-sub">With a destination, rain is judged along your road — where you will be, not a straight line. Type a town, an address or a park.</p>
+    <input id="routeQ" type="search" placeholder="e.g. Lake Texoma, or 400 Main St Denison" autocomplete="off">
+    <div id="routeResults"></div>
+    <div id="routeNow" class="rs-sub"></div>
+    <p class="rs-actions"><button id="routeClear" hidden>Clear destination</button></p>
+  </div>
 </div>
 <div id="clock" hidden><div id="clockTime">--:--</div><div id="clockDate"></div></div>
 </div>
@@ -718,6 +740,10 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
+  // opts.path: where the observer will be — [{t (min), e, n (miles east/north of the centre)}], sampled a few minutes apart out to
+  // the horizon, for a vehicle following a road. The hit test then asks, for each rain cell, whether it passes within the hit
+  // radius of the observer's position at the matching time (a meet-point test) instead of whether it crosses a fixed circle.
+  const path = Array.isArray(opts.path) && opts.path.length > 1 ? opts.path : null;
   // Per-ring entry times (minutes) for the range rings: ringIn[r] = {t, maxDbz} earliest a cell that will HIT you enters the circle of
   // radius r (t = 0 when already inside); ringMiss[r] = earliest a cell that will NOT hit you enters it. Drives the ring styling.
   const RR = opts.ringRadii || [10, 30, 50], ringIn = {}, ringMiss = {};
@@ -739,7 +765,10 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
     const v = vel(x, y), ve = v.vx * 0.621371, vn = -v.vy * 0.621371;   // mi/min
     const a = ve * ve + vn * vn;
     let tIn = null, tOut = null;
-    if (dist * dist <= R2) {
+    if (path) {
+      for (const pt of path) { const de = e + ve * pt.t - pt.e, dn = n + vn * pt.t - pt.n; if (de * de + dn * dn <= R2) { if (tIn === null) tIn = pt.t; tOut = pt.t; } else if (tIn !== null) break; }
+      if (tIn !== null && tOut === tIn) tOut = tIn + (path[1].t - path[0].t);
+    } else if (dist * dist <= R2) {
       tIn = 0;
       if (a < 1e-9) tOut = horizon;
       else { const b = 2 * (e * ve + n * vn), c = dist * dist - R2; tOut = Math.min(horizon, (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a)); }
@@ -897,7 +926,7 @@ const overviewAllowed = () => typeof isPro === 'function' && isPro();
 const trackRadiusMi = () => !overviewAllowed() ? NC.freeRadiusMi : S.rangeSet === '50-100-150' ? NC.overviewRadiusMi : NC.radiusMi;
 const KEY = 'campRadar.v1';
 const DEFAULTS = { layout: 'top', bottomGap: 'auto', lowData: 'off', rangeSet: '10-30-50', range: 30, hitMi: 3, threshDbz: 15, volume: 0.8, opacity: 0.7, animate: true, night: 'auto',
-  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping', leadTime: 'on', travelMode: 'auto',
+  locMode: 'gps', manual: null, lastLoc: null, snoozeUntil: 0, ack: {}, recent: [], source: 'mrms', backend: 'https://radar.tieroneehs.com', pushId: null, sound: true, activity: 'camping', leadTime: 'on', travelMode: 'auto', destination: null,
   layers: { motion: true, storms: true, hail: true, flood: true, gauges: true, fire: true, firewx: true, smoke: false, wind: false, clouds: false, rx: false, tropical: false, trails: false, topo: false, people: true, places: true },
   brief: { lang: 'en', morning: { on: false, at: '06:30', days: 'all' }, speakAlerts: true, onWake: false, times: '', beforeRain: true, voice: '', rate: 1 },
   voice: { enabled: false, engine: 'browser', key: '', keyword: 'Bumblebee', confirm: true, sensitivity: 0.6 } };
@@ -931,7 +960,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13f';
+const APP_VERSION = '2026.11.13g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1590,9 +1619,78 @@ function travelFix(p) {
   const was = tr.moving;
   if (!tr.moving && tr.aboveSince && now - tr.aboveSince >= TRAVEL.enterSec * 1000) tr.moving = true;
   if (tr.moving && tr.belowSince && now - tr.belowSince >= TRAVEL.exitSec * 1000) tr.moving = false;
-  if (was !== tr.moving) { st.ncAt = 0; runNowcast(); }
+  if (was !== tr.moving) { st.ncAt = 0; runNowcast(); updateRouteUi(); }
 }
 function travelling() { return S.travelMode === 'mobile' ? { moving: true, mph: Math.max(st.travel.mph, 1), headingDeg: st.travel.headingDeg } : S.travelMode === 'stationary' ? { moving: false } : st.travel; }
+/* Destination + route. One route per trip from the backend's routing proxy (/route); st.route = {coords [[lat,lon]…], cum [miles
+   along], distanceMi, durationMin, summary}. The projection samples your position along the road every few minutes out to the
+   horizon at your current speed (predictRain opts.path). Drifting more than ~0.4 mi from the route re-fetches it from where you are
+   (that is also how a turn-off is noticed); the straight-line path stands in until a route exists. */
+st.route = null; st.routeBusy = false;
+async function setDestination(dest) {   // {name, lat, lon} or null
+  S.destination = dest || null; save(); st.route = null; updateRouteUi();
+  if (dest && st.loc) await fetchRoute(); else { st.ncAt = 0; runNowcast(); }
+}
+async function fetchRoute() {
+  const d = S.destination; if (!d || !st.loc || st.routeBusy || !S.backend) return;
+  st.routeBusy = true;
+  try {
+    const r = await fetch(S.backend.replace(/\/$/, '') + '/route?fromLat=' + st.loc.lat.toFixed(5) + '&fromLon=' + st.loc.lon.toFixed(5) + '&toLat=' + d.lat + '&toLon=' + d.lon);
+    if (!r.ok) { st.routeErr = r.status === 503 ? 'routing is not set up on the server' : 'no route found'; st.route = null; }
+    else {
+      const j = await r.json(); const cum = [0];
+      for (let i = 1; i < j.coords.length; i++) cum.push(cum[i - 1] + distMi({ lat: j.coords[i - 1][0], lon: j.coords[i - 1][1] }, { lat: j.coords[i][0], lon: j.coords[i][1] }));
+      st.route = { coords: j.coords, cum, distanceMi: j.distanceMi, durationMin: j.durationMin, summary: j.summary, at: Date.now() }; st.routeErr = null;
+    }
+  } catch (e) { st.routeErr = 'could not reach the server'; }
+  st.routeBusy = false; updateRouteUi(); st.ncAt = 0; runNowcast();
+}
+function routeProgress() {   // index of the nearest route vertex to the current position, and the cross-track distance in miles
+  const rt = st.route; if (!rt || !st.loc) return null; let bi = 0, bd = Infinity;
+  for (let i = 0; i < rt.coords.length; i++) { const d = distMi(st.loc, { lat: rt.coords[i][0], lon: rt.coords[i][1] }); if (d < bd) { bd = d; bi = i; } }
+  return { i: bi, offMi: bd };
+}
+/* Observer path for predictRain: [{t, e, n}] in minutes and miles east/north of the current location. Along the route when there is
+   one and we are on it; a straight line along the travel heading otherwise. Every 3 minutes out to the horizon. */
+function travelPath(mph, headingDeg, horizonMin) {
+  const out = [{ t: 0, e: 0, n: 0 }], step = 3; if (!(mph >= 3)) return null;
+  const rt = st.route, pr = routeProgress();
+  const latR = st.loc.lat * Math.PI / 180, mPerDegLat = 69.0, mPerDegLon = 69.0 * Math.cos(latR);
+  if (rt && pr && pr.offMi <= 0.4) {
+    const start = rt.cum[pr.i];
+    let i = pr.i;
+    for (let t = step; t <= horizonMin; t += step) {
+      const want = start + mph * t / 60; while (i < rt.coords.length - 1 && rt.cum[i + 1] < want) i++;
+      let lat, lon;
+      if (i >= rt.coords.length - 1) { lat = rt.coords[rt.coords.length - 1][0]; lon = rt.coords[rt.coords.length - 1][1]; }
+      else { const f = (want - rt.cum[i]) / Math.max(1e-6, rt.cum[i + 1] - rt.cum[i]); lat = rt.coords[i][0] + (rt.coords[i + 1][0] - rt.coords[i][0]) * f; lon = rt.coords[i][1] + (rt.coords[i + 1][1] - rt.coords[i][1]) * f; }
+      out.push({ t, e: (lon - st.loc.lon) * mPerDegLon, n: (lat - st.loc.lat) * mPerDegLat, lat, lon });
+      if (i >= rt.coords.length - 1) break;   // arrived: the rest of the horizon is spent at the destination
+    }
+    out.onRoute = true; return out;
+  }
+  if (headingDeg == null) return null;
+  const h = headingDeg * Math.PI / 180;
+  for (let t = step; t <= horizonMin; t += step) { const mi = mph * t / 60; out.push({ t, e: mi * Math.sin(h), n: mi * Math.cos(h), lat: st.loc.lat + mi * Math.cos(h) / mPerDegLat, lon: st.loc.lon + mi * Math.sin(h) / mPerDegLon }); }
+  return out;
+}
+function updateRouteUi() {
+  const tv = travelling(), btn = $('#routeBtn'); if (!btn) return;
+  btn.hidden = !tv.moving; btn.textContent = S.destination ? '→ ' + (S.destination.name || 'destination').slice(0, 18) : 'Where to?';
+  const now = $('#routeNow'); if (now) now.textContent = S.destination ? ('Heading to ' + S.destination.name + (st.route ? ' · ' + st.route.summary : st.routeErr ? ' · ' + st.routeErr : st.routeBusy ? ' · finding the road…' : '')) : '';
+  const clr = $('#routeClear'); if (clr) clr.hidden = !S.destination;
+}
+function openRouteSheet() { $('#routeSheet').hidden = false; updateRouteUi(); $('#routeResults').innerHTML = ''; setTimeout(() => $('#routeQ').focus(), 50); }
+let routeSearchTimer = null;
+async function routeSearch(q) {
+  if (!q || q.length < 3 || !S.backend) { $('#routeResults').innerHTML = ''; return; }
+  try {
+    const r = await fetch(S.backend.replace(/\/$/, '') + '/route/search?q=' + encodeURIComponent(q) + (st.loc ? '&lat=' + st.loc.lat.toFixed(3) + '&lon=' + st.loc.lon.toFixed(3) : ''));
+    const list = r.ok ? await r.json() : [];
+    $('#routeResults').innerHTML = list.length ? list.map((p, i) => '<button data-i="' + i + '">' + esc(p.name) + '<small>' + esc(p.label) + (st.loc ? ' · ' + Math.round(distMi(st.loc, p)) + ' mi' : '') + '</small></button>').join('') : '<div class="rs-sub">' + (r.status === 503 ? 'Routing is not set up on the server yet.' : 'Nothing found — try the town name.') + '</div>';
+    $('#routeResults').querySelectorAll('button').forEach(b => b.onclick = () => { const p = list[+b.dataset.i]; $('#routeSheet').hidden = true; setDestination({ name: p.name, lat: p.lat, lon: p.lon }); });
+  } catch (e) { $('#routeResults').innerHTML = '<div class="rs-sub">Could not reach the server.</div>'; }
+}
 function bearingTo(lat1, lon1, lat2, lon2) { const f1 = lat1 * Math.PI / 180, f2 = lat2 * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(dl) * Math.cos(f2), x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
 // Permissions are requested in order on first load: location first, then the microphone once the browser has answered
 // about location (granted or refused), so the two prompts never fight for the screen.
@@ -1906,14 +2004,13 @@ async function runNowcast() {
     const trends = blobTrends([labelled[0], labelled[1], labelled[2]], [dt1, dt2], vel, fineKm, threshDbz());
     // Moving observer: hit/miss, ETA and the rings are computed in the phone's own frame — the rain's velocity minus yours, you at the
     // origin — which is exact as long as you hold your heading and speed. The map layers keep the ground-relative field.
-    const tv = travelling(); let hitVel = vel;
-    if (tv.moving && tv.headingDeg != null && tv.mph >= 3) {
-      const v = tv.mph * 1.609344 / 60, ox = v * Math.sin(tv.headingDeg * Math.PI / 180), oy = -v * Math.cos(tv.headingDeg * Math.PI / 180);
-      hitVel = (x, y) => { const q = vel(x, y); return { vx: q.vx - ox, vy: q.vy - oy }; };
-    }
-    const res = predictRain(cleaned[2], fineKm, c, c, hitVel,
-      { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges() }, labelled[2].labels);
-    res.movingFrame = hitVel !== vel ? { mph: Math.round(tv.mph), headingDeg: Math.round(tv.headingDeg) } : null;
+    const tv = travelling();
+    const path = tv.moving ? travelPath(tv.mph, tv.headingDeg, NC.horizonMin) : null;   // along the road with a destination, straight line without
+    if (tv.moving && S.destination && !st.route && !st.routeBusy && !st.routeErr) fetchRoute();
+    if (st.route) { const pr = routeProgress(); if (pr && pr.offMi > 0.4 && Date.now() - st.route.at > 60000) { st.route = null; fetchRoute(); } }   // drifted off the road (or turned off): re-route from here
+    const res = predictRain(cleaned[2], fineKm, c, c, vel,
+      { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges(), path }, labelled[2].labels);
+    res.movingFrame = path ? { mph: Math.round(tv.mph), headingDeg: tv.headingDeg == null ? null : Math.round(tv.headingDeg), onRoute: !!path.onRoute, path } : null;
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, threshDbz(), radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
@@ -2279,13 +2376,15 @@ function addAwayLabel(bearingDeg, distMi, html) {
 }
 function drawTravel() {   // where YOU will be at +15/+30/+60 if you hold heading and speed, in the storm outlines' colours
   const tv = travelling(); if (!tv.moving || tv.headingDeg == null || !(tv.mph >= 3) || !st.loc) return;
-  const dest = (mi) => { const d = mi / 3958.8, b = tv.headingDeg * Math.PI / 180, f1 = st.loc.lat * Math.PI / 180, l1 = st.loc.lon * Math.PI / 180; const f2 = Math.asin(Math.sin(f1) * Math.cos(d) + Math.cos(f1) * Math.sin(d) * Math.cos(b)); const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(f1), Math.cos(d) - Math.sin(f1) * Math.sin(f2)); return [f2 * 180 / Math.PI, l2 * 180 / Math.PI]; };
+  const path = (st.nc && st.nc.res && st.nc.res.movingFrame && st.nc.res.movingFrame.path) || travelPath(tv.mph, tv.headingDeg, 60); if (!path) return;
   const night = document.body.classList.contains('night'), halo = night ? '#000' : '#fff';
-  const pts = [[st.loc.lat, st.loc.lon], ...[15, 30, 60].map(m => dest(tv.mph * m / 60))];
-  L.polyline(pts, { pane: 'hazards', color: halo, weight: 5, opacity: 0.5, interactive: false }).addTo(motionLayer);
-  L.polyline(pts, { pane: 'hazards', color: '#e8eef3', weight: 2, dashArray: '4 8', opacity: 0.9, interactive: false }).addTo(motionLayer);
-  [15, 30, 60].forEach((m, i) => {
-    const ll = pts[i + 1];
+  const line = path.filter(p => p.lat != null && p.t <= 60).map(p => [p.lat, p.lon]); line.unshift([st.loc.lat, st.loc.lon]);
+  if (st.route) L.polyline(st.route.coords, { pane: 'hazards', color: '#e8eef3', weight: 2, opacity: 0.35, interactive: false }).addTo(motionLayer);   // the whole road, faint
+  L.polyline(line, { pane: 'hazards', color: halo, weight: 5, opacity: 0.5, interactive: false }).addTo(motionLayer);
+  L.polyline(line, { pane: 'hazards', color: '#e8eef3', weight: 2, dashArray: path.onRoute ? null : '4 8', opacity: 0.9, interactive: false }).addTo(motionLayer);
+  const at = (m) => { let best = path[0]; for (const p of path) if (p.lat != null && Math.abs(p.t - m) < Math.abs(best.t - m)) best = p; return best.lat != null ? [best.lat, best.lon] : null; };
+  [15, 30, 60].forEach((m) => {
+    const ll = at(m); if (!ll) return;
     L.circleMarker(ll, { pane: 'hazards', radius: 6, color: halo, weight: 4, opacity: 0.6, fillColor: GHOST_COLORS[m], fillOpacity: 1, interactive: false }).addTo(motionLayer);
     L.circleMarker(ll, { pane: 'hazards', radius: 6, color: GHOST_COLORS[m], weight: 2, fillColor: GHOST_COLORS[m], fillOpacity: 1, interactive: false }).addTo(motionLayer);
     L.marker(ll, { pane: 'hazards', interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl" style="color:' + GHOST_COLORS[m] + '">you +' + m + '</span>', iconSize: [0, 0], iconAnchor: [-9, 6] }) }).addTo(motionLayer);
@@ -2722,7 +2821,7 @@ function computeStatus() {
   out.rings = Object.assign({}, res.rings);
   const mf = res.movingFrame;
   const stormsMoving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph' + (motion.held ? ' (track held)' : '') : motion.ok ? 'Rain nearly stationary' : '';
-  const moving = stormsMoving + (mf ? (stormsMoving ? ' · ' : '') + 'you ' + compass(mf.headingDeg) + ' at ' + mf.mph + ' mph (arrival allows for your travel)' : '');
+  const moving = stormsMoving + (mf ? (stormsMoving ? ' · ' : '') + 'you ' + (mf.headingDeg != null ? compass(mf.headingDeg) + ' ' : '') + 'at ' + mf.mph + ' mph' + (mf.onRoute ? ' along your road to ' + (S.destination && S.destination.name || 'your destination') : ' (straight-line track)') : '');
   // Light echoes with a dry forecast or dry air underneath mostly evaporate before they reach the ground (virga)
   const ob = st.wx.obs, dewSpread = ob && ob.tempF != null && ob.dewF != null ? ob.tempF - ob.dewF : null, dryAir = dewSpread != null && dewSpread >= 15;
   const lowConf = hit && st.wx.pop2h != null && st.wx.pop2h < 10 && (dryAir ? hit.maxDbz < 35 : hit.etaMin > 15 && hit.maxDbz < 30);
@@ -2988,6 +3087,9 @@ function renderSnooze() {
   else { btn.textContent = 'Snooze'; if (S.snoozeUntil) { S.snoozeUntil = 0; save(); } }
   $('#snoozeCancel').hidden = left <= 0;
 }
+$('#routeBtn').onclick = openRouteSheet; $('#routeClose').onclick = () => { $('#routeSheet').hidden = true; }; $('#routeSheet').addEventListener('click', e => { if (e.target.id === 'routeSheet') $('#routeSheet').hidden = true; });
+$('#routeQ').addEventListener('input', e => { clearTimeout(routeSearchTimer); routeSearchTimer = setTimeout(() => routeSearch(e.target.value.trim()), 350); });
+$('#routeClear').onclick = () => { $('#routeSheet').hidden = true; setDestination(null); };
 $('#snoozeBtn').addEventListener('click', ev => {
   ev.stopPropagation();
   const m = $('#snoozeMenu'); m.style.top = ($('#statusbar').getBoundingClientRect().bottom + 6) + 'px';
@@ -4551,7 +4653,7 @@ $('#sheet').addEventListener('click', e => {
   if (k === 'sound') updateSoundChip();
   if (k === 'hitMi' || k === 'threshDbz') { runNowcast(); pushUpdateBriefPrefs(); }
   if (k === 'leadTime' || k === 'activity') { renderStatus(); pushUpdateBriefPrefs(); }
-  if (k === 'travelMode') { st.ncAt = 0; runNowcast(); }
+  if (k === 'travelMode') { st.ncAt = 0; runNowcast(); updateRouteUi(); }
   if (k === 'source') refreshRadarTiles(true).then(runNowcast);
 });
 $('#sheet').addEventListener('change', e => { if (e.target.id === 'famDevice' || e.target.id === 'welDevice') { S.deviceName = e.target.value.trim().slice(0, 24); save(); return; } if (e.target.id === 'morningAt' || e.target.id === 'morningDays') { const m = Object.assign({ on: false, at: '06:30', days: 'all' }, S.brief.morning || {}); m.at = $('#morningAt').value || m.at; m.days = $('#morningDays').value || m.days; S.brief.morning = m; save(); pushUpdateBriefPrefs(); return; } if (e.target.dataset && e.target.dataset.ksel) { const k = e.target.dataset.ksel, cur = S[k], raw = e.target.value; S[k] = typeof cur === 'boolean' ? raw === 'true' : typeof cur === 'number' ? +raw : raw; save(); if (k === 'activity') { applySentinel(); renderStatus(); pushUpdateBriefPrefs(); } return; } if (e.target.id === 'briefLang') { S.brief.lang = e.target.value; S.brief.voice = ''; save(); loadVoices(); pushUpdateBriefPrefs(); openSettings('brief'); speak(lang() === 'es' ? 'Los informes serán en español.' : 'Briefings will be in English.'); return; } if (e.target.id === 'briefVoice') { S.brief.voice = e.target.value; save(); speak('This is the voice for your briefings.'); } if (e.target.id === 'voiceEngine') { S.voice.engine = e.target.value; S.voice.keyword = S.voice.engine === 'porcupine' ? 'Bumblebee' : 'Bumblebee'; save(); stopWakeWord().then(() => { if (S.voice.enabled) startWakeWord(); }); openSettings('voice'); return; } if (e.target.id === 'voiceKw') { S.voice.keyword = e.target.value; save(); if (voice.running) stopWakeWord().then(startWakeWord); } });
