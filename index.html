@@ -960,7 +960,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13g';
+const APP_VERSION = '2026.11.13h';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1691,6 +1691,38 @@ async function routeSearch(q) {
     $('#routeResults').querySelectorAll('button').forEach(b => b.onclick = () => { const p = list[+b.dataset.i]; $('#routeSheet').hidden = true; setDestination({ name: p.name, lat: p.lat, lon: p.lon }); });
   } catch (e) { $('#routeResults').innerHTML = '<div class="rs-sub">Could not reach the server.</div>'; }
 }
+/* Road ahead: hazards evaluated where you WILL be, not where you are. Samples the travel path at +20/+40/+60 min, asks NWS for active
+   alerts at those points (cached 10 min per 0.1°), looks for recent lightning within 10 mi of the next 30 min of road, and flags a very
+   heavy core on the path. Items join the heads-up strip as "Ahead: …" with the minutes until you reach them. */
+st.roadAhead = []; st.roadAheadAt = 0; const roadAlertCache = new Map();
+async function refreshRoadAhead(path) {
+  if (!path || Date.now() - st.roadAheadAt < 5 * 60000) return;
+  st.roadAheadAt = Date.now();
+  const items = [], here = new Set((st.alerts || []).map(a => a.event));
+  const samples = [20, 40, 60].map(m => { let best = null; for (const q of path) if (q.lat != null && (!best || Math.abs(q.t - m) < Math.abs(best.t - m))) best = q; return best && Math.abs(best.t - m) <= 5 ? best : null; }).filter(Boolean);
+  for (const q of samples) {
+    const key = q.lat.toFixed(1) + ',' + q.lon.toFixed(1); let cached = roadAlertCache.get(key);
+    if (!cached || Date.now() - cached.at > 10 * 60000) {
+      try { const j = await nws(NWS + '/alerts/active?point=' + q.lat.toFixed(4) + ',' + q.lon.toFixed(4)); cached = { at: Date.now(), events: (j.features || []).map(f => ({ event: f.properties.event, headline: f.properties.headline, ends: f.properties.ends || f.properties.expires })) }; roadAlertCache.set(key, cached); }
+      catch (e) { continue; }
+    }
+    for (const a of cached.events) {
+      if (here.has(a.event) || items.some(i => i.event === a.event)) continue;
+      const crit = CRITICAL.includes(a.event), winter = /Winter|Ice|Snow|Blizzard|Freez/i.test(a.event), wind = /Wind|Dust/i.test(a.event);
+      items.push({ key: 'road-' + a.event, event: a.event, sev: crit ? 'sev' : 'warn', title: 'Ahead: ' + a.event + ' in ~' + Math.round(q.t) + ' min', detail: a.headline || a.event, advice: crit ? 'Active where your road will be in about ' + Math.round(q.t) + ' minutes. Consider stopping before it or changing route.' : winter ? 'Roads may be icy or snow-covered on that stretch; slow down and allow extra distance.' : wind ? 'Expect strong crosswinds on that stretch, especially with a trailer or high-sided vehicle.' : 'Active on that stretch of your road.' });
+    }
+  }
+  // lightning within 10 mi of the next 30 minutes of road
+  try {
+    const strikes = st.strikes || [];
+    if (strikes.length) { const near = path.filter(q => q.lat != null && q.t <= 30).some(q => strikes.some(sk => distMi({ lat: sk.lat, lon: sk.lon }, q) <= 10));
+      if (near && !items.some(i => i.key === 'road-lightning')) items.push({ key: 'road-lightning', event: 'Lightning', sev: 'sev', title: 'Ahead: lightning near your road', detail: 'Strikes in the last 30 minutes within 10 miles of where you will be in the next half hour.', advice: 'Stay in the vehicle; avoid stopping in the open on that stretch.' }); }
+  } catch (e) { }
+  // a very heavy core on the path itself
+  const hit = st.nc && st.nc.res && st.nc.res.hit;
+  if (hit && hit.maxDbz >= 50) items.push({ key: 'road-heavy', event: 'Very heavy rain', sev: 'sev', title: 'Ahead: very heavy rain in ~' + Math.round(hit.etaMin) + ' min', detail: 'The part of the storm your road meets peaks at ' + Math.round(hit.maxDbz) + ' dBZ — torrential rain, possible hail, little visibility.', advice: 'Plan to be stopped or off the highway before then.' });
+  st.roadAhead = items; if (typeof renderHeadsUp === 'function') renderHeadsUp();
+}
 function bearingTo(lat1, lon1, lat2, lon2) { const f1 = lat1 * Math.PI / 180, f2 = lat2 * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180; const y = Math.sin(dl) * Math.cos(f2), x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
 // Permissions are requested in order on first load: location first, then the microphone once the browser has answered
 // about location (granted or refused), so the two prompts never fight for the screen.
@@ -2011,6 +2043,7 @@ async function runNowcast() {
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
       { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges(), path }, labelled[2].labels);
     res.movingFrame = path ? { mph: Math.round(tv.mph), headingDeg: tv.headingDeg == null ? null : Math.round(tv.headingDeg), onRoute: !!path.onRoute, path } : null;
+    if (path) setTimeout(() => refreshRoadAhead(path), 0); else if (st.roadAhead.length) { st.roadAhead = []; st.roadAheadAt = 0; setTimeout(renderHeadsUp, 0); }
     res.faint = nearestEcho(fine[2], fineKm, c, c, 5, 50);
     res.nearestAny = res.nearest || nearestEcho(cleaned[2], fineKm, c, c, threshDbz(), radiusMi);   // nearest real rain anywhere in the tracking window
     res.cores = hailCores(fine[2], fineKm, c, c, 58, 60, st.loc);
@@ -2064,6 +2097,7 @@ async function refreshLightning() {
     const q = '?minLat=' + b.getSouth().toFixed(3) + '&minLon=' + b.getWest().toFixed(3) + '&maxLat=' + b.getNorth().toFixed(3) + '&maxLon=' + b.getEast().toFixed(3) + '&minutes=30';
     const r2 = await fetchT(BE() + '/lightning/recent' + q, { headers: authHeaders() }, 10000);
     const strikes = r2.ok ? await r2.json() : [];
+    st.strikes = strikes;
     ltLayer.clearLayers();
     const now = Date.now();
     for (const f of strikes.slice(0, 1500)) {
@@ -2647,8 +2681,9 @@ function computeHeadsUp() {
 function renderHeadsUp() {
   const wrap = $('#huWrap'); if (!wrap) return;
   let items = []; try { items = computeHeadsUp(); } catch (e) { items = []; }
+  if (st.roadAhead && st.roadAhead.length) items = st.roadAhead.concat(items);
   st.huItems = items;
-  $('#huHdr').textContent = 'Heads-up · ' + (ACTIVITIES[S.activity] || 'Camping').replace(/ \(.*\)/, '');
+  $('#huHdr').textContent = (st.roadAhead && st.roadAhead.length ? 'Heads-up · Road ahead · ' : 'Heads-up · ') + (ACTIVITIES[S.activity] || 'Camping').replace(/ \(.*\)/, '');
   $('#huRow').innerHTML = items.map((a, i) => '<button class="hu ' + a.sev + '" data-hu="' + i + '">' + esc(a.title) + '</button>').join('');
   wrap.hidden = items.length === 0;
   // a new red heads-up gets one soft note (not on first render, not while snoozed)
