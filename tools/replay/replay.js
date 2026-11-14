@@ -5,6 +5,42 @@ const fs = require('fs'), path = require('path');
 const { PNG } = require('pngjs');
 const C = require('./core.js');
 
+const HELP = `VantageWX replay harness — runs the app's nowcast core over a recorded storm and scores it.
+
+usage:  node replay.js <recording-folder> [radiusMi] [flags]
+
+  <recording-folder>   a folder with meta.json and the <t>.png MRMS frames (from /admin/record/page → zip, or the Training repo)
+  radiusMi             evaluation radius around the "you" point, default 120 (use 100 with --site so the window stays in frame)
+
+flags
+  --v4                 score the deployed rule set (V4 strict) and the 12-setting sweep; the deployed row is  bn0_bm75_cl10
+  --why                with --v4: list every miss and false alarm with what the tracker saw at the time
+  --site=lat,lon[:name]  evaluate a different point inside the same recording (re-centred window, site-relative gauge distances)
+  --gauge-mi=N         gauge truth radius in miles, default 5
+  --dry                motion and truth only; skip the rule scoring
+
+environment (experiments; defaults are what the app ships)
+  THRESH=10|15|20|30   alert threshold in dBZ, also the radar-truth bar (default 20)
+  PROX_MI=5            proximity rule: no projected hit, echo within N mi not receding → orange (0 = off; app ships 5)
+  FALLBACK=long|oracle motion fallback when tracker confidence < FB_CONF (default 0.5); both measured worse — leave off
+  MOTION_REGIONS=3|4|5 MOTION_REGIONS_AUTO=1 MOTION_SEGMENTS=1 MOTION_SEG_KM=50 MOTION_SEG_MIN_KM=100   motion-field experiments (off in the app)
+  V4_BLUE_MIN=75 V4_BLUE_NEAR_MI=25 V4_CLOSE_MPH=10 V4_NEAR_MI=15 V4_GRAZE_MIN=12 V4_GRAZE_CELLS=6 V4_RECEDE_MPH=5 V4_RESUME_MPH=5   V4 tunables
+
+reading the output
+  "rain (≥T dBZ) at the centre"   when radar truth first hit the point, and a strip of the whole recording (# wet . faint)
+  "bn0_bm75_cl10: F false alarms, M misses"   the deployed rules against radar truth
+  "v4 rules vs gauges: F false alarms, M misses"   the same alerts against rain gauges (the independent check)
+  "heading: median |error| …"     motion accuracy against the long-baseline and core-track references
+  "webcams: …"                    camera-vs-radar agreement when the recording carries cam.jsonl
+
+examples
+  node replay.js C:\\rec\\Toronto-canada-20261111-1651 120 --v4
+  node replay.js C:\\rec\\Toronto-canada-20261111-1651 100 --v4 --site=43.08,-79.48:niagara-s40 --why
+  set THRESH=15 && node replay.js C:\\rec\\Toronto-canada-20261111-1651 120 --v4        (Windows)
+  THRESH=15 node replay.js ~/rec/Toronto-canada-20261111-1651 120 --v4                 (bash)
+`;
+if (process.argv.length < 3 || ['-h', '--help', 'help'].includes(process.argv[2])) { console.log(HELP); process.exit(0); }
+if (!fs.existsSync(path.join(process.argv[2], 'meta.json'))) { console.error(`no meta.json in ${process.argv[2]} — pass the recording folder itself (the one holding the .png frames)\n`); console.log(HELP); process.exit(1); }
 const dir = process.argv[2]; const radiusMi = +(process.argv[3] || 120);
 const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const MI = 1609.344, mpp = meta.metersPerPx, size = meta.sizePx, half = size / 2;
