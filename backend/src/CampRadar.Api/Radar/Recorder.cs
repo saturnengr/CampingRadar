@@ -18,12 +18,12 @@ public sealed class Recorder
         public DateTimeOffset StartedAt { get; init; } public DateTimeOffset EndsAt { get; init; }
         public int Frames { get; set; } public long LastT { get; set; } public string? LastError { get; set; } public bool Running { get; set; } public long Bytes { get; set; }
     }
-    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly Nws.NwsForecastClient _fc; private readonly IHttpClientFactory _http; private readonly ILogger<Recorder> _log; private readonly string _dir;
+    private readonly MrmsClient _mrms; private readonly StatusService _status; private readonly Nws.NwsForecastClient _fc; private readonly IHttpClientFactory _http; private readonly Lightning.LightningStore _lightning; private readonly ILogger<Recorder> _log; private readonly string _dir;
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cts = new();
 
-    public Recorder(MrmsClient mrms, StatusService status, Nws.NwsForecastClient fc, IHttpClientFactory http, IConfiguration cfg, ILogger<Recorder> log)
-    { _mrms = mrms; _status = status; _fc = fc; _http = http; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
+    public Recorder(MrmsClient mrms, StatusService status, Nws.NwsForecastClient fc, IHttpClientFactory http, Lightning.LightningStore lightning, IConfiguration cfg, ILogger<Recorder> log)
+    { _mrms = mrms; _status = status; _fc = fc; _http = http; _lightning = lightning; _log = log; _dir = Path.Combine(cfg["DataDir"] ?? "App_Data", "recordings"); Directory.CreateDirectory(_dir); }
 
     public IEnumerable<object> List()
     {
@@ -119,6 +119,24 @@ public sealed class Recorder
     private async Task RunAsync(Job job, string dir, CancellationToken ct)
     {
         var seen = new HashSet<long>(Directory.EnumerateFiles(dir, "*.png").Select(f => long.TryParse(Path.GetFileNameWithoutExtension(f), out var t) ? t : 0));
+        // replay bundle markers: what the display itself fetches, saved raw so tools/video/replay-app.js can serve it back verbatim
+        long LastOf(string suffix) => Directory.EnumerateFiles(dir, "*" + suffix).Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var v) ? v : 0).DefaultIfEmpty(0).Max();
+        long lastAlerts = LastOf(".alerts.json"), lastLtg = LastOf(".lightning.json"), lastObs = LastOf(".obs.json"), lastRaw = LastOf(".nws-hourly.json");
+        string? hourlyUrl = null, dailyUrl = null, gridUrl = null, stationsUrl = null, stationId = null;
+        var pointsFile = Path.Combine(dir, "points.json");
+        async Task LoadPointsAsync()
+        {
+            try
+            {
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                string pj;
+                if (File.Exists(pointsFile)) pj = await File.ReadAllTextAsync(pointsFile, ct);
+                else { pj = await _http.CreateClient("noaa").GetStringAsync($"https://api.weather.gov/points/{job.Lat.ToString("F4", ci)},{job.Lon.ToString("F4", ci)}", ct); await File.WriteAllTextAsync(pointsFile, pj, ct); }
+                using var pd = JsonDocument.Parse(pj); var pp = pd.RootElement.GetProperty("properties");
+                hourlyUrl = pp.GetProperty("forecastHourly").GetString(); dailyUrl = pp.GetProperty("forecast").GetString(); gridUrl = pp.GetProperty("forecastGridData").GetString(); stationsUrl = pp.GetProperty("observationStations").GetString();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "points: " + ex.Message; }
+        }
         long lastOm = Directory.EnumerateFiles(dir, "*.om.json").Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var t) ? t : 0).DefaultIfEmpty(0).Max();
         long lastNws = Directory.EnumerateFiles(dir, "*.nws.json").Select(f => long.TryParse(Path.GetFileName(f).Split('.')[0], out var t) ? t : 0).DefaultIfEmpty(0).Max();
         var failures = new Dictionary<long, int>();
@@ -158,6 +176,35 @@ public sealed class Recorder
                                     await File.WriteAllTextAsync(Path.Combine(dir, t + ".om.json"), om, ct); lastOm = t;
                                 }
                                 catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "open-meteo: " + ex.Message; }
+                            }
+                            // ---- replay bundle: raw NWS alerts (5 min), lightning flashes (5 min), observations (15 min), hourly/daily/grid forecast (60 min) ----
+                            if (hourlyUrl is null) await LoadPointsAsync();
+                            var noaa = _http.CreateClient("noaa"); var ciR = System.Globalization.CultureInfo.InvariantCulture;
+                            async Task Save(string suffix, string url) { var body = await noaa.GetStringAsync(url, ct); await File.WriteAllTextAsync(Path.Combine(dir, t + suffix), body, ct); }
+                            if (t - lastAlerts >= 5 * 60_000) { try { await Save(".alerts.json", $"https://api.weather.gov/alerts/active?point={job.Lat.ToString("F4", ciR)},{job.Lon.ToString("F4", ciR)}"); lastAlerts = t; } catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "alerts: " + ex.Message; } }
+                            if (t - lastLtg >= 5 * 60_000)
+                            {
+                                try
+                                {
+                                    double dLat = 3.0, dLon = 3.0 / Math.Max(0.2, Math.Cos(job.Lat * Math.PI / 180));   // ~200 mi box, as the app's lightning layer asks
+                                    var flashes = _lightning.Recent(job.Lat - dLat, job.Lon - dLon, job.Lat + dLat, job.Lon + dLon, t - 60 * 60_000L, 5000).Select(f => new { t = f.TimeMs, lat = f.Lat, lon = f.Lon });
+                                    await File.WriteAllTextAsync(Path.Combine(dir, t + ".lightning.json"), JsonSerializer.Serialize(new { summary = _lightning.Summarize(job.Lat, job.Lon, t, 30), recent = flashes }), ct); lastLtg = t;
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "lightning: " + ex.Message; }
+                            }
+                            if (t - lastObs >= 15 * 60_000 && stationsUrl is not null)
+                            {
+                                try
+                                {
+                                    if (stationId is null) { var sj = await noaa.GetStringAsync(stationsUrl, ct); await File.WriteAllTextAsync(Path.Combine(dir, "stations.json"), sj, ct); using var sd = JsonDocument.Parse(sj); stationId = sd.RootElement.GetProperty("features")[0].GetProperty("properties").GetProperty("stationIdentifier").GetString(); }
+                                    await Save(".obs.json", $"https://api.weather.gov/stations/{stationId}/observations/latest"); lastObs = t;
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "obs: " + ex.Message; }
+                            }
+                            if (t - lastRaw >= 3600_000 && hourlyUrl is not null)
+                            {
+                                try { await Save(".nws-hourly.json", hourlyUrl!); await Save(".nws-daily.json", dailyUrl!); await Save(".nws-grid.json", gridUrl!); lastRaw = t; }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { job.LastError = "nws raw: " + ex.Message; }
                             }
                             if (t - lastNws >= 3600_000)
                             {
