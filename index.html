@@ -738,6 +738,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const cellMi = cellKm * 0.621371, R = opts.hitRadiusMi + 0.7 * cellMi, R2 = R * R;
   const rings = { 2: false, 5: false, 10: false, 30: false, 50: false, 100: false, 120: false, 150: false };
   const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
+  let endHeavy = 0, endVery = 0, etaHeavy = Infinity, etaVery = Infinity, nowMax = -99;   // nowMax: the strongest cell inside the hit radius right now   // when the ≥40 / ≥50 dBZ part of the hitting rain arrives and clears
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
   // opts.path: where the observer will be — [{t (min), e, n (miles east/north of the centre)}], sampled a few minutes apart out to
@@ -785,6 +786,9 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
       if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitDist = dist; hitBlob = labels ? labels[y * grid.w + x] : null; }
       if (labels) { const lb = labels[y * grid.w + x]; hitBlobCells.set(lb, (hitBlobCells.get(lb) || 0) + 1); }
       if (tOut > end) end = tOut;
+      if (tIn <= 0.5 && d > nowMax) nowMax = d;
+      if (d >= 40) { if (tOut > endHeavy) endHeavy = tOut; if (tIn < etaHeavy) etaHeavy = tIn; }
+      if (d >= 50) { if (tOut > endVery) endVery = tOut; if (tIn < etaVery) etaVery = tIn; }
       if (d > maxDbz) maxDbz = d;
     } else if (dist <= maxRing) {
       const t = a > 1e-9 ? Math.max(0, Math.min(horizon, -(e * ve + n * vn) / a)) : 0;
@@ -793,7 +797,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
         passing = { distMi: dist, bearing: bearingDeg(e, n), passBearing: bearingDeg(pe, pn), closestMi: Math.hypot(pe, pn) };
     }
   }
-  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, distMi: hitDist, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
+  const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, distMi: hitDist, cells: hits, blob: hitBlob, blobCells: hitBlobCells, etaHeavyMin: etaHeavy, endHeavyMin: endHeavy, etaVeryMin: etaVery, endVeryMin: endVery, nowMaxDbz: nowMax } : null;
   return { rings, nearest, passing, hit, nearestBlob, ringIn, ringMiss };
 }
 /* ---- intensity trends: track each storm cell across frames ---- */
@@ -960,7 +964,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13h';
+const APP_VERSION = '2026.11.13i';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2911,8 +2915,16 @@ function computeStatus() {
     const edgeNote = edgeSlow ? ' · edge closing at ' + Math.max(1, Math.round(edge.rate)) + ' mph' : '';
     const coreNote = coreLine(res.core, hit, lat);
     if (hit.etaMin <= 0.5) {
-      out.cls = 'red'; out.level = 'atyou'; out.main = word + ' rain at your location';
-      out.sub = (hit.endMin < NC.horizonMin - 5 ? 'Likely ending ≈ ' + etaClock(hit.endMin - lat) : 'May continue for a while') + coreNote;
+      out.cls = 'red'; out.level = 'atyou'; out.main = (hit.nowMaxDbz > -99 ? intensityWord(hit.nowMaxDbz) + trendWord : word) + ' rain at your location';
+      // how long until it passes: the heavy part first (that is what stops a car), then the rain itself
+      const H = NC.horizonMin - 5, endAll = hit.endMin - lat, endH = hit.endHeavyMin - lat, endV = hit.endVeryMin - lat;
+      const passes = (m) => m <= 2 ? 'passing now' : 'passes in ~' + Math.max(1, Math.round(m)) + ' min (≈ ' + etaClock(m) + ')';
+      const parts = [];
+      if (hit.maxDbz >= 50 && hit.etaVeryMin <= 0.5) parts.push('Very heavy part ' + (hit.endVeryMin < H ? passes(endV) : 'may last a while'));
+      else if (hit.maxDbz >= 40 && hit.etaHeavyMin <= 0.5) parts.push('Heavy part ' + (hit.endHeavyMin < H ? passes(endH) : 'may last a while'));
+      else if (hit.maxDbz >= 40 && hit.etaHeavyMin < H) parts.push('Heavier rain arrives in ~' + Math.max(1, Math.round(hit.etaHeavyMin - lat)) + ' min' + (hit.endHeavyMin < H ? ', ' + passes(endH).replace('passes', 'passes') : ''));
+      parts.push(hit.endMin < H ? 'rain ending in ~' + Math.max(1, Math.round(endAll)) + ' min (≈ ' + etaClock(endAll) + ')' : 'rain may continue for a while');
+      out.sub = parts.join(' · ').replace(/^rain /, 'Rain ') + coreNote;
     } else if (eta <= leadRed(hit.maxDbz)) {
       out.cls = 'red'; out.level = 'imminent';
       out.main = eta <= 10 ? 'Rain arriving in ~' + Math.max(1, Math.round(eta)) + ' min' : 'Rain arriving ≈ ' + etaClock(eta) + ' (in ' + fmtDur(eta) + ')' + leadNote(eta, hit.maxDbz);
@@ -3845,7 +3857,7 @@ function statusES(t) {
     .replace(/Rain (\d+) mi (\w+) could reach you in (?:about )?(.+)/g, (m, d, dir, t) => 'Lluvia a ' + d + ' millas al ' + dirES(dir) + ' podría llegar en ' + (/^just/.test(t) ? '' : 'unas ') + t.replace('just over', 'poco más de').replace('just under', 'poco menos de')).replace(/Straight-line track, ≈ (\S+ \S+) — beyond the two hours the tracker trusts/g, 'Trayectoria en línea recta, hacia las $1; más allá de las dos horas en que el rastreador es fiable')
     .replace(/Light rain may reach you ≈ (.+)/g, 'Lluvia ligera podría llegar hacia las $1').replace(/Low confidence — NWS shows (\d+)% chance in the next 2 hours/g, 'Poca confianza: el NWS da $1% de probabilidad en las próximas 2 horas')
     .replace(/Rain (\d+) mi (\w+) — passing to the (\w+)/g, (m, n, d, p) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', pasando hacia el ' + dirES(p)).replace(/Rain (\d+) mi (\w+) — not heading your way/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d) + ', no viene hacia ti')
-    .replace(/Rain (\d+) mi (\w+)/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d)).replace(/Likely ending ≈/g, 'Probablemente termina hacia las').replace(/May continue for a while/g, 'Puede continuar un rato')
+    .replace(/Rain (\d+) mi (\w+)/g, (m, n, d) => 'Lluvia a ' + n + ' millas al ' + dirES(d)).replace(/Likely ending ≈/g, 'Probablemente termina hacia las').replace(/Very heavy part passes in ~(\d+) min/g, 'La parte muy fuerte pasa en ~$1 min').replace(/Heavy part passes in ~(\d+) min/g, 'La parte fuerte pasa en ~$1 min').replace(/(Very heavy|Heavy) part passing now/g, 'La parte fuerte está pasando ahora').replace(/(Very heavy|Heavy) part may last a while/g, 'La parte fuerte puede durar un rato').replace(/Heavier rain arrives in ~(\d+) min/g, 'Lluvia más fuerte llega en ~$1 min').replace(/[Rr]ain ending in ~(\d+) min/g, 'la lluvia termina en ~$1 min').replace(/[Rr]ain may continue for a while/g, 'la lluvia puede continuar un rato').replace(/May continue for a while/g, 'Puede continuar un rato')
     .replace(/Closest ≈ (\d+) mi/g, 'Lo más cerca: $1 millas').replace(/Movement unclear[^·—]*/g, 'Movimiento poco claro').replace(/keep an eye on it/g, 'vigílala').replace(/Storms moving (\w+) at (\d+) mph/g, (m, d, s) => 'Tormentas moviéndose al ' + dirES(d) + ' a ' + s + ' millas por hora')
     .replace(/(\d+) strikes? within 10 mi/g, '$1 rayos en 10 millas').replace(/Lightning within ten miles\.?/g, 'Rayos a menos de diez millas.').replace(/Wildfire within ten miles\.?/g, 'Incendio forestal a menos de diez millas.').replace(/Flooding nearby\.?/g, 'Inundación cercana.')
     .replace(/Take shelter now\.?/g, 'Busca refugio ahora.').replace(/Whiteout conditions: visibility under a quarter mile in (.+)/g, (m, p) => 'Condiciones de visibilidad nula: menos de un cuarto de milla por ' + (PRECIP_ES[p] || p))
