@@ -18,6 +18,7 @@ what to score
   --site=lat,lon[:name]  evaluate a different point inside the same recording (re-centred window, site-relative gauge distances)
   --gauge-mi=5         gauge truth radius in miles
   --dry                motion and truth only; skip the rule scoring
+  --eta-horizon        also project arrivals out to 6 h each frame and print ETAH json lines (lead-time skill; run with radius 180)
 
 experiments (defaults are what the app ships; all take --name=value)
   --thresh=20          alert threshold in dBZ, also the radar-truth bar: 10 any echo · 15 light (app default) · 20 · 30 moderate
@@ -216,6 +217,7 @@ const rows = []; const hist = []; let segFrames = 0, segRegs = 0, regGrid = {}; 
    6. the edge rules (stalled / slow / receding) describe the NEAREST echo; they only speak for the arrival when that echo is part of
       the storm projected to hit, and never override a big strong arrival (≥ 40 dBZ or ≥ 100 cells, which the projection gets right).
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
+const ETAH = process.argv.includes('--eta-horizon');
 const V4 = process.argv.includes('--v4'), GRAZE_MIN = +opt('v4-graze-min', 12), GRAZE_CELLS = +opt('v4-graze-cells', 6), RESUME_MPH = +opt('v4-resume-mph', 5), BLUE_MIN = +opt('v4-blue-min', 75), RECEDE_MPH = +opt('v4-recede-mph', 5), NEAR_MI = +opt('v4-near-mi', 15), CLOSE_MPH = +opt('v4-close-mph', 10), BLUE_NEAR_MI = +opt('v4-blue-near-mi', 25);
 let fizzleSeen4 = 0;
 const SWEEP = [];   // name → settings; scored in the summary when --v4 is given
@@ -231,6 +233,16 @@ for (const t of times) {
   const truth = ct && ct.n >= 3 ? ct : lb;
   const dH = m.ok && truth ? angDiff(m.headingDeg, truth.headingDeg) : null, dS = m.ok && truth ? m.speedMph - truth.speedMph : null;
   const actual = rainSeries.find(r => r.t >= t && r.dbz >= thresh), actMin = actual ? (actual.t - t) / 60000 : null;
+  if (ETAH) {   // long-horizon arrival: the same field and blobs, horizon 360 min / 180 mi; qualification signals recorded, judged in the aggregator
+    const vel = C.makeVelocityField(m, coarseF), F2 = frame(t), lab = C.labelBlobs(F2.cleaned, thresh);
+    const far = C.predictRain(F2.cleaned, fineKm, c, c, vel, { thresh, hitRadiusMi: hitMi, horizonMin: 360, maxRingMi: 180 }, lab.labels);
+    const recent = rows.filter(r => t - r.t <= 60 * 60000 && r.m && r.m.ok);
+    const steady = m.ok && recent.length >= 4 && recent.every(r => Math.abs(angDiff(r.m.headingDeg, m.headingDeg)) <= 30 && Math.abs(r.m.speedMph - m.speedMph) <= Math.max(6, 0.35 * m.speedMph));
+    const act30 = rainSeries.find(r => r.t >= t && r.dbz >= 30);
+    const h = far.hit;
+    console.log('ETAH ' + JSON.stringify({ t, eta: h ? +h.etaMin.toFixed(0) : null, end: h ? +h.endMin.toFixed(0) : null, maxDbz: h ? h.maxDbz : null, cells: h ? h.cells : 0, blobCells: h && h.blobCells ? Math.max(0, ...h.blobCells.values()) : 0, distMi: h ? +h.distMi.toFixed(0) : null,
+      ok: !!m.ok, conf: m.ok ? +m.global.conf.toFixed(2) : 0, mph: m.ok ? +m.speedMph.toFixed(0) : null, steady, held: !!m.held, now: rainAt(F2) >= thresh, act: actMin == null ? null : +actMin.toFixed(0), act30: act30 ? +((act30.t - t) / 60000).toFixed(0) : null, remain: +((times[times.length - 1] - t) / 60000).toFixed(0) }));
+  }
   const etaTxt = p.res.hit ? Math.round(p.res.hit.etaMin) + ' min max ' + p.res.hit.maxDbz + ' dBZ' : 'no hit';
   const actTxt = rainAt(frame(t)) >= thresh ? 'raining now' : actual ? 'rain in ' + Math.round(actMin) + ' min' : 'no rain in record';
   const nr = p.res.nearest; if (nr && !hist.some(h => h.t === t)) hist.push({ t, d: nr.distMi, b: nr.bearing });
