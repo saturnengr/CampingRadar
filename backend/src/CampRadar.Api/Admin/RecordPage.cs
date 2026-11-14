@@ -30,6 +30,7 @@ label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
 .loopbar{position:absolute;left:12px;bottom:12px;z-index:800;background:rgba(15,19,23,.85);border:1px solid var(--line);border-radius:8px;padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:12px}
 .loopbar input[type=range]{width:160px;padding:0}
 .leaflet-container{font:inherit}
+.leaflet-tile-pane .basemap{filter:invert(1) hue-rotate(180deg) brightness(.85) saturate(.6)}
 </style></head><body>
 <header><h1>VantageWX · recordings</h1><span class="sub" id="status">–</span><span style="flex:1"></span><a href="/admin/cams/page">cameras</a><a href="/admin">← admin</a></header>
 <div id="login" hidden><div class="card"><h2>Admin key</h2><input id="key" type="password" placeholder="X-Admin-Key"><p><button id="go">Open</button> <span id="err" class="sub"></span></p></div></div>
@@ -60,10 +61,12 @@ async function init(){
   sessionStorage.setItem('adminKey',key);$('#login').hidden=true;$('#wrap').hidden=false;
   if(!map){
     map=L.map('map',{zoomControl:true}).setView([38.5,-96],5);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:12}).addTo(map);
+    // OpenStreetMap tiles (no key), darkened with the same filter the app uses at night; radar on top is the IEM NEXRAD N0Q composite
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:12,className:'basemap'}).addTo(map);
     // IEM NEXRAD composite, 5-minute steps back to 50 minutes: 11 frames, newest last
     const steps=['m50m','m45m','m40m','m35m','m30m','m25m','m20m','m15m','m10m','m05m',''];
-    frames=steps.map(s=>L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913'+(s?'-'+s:'')+'/{z}/{x}/{y}.png',{opacity:0,attribution:'Radar: IEM NEXRAD',maxZoom:12}).addTo(map));
+    frames=steps.map(s=>L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913'+(s?'-'+s:'')+'/{z}/{x}/{y}.png',{opacity:0,attribution:'Radar: NEXRAD N0Q composite via IEM',maxZoom:12,zIndex:400}).addTo(map));
+    frames[10].on('tileerror',()=>{ $('#status').textContent='radar tiles failed to load (IEM)'; });
     recLayer=L.layerGroup().addTo(map); camLayer=L.layerGroup();
     showFrame(10); timer=setInterval(()=>{ if(playing) showFrame((cur+1)%11); },700);
     map.on('click',e=>choose(e.latlng.lat,e.latlng.lng));
