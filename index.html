@@ -964,7 +964,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13i';
+const APP_VERSION = '2026.11.14a';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1835,10 +1835,13 @@ async function refreshForecast() {
   const html = [...byDate.entries()].slice(0, 3).map(([d, e], i) => {
     const main = e.day || e.night;
     const name = i === 0 ? (e.day ? 'Today' : 'Tonight') : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
-    const pop = Math.max(...[e.day, e.night].filter(Boolean).map(p => (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0));
+    const pp = p => p ? ((p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0) : null, dp = pp(e.day), np = pp(e.night);
+    const pop = Math.max(dp || 0, np || 0);
+    // NWS gives one chance for the 12-h day and one for the 12-h night; when they differ a lot, say which half the number belongs to
+    const half = dp != null && np != null && Math.abs(np - dp) >= 20 ? (np > dp ? ' night' : ' day') : '';
     const hi = e.day ? e.day.temperature + '°' : '—', lo = e.night ? e.night.temperature + '°' : '—';
     return '<div class="day" data-date="' + d + '" role="button" tabindex="0"><div class="nm">' + name + '</div>' + iconSvg(iconKind(main.shortForecast, !e.day)) +
-      '<div class="t"><b>' + hi + '</b> <span>/ ' + lo + '</span></div><div class="p">' + (pop >= 10 ? pop + '% rain' : '') + '</div></div>';
+      '<div class="t"><b>' + hi + '</b> <span>/ ' + lo + '</span></div><div class="p">' + (pop >= 10 ? pop + '% rain' + half : '') + '</div></div>';
   }).join('');
   $('#days').innerHTML = html;
   if (typeof renderHeadsUp === 'function') { renderHeadsUp(); setTimeout(renderHeadsUp, 4000); }
@@ -3287,7 +3290,10 @@ async function openDay(dateStr) {
   let pressure = null; try { pressure = await fetchPressure(); } catch (e) {}
 
   const tile = (k, v, n, cls) => '<div class="tile ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div>' + (n ? '<div class="n">' + n + '</div>' : '') + '</div>';
-  const rainTile = tile('Rain chance', maxPop + '<small>%</small>', rainWindow ? 'Most likely ' + rainWindow : maxPop < 20 ? 'Dry day' : 'Scattered', maxPop >= 60 ? 'bad' : maxPop >= 30 ? 'warn' : 'good');
+  // hourly rows cover the calendar date; the NWS "<day> Night" period runs to 6 AM next morning, so rain that arrives after midnight shows only there
+  const nightPop = nightP ? popOf(nightP) : 0, nightNote = nightPop >= maxPop + 15 && nightPop >= 30 ? nightPop + '% overnight' : '';
+  const rainNote = [rainWindow ? 'Most likely ' + rainWindow : maxPop < 20 ? (nightNote ? 'Dry daytime' : 'Dry day') : 'Scattered', nightNote].filter(Boolean).join(' · ');
+  const rainTile = tile('Rain chance', maxPop + '<small>%</small>', rainNote, Math.max(maxPop, nightPop) >= 60 ? 'bad' : Math.max(maxPop, nightPop) >= 30 ? 'warn' : 'good');
   const thunderTile = tile('Thunder', maxThunder != null ? maxThunder + '<small>%</small>' : '—', thunderHours.length ? 'Around ' + hourLabel(thunderHours[0].t) + (thunderHours.length > 1 ? '–' + hourLabel(thunderHours[thunderHours.length - 1].t + 3600e3) : '') : 'Low', maxThunder >= 40 ? 'bad' : maxThunder >= 20 ? 'warn' : 'good');
   const windTile = tile('Wind', Math.round(maxWind) + '<small> mph' + (maxGust > maxWind + 3 ? ', gusts ' + Math.round(maxGust) : '') + '</small>', windiest ? 'Strongest ' + hourLabel(windiest.t) + ' from the ' + (windiest.dir || '?') : '', Math.max(maxWind, maxGust) >= 30 ? 'bad' : Math.max(maxWind, maxGust) >= 20 ? 'warn' : 'good');
   const tempTile = tile('Temps', (hi != null ? hi + '°' : '—') + ' <small>/ ' + (lo != null ? lo + '°' : '—') + '</small>', hours.length ? 'Feels ' + Math.min(...hours.map(h => h.feels)) + '° to ' + Math.max(...hours.map(h => h.feels)) + '°' : '', '');
