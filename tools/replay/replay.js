@@ -21,6 +21,7 @@ what to score
 
 experiments (defaults are what the app ships; all take --name=value)
   --thresh=20          alert threshold in dBZ, also the radar-truth bar: 10 any echo · 15 light (app default) · 20 · 30 moderate
+  --motion-memory=1    track memory (app ships on): hold the recent track when one scan swings >45° or doubles the speed; 0 = off
   --prox-mi=0          proximity rule: no projected hit, echo within N mi not receding → orange (app ships 5; 0 = off)
   --fallback=long|oracle   motion fallback when tracker confidence is below --fb-conf=0.5 (both measured worse; off by default)
   --motion-regions=3|4|5  --motion-regions-auto=1  --motion-segments=1  --motion-seg-km=50  --motion-seg-min-km=100   motion-field experiments
@@ -67,6 +68,7 @@ const MOPTS = { maxKmh: 110, regions: +opt('motion-regions', 0) || undefined, re
 // proximity experiment (env PROX_MI): with no projected hit, echo at/above the threshold within PROX_MI miles that is not receding
 // (edge rate > -5 mph) raises orange — "rain nearby, may drift over you". Targets the stationary light-echo misses (lake effect, drizzle).
 const PROX_MI = +opt('prox-mi', 0);
+const MEMORY = !!+opt('motion-memory', 1); let memHist = [], heldFrames = 0;
 const FALLBACK = opt('fallback', ''), FB_CONF = +opt('fb-conf', 0.5);
 let fbUsed = 0, fbFrames = 0, oracleVec = null;
 function synthMotion(vx, vy, tag) { return { ok: true, regions: [], global: { vx, vy, conf: FB_CONF }, speedMph: Math.hypot(vx, vy) * 60 * 0.621371, headingDeg: (Math.atan2(vx, -vy) * 180 / Math.PI + 360) % 360, regionSize: 1, fallback: tag, baselineMin: 60 }; }
@@ -95,6 +97,7 @@ function rainAt(f) {
 }
 
 // ---- independent motion 1: long-baseline (≈60 min) whole-window NCC on the coarse grid, mean removed so broad shields don't flatten the peak
+let lastRef = null;
 function longBaseline(tA, tB) {
   const A = frame(tA).coarse, B = frame(tB).coarse, w = A.w, dt = (tB - tA) / 60000;
   const S = Math.ceil((110 / 60) * dt / coarseKm), x0 = S, y0 = S, x1 = w - 1 - S, y1 = w - 1 - S;
@@ -108,7 +111,11 @@ function longBaseline(tA, tB) {
     const sc = ab / Math.sqrt(aa * bb); if (sc > best) { best = sc; bu = u; bv = v; }
   }
   const vx = bu * coarseKm / dt, vy = bv * coarseKm / dt;
-  return { speedMph: Math.hypot(vx, vy) * 60 * 0.621371, headingDeg: heading(vx, vy), score: best, edge: Math.abs(bu) === S || Math.abs(bv) === S };
+  const sp = Math.hypot(vx, vy) * 60 * 0.621371, hd = heading(vx, vy);
+  const flip = lastRef && Math.abs(angDiff(hd, lastRef.headingDeg)) > 90 && sp > 15 && lastRef.speedMph > 15;
+  const bad = Math.abs(bu) === S || Math.abs(bv) === S || sp > 60 || flip;   // an edge solution, an implausible speed, or a 90°+ flip is a correlation artefact, not a reference
+  if (!bad) lastRef = { speedMph: sp, headingDeg: hd };
+  return { speedMph: sp, headingDeg: hd, score: best, edge: bad };
 }
 
 // ---- independent motion 2: tracks of strong cores (≥ coreDbz) followed frame to frame
@@ -156,6 +163,10 @@ function pageRun(latest) {
   const F = fr.map(frame), coarse = F.map(f => f.coarse);
   let motion = dt1 >= 10 ? C.estimateMotion(coarse[0], coarse[2], dt1, coarseKm, MOPTS) : { ok: false, regions: [], global: { conf: 0 }, reason: 'radar history too short' };
   if (dt2 >= 6) { const m2 = C.estimateMotion(coarse[1], coarse[2], dt2, coarseKm, MOPTS); if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1; }
+  if (MEMORY) {   // track memory, as the app applies it (reconcileMotion in the core); the history is per replay run
+    const rec = C.reconcileMotion(memHist, motion, latest); memHist = C.rememberMotion(memHist, rec, latest);
+    if (rec.held) { motion = rec.motion; heldFrames++; }
+  }
   if (FALLBACK && (!motion.ok || motion.global.conf < FB_CONF)) {
     fbFrames++;
     if (FALLBACK === 'oracle' && oracleVec) { motion = synthMotion(oracleVec.vx, oracleVec.vy, 'oracle'); fbUsed++; }
@@ -287,7 +298,8 @@ for (const t of times) {
 const scored = rows.filter(r => r.dH != null);
 if (scored.length) {
   const absH = scored.map(r => Math.abs(r.dH)).sort((a, b) => a - b), absS = scored.map(r => Math.abs(r.dS)).sort((a, b) => a - b);
-  if (FALLBACK) console.log(`\nfallback '${FALLBACK}': tracker weak in ${fbFrames} frames, fallback applied in ${fbUsed}`);
+  if (MEMORY) console.log(`\ntrack memory: held the previous track in ${heldFrames} frames`);
+if (FALLBACK) console.log(`\nfallback '${FALLBACK}': tracker weak in ${fbFrames} frames, fallback applied in ${fbUsed}`);
 console.log(`\nmotion field: segments active in ${segFrames} frames (${segRegs} segment vectors), region grid use ${JSON.stringify(regGrid)}`);
 console.log(`\nheading: median |error| ${absH[absH.length >> 1].toFixed(0)}°, 90th pct ${absH[Math.floor(absH.length * 0.9)].toFixed(0)}°, reversed (>120°) in ${scored.filter(r => Math.abs(r.dH) > 120).length}/${scored.length}`);
   console.log(`speed:   median |error| ${absS[absS.length >> 1].toFixed(0)} mph, 90th pct ${absS[Math.floor(absS.length * 0.9)].toFixed(0)} mph`);

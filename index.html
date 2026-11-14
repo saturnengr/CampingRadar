@@ -621,6 +621,50 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
 }
 
 // Velocity at a fine-grid cell, blended from regional vectors (inverse distance)
+/* Track memory. Storm motion does not jump: between scans a few minutes apart the heading rarely turns more than ~45° and the speed
+   rarely doubles. When a fresh estimate disagrees with the recent accepted track by more than that and is not clearly more
+   confident, the previous track is held (confidence decaying) rather than swinging the projection; three consistent
+   disagreements in a row (≈15 min) mean the storm really changed, and the new track is accepted. hist = recent accepted
+   motions [{t, vx, vy, conf}], newest last; returns {motion, held, reason}. Pure, so the replay harness measures it first. */
+function reconcileMotion(hist, cand, nowMs, opts) {
+  const o = Object.assign({ maxAgeMin: 40, maxTurnDeg: 45, maxSpeedRatio: 2.0, minSpeedMph: 8, confBonus: 0.15, persist: 3, decayPer10: 0.85 }, opts || {});
+  const recent = (hist || []).filter(h => nowMs - h.t <= o.maxAgeMin * 60000);
+  const prev = recent.length ? recent[recent.length - 1] : null;
+  const spd = m => Math.hypot(m.vx, m.vy) * 60 * 0.621371, hdg = m => (Math.atan2(m.vx, -m.vy) * 180 / Math.PI + 360) % 360;
+  const turn = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180);
+  const accept = (m, why) => ({ motion: m, held: false, reason: why });
+  if (!prev) return accept(cand, cand && cand.ok ? 'first' : 'no history');
+  const ageMin = (nowMs - prev.t) / 60000, prevConf = prev.conf * Math.pow(o.decayPer10, ageMin / 10);
+  const held = () => {
+    const m = { ok: true, regions: [], global: { vx: prev.vx, vy: prev.vy, conf: prevConf }, speedMph: spd(prev), headingDeg: hdg(prev), regionSize: 1, held: true, heldFromMin: Math.round(ageMin), baselineMin: prev.baselineMin || 30 };
+    return { motion: m, held: true, reason: '' };
+  };
+  if (!cand || !cand.ok) { const h = held(); h.reason = 'tracker lost it · holding the track from ' + Math.round(ageMin) + ' min ago'; return h; }
+  const g = cand.global, pS = spd(prev), cS = spd(g);
+  const slow = pS < o.minSpeedMph && cS < o.minSpeedMph;   // both nearly stationary: heading is meaningless, nothing to disagree about
+  const turned = !slow && turn(hdg(g), hdg(prev)) > o.maxTurnDeg;
+  const jumped = Math.max(cS, pS) > o.maxSpeedRatio * Math.max(o.minSpeedMph, Math.min(cS, pS));
+  if (!turned && !jumped) return accept(cand, 'consistent');
+  if (g.conf >= prevConf + o.confBonus) return accept(cand, 'changed, but clearly more confident');
+  // disagreement: count how many consecutive candidates have disagreed with the accepted track
+  const streak = (hist.disagree || 0) + 1;
+  if (streak >= o.persist) return accept(cand, 'changed for ' + streak + ' scans in a row · accepting the new track');
+  const h = held(); h.reason = (turned ? 'heading swung ' + Math.round(turn(hdg(g), hdg(prev))) + '°' : 'speed jumped ' + Math.round(pS) + '→' + Math.round(cS) + ' mph') + ' · holding the track from ' + Math.round(ageMin) + ' min ago (' + streak + '/' + o.persist + ')';
+  h.streak = streak; return h;
+}
+function rememberMotion(hist, result, nowMs) {   // bookkeeping for reconcileMotion: push accepted tracks, count held streaks, trim
+  hist = hist || []; const m = result.motion;
+  if (result.held) hist.disagree = result.streak || 0;
+  else { hist.disagree = 0; if (m && m.ok && !m.held) hist.push({ t: nowMs, vx: m.global.vx, vy: m.global.vy, conf: m.global.conf, baselineMin: m.baselineMin }); }
+  while (hist.length && nowMs - hist[0].t > 3 * 3600000) hist.shift();   // three hours of accepted track; the radar window itself is only three scans
+  while (hist.length > 60) hist.shift();
+  return hist;
+}
+function loadMotionHist() {   // the track survives a reload on an always-on display; it is tied to the location it was built for
+  try { const j = JSON.parse(localStorage.getItem('campRadar.motionHist') || 'null'); if (j && st.loc && Math.abs(j.lat - st.loc.lat) < 0.02 && Math.abs(j.lon - st.loc.lon) < 0.02 && Date.now() - j.saved < 3 * 3600000) { const h = j.hist || []; h.disagree = j.disagree || 0; return h; } } catch (e) { }
+  return [];
+}
+function saveMotionHist(h) { try { if (st.loc) localStorage.setItem('campRadar.motionHist', JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon, saved: Date.now(), hist: h, disagree: h.disagree || 0 })); } catch (e) { } }
 function makeVelocityField(motion, fineToCoarse) {
   const zero = { vx: 0, vy: 0 };
   if (!motion || !motion.ok) return () => zero;
@@ -841,7 +885,8 @@ const NC = { coreDbz: 45,   // a heavy core: downpour / thunderstorm cell, track
   // V4 arrival rules (chosen on the 71-case replay batch of 12 Nov 2026; see tools/replay/README.md)
   resumeMph: 5,      // fizzle memory releases once the edge is observed closing this fast
   closeMph: 10, nearMi: 15,   // observed closing at ≥ closeMph with echo inside nearMi outranks the projection
-  proxMi: 5,                  // no projected hit, but echo at/above threshold within proxMi and not receding → orange "may drift over you" (replay: −15 misses / +18 FA at 5 mi; 8 mi overreaches)
+  proxMi: 5,
+  motionMemory: true,         // reconcileMotion: hold the recent track when a single scan swings heading >45° or doubles speed without a confidence gain                  // no projected hit, but echo at/above threshold within proxMi and not receding → orange "may drift over you" (replay: −15 misses / +18 FA at 5 mi; 8 mi overreaches)
   grazeMin: 12, grazeCells: 6, // a projected hit that only clips the circle this briefly, with this little rain, is a pass
   recedeMph: 5,      // nearest echo of the hitting storm moving away this fast → not believed
   blueMin: 75,       // projected arrivals beyond this many minutes are "could reach you", not "arriving"
@@ -886,7 +931,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13b';
+const APP_VERSION = '2026.11.13c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1445,6 +1490,7 @@ function applyNight() {
 /* ----------------------------- location ---------------------------- */
 function setLocation(lat, lon, src) {
   const moved = !st.loc || distMi(st.loc, { lat, lon }) > 0.3;
+  if (moved && st.loc && distMi(st.loc, { lat, lon }) > 5) st.motionHist = [];   // a new place gets a fresh track; a drive within town keeps it
   st.loc = { lat, lon, src };
   S.lastLoc = { lat, lon, src }; save();
   drawRings();
@@ -1810,6 +1856,12 @@ async function runNowcast() {
       const m2 = estimateMotion(coarse[1], coarse[2], dt2, coarseKm, { maxKmh: NC.maxKmh });
       // keep whichever baseline is more confident; a clear win for the short one usually means the long one has decorrelated
       if (m2.ok && (!motion.ok || m2.global.conf > motion.global.conf * 1.15)) { m2.baselineMin = dt2; motion = m2; } else motion.baselineMin = dt1;
+    }
+    if (NC.motionMemory) {   // track memory: hold the recent track through a wild single-scan estimate
+      st.motionHist = st.motionHist || loadMotionHist();
+      const rec = reconcileMotion(st.motionHist, motion, fr[2].t);
+      st.motionHist = rememberMotion(st.motionHist, rec, fr[2].t); saveMotionHist(st.motionHist);
+      if (rec.held) { motion = rec.motion; motion.heldReason = rec.reason; }
     }
     const vel = makeVelocityField(motion, NC.coarse);
     const c = R / NC.fineCellPx;
@@ -2609,7 +2661,7 @@ function computeStatus() {
   if (stale) { out.main = 'Rain tracking unavailable'; out.sub = st.ncErr || 'Radar data is out of date — check the internet connection'; return overlayLightning(out); }
   const { res, motion } = st.nc, hit = res.hit, lat = radarLag();
   out.rings = Object.assign({}, res.rings);
-  const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph'
+  const moving = motion.ok && motion.speedMph >= 3 ? 'Storms moving ' + compass(motion.headingDeg) + ' at ' + Math.round(motion.speedMph) + ' mph' + (motion.held ? ' (track held)' : '')
     : motion.ok ? 'Rain nearly stationary' : '';
   // Light echoes with a dry forecast or dry air underneath mostly evaporate before they reach the ground (virga)
   const ob = st.wx.obs, dewSpread = ob && ob.tempF != null && ob.dewF != null ? ob.tempF - ob.dewF : null, dryAir = dewSpread != null && dewSpread >= 15;
@@ -4330,7 +4382,7 @@ function renderDiag() {
     'Radar: ' + (S.source === 'mrms' ? 'NOAA MRMS filtered' : 'raw NEXRAD (IEM)') + ' · tiles since last refresh: ' + ((st.tileStats || {}).ok || 0) + ' loaded, ' + ((st.tileStats || {}).err || 0) + ' failed' + ((st.tileStats || {}).retried ? ', ' + (st.tileStats || {}).retried + ' retried direct' : '') + ((st.tileStats || {}).onShow ? ' · frame on show holds ' + (st.tileStats || {}).onShow + ' tiles' : '') + ((st.tileStats || {}).watchdog ? ' · watchdog redraws ' + (st.tileStats || {}).watchdog : '') + ' (' + ((st.tileStats || {}).backend || 0) + ' via backend, ' + ((st.tileStats || {}).noaa || 0) + ' direct from NOAA)' + ((st.tileStats || {}).lastErr ? ' · last failure: ' + (st.tileStats || {}).lastErr : '') + ((st.tileStats || {}).lastAlt ? ' · last retry went to: ' + (st.tileStats || {}).lastAlt : '') + ((st.tileStats || {}).altErr ? ' · retry error: ' + (st.tileStats || {}).altErr : '') + ', tracking ±' + trackRadiusMi() + ' mi' + (overviewAllowed() ? '' : ' (free; Pro tracks 120 mi, 200 with the overview rings)') + (st.latestRadar ? ', latest scan ' + clock(st.latestRadar) + ' (' + Math.round(radarLag()) + ' min ago' + (st.timesFromBackend ? ', times from backend' : ', times from NOAA') + ')' + (st.timesFromServer ? '' : ' (estimated)') : '') + (st.radarTimesErr ? ' · last time check failed: ' + st.radarTimesErr : ''),
     'Rain tracking: ' + (st.ncErr ? 'ERROR — ' + st.ncErr : 'OK, ' + ago(st.ncAt)),
     'Storm trends: ' + (st.nc && st.nc.trends ? (st.nc.trends.filter(t => t.word === 'strengthening').length + ' strengthening, ' + st.nc.trends.filter(t => t.word === 'weakening').length + ' weakening, ' + st.nc.trends.filter(t => t.word === 'steady').length + ' steady, ' + st.nc.trends.filter(t => t.word === 'new').length + ' new') : '—') + (st.nc && st.nc.res.hit && st.nc.res.hit.trend ? ' · arriving storm: ' + st.nc.res.hit.trend.word + (st.nc.res.hit.fizzles ? ' (likely to fizzle first)' : '') : ''),
-    'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' : 'unclear — ' + (m.reason || '')) : '—'),
+    'Storm motion: ' + (m ? (m.ok ? compass(m.headingDeg) + ' ' + Math.round(m.speedMph) + ' mph (confidence ' + m.global.conf.toFixed(2) + ', ' + m.regions.filter(r => r.ok).length + '/9 areas)' + (m.held ? ' · ' + m.heldReason : '') + (st.motionHist && st.motionHist.length ? ' · track memory ' + st.motionHist.length + ' scans over ' + Math.round((Date.now() - st.motionHist[0].t) / 60000) + ' min' : '') : 'unclear — ' + (m.reason || '')) : '—'),
     'NWS weather: ' + (st.wx.err ? 'ERROR — ' + st.wx.err : ago(st.wx.obsAt)) + (st.wx.stationId ? ' · station ' + st.wx.stationId : '') + ' · precip type ' + precipType() + (st.wx.visMi != null ? ' · visibility ' + st.wx.visMi.toFixed(1) + ' mi' : '') + (st.wx.pop2h != null ? ' · rain chance next 2 h ' + st.wx.pop2h + '%' : ''),
     'NWS alerts: ' + (st.alertsErr ? 'ERROR — ' + st.alertsErr : ago(st.alertsAt) + ', ' + st.alerts.length + ' active'),
     'Backend: ' + (BE() ? BE() + (st.backendOk === false ? ' — unreachable' : st.backendOk ? ' — OK' : '') : 'none (standalone)'),

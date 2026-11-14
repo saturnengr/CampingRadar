@@ -212,6 +212,50 @@ function estimateMotion(gA, gB, dtMin, cellKm, opts) {
 }
 
 // Velocity at a fine-grid cell, blended from regional vectors (inverse distance)
+/* Track memory. Storm motion does not jump: between scans a few minutes apart the heading rarely turns more than ~45° and the speed
+   rarely doubles. When a fresh estimate disagrees with the recent accepted track by more than that and is not clearly more
+   confident, the previous track is held (confidence decaying) rather than swinging the projection; three consistent
+   disagreements in a row (≈15 min) mean the storm really changed, and the new track is accepted. hist = recent accepted
+   motions [{t, vx, vy, conf}], newest last; returns {motion, held, reason}. Pure, so the replay harness measures it first. */
+function reconcileMotion(hist, cand, nowMs, opts) {
+  const o = Object.assign({ maxAgeMin: 40, maxTurnDeg: 45, maxSpeedRatio: 2.0, minSpeedMph: 8, confBonus: 0.15, persist: 3, decayPer10: 0.85 }, opts || {});
+  const recent = (hist || []).filter(h => nowMs - h.t <= o.maxAgeMin * 60000);
+  const prev = recent.length ? recent[recent.length - 1] : null;
+  const spd = m => Math.hypot(m.vx, m.vy) * 60 * 0.621371, hdg = m => (Math.atan2(m.vx, -m.vy) * 180 / Math.PI + 360) % 360;
+  const turn = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180);
+  const accept = (m, why) => ({ motion: m, held: false, reason: why });
+  if (!prev) return accept(cand, cand && cand.ok ? 'first' : 'no history');
+  const ageMin = (nowMs - prev.t) / 60000, prevConf = prev.conf * Math.pow(o.decayPer10, ageMin / 10);
+  const held = () => {
+    const m = { ok: true, regions: [], global: { vx: prev.vx, vy: prev.vy, conf: prevConf }, speedMph: spd(prev), headingDeg: hdg(prev), regionSize: 1, held: true, heldFromMin: Math.round(ageMin), baselineMin: prev.baselineMin || 30 };
+    return { motion: m, held: true, reason: '' };
+  };
+  if (!cand || !cand.ok) { const h = held(); h.reason = 'tracker lost it · holding the track from ' + Math.round(ageMin) + ' min ago'; return h; }
+  const g = cand.global, pS = spd(prev), cS = spd(g);
+  const slow = pS < o.minSpeedMph && cS < o.minSpeedMph;   // both nearly stationary: heading is meaningless, nothing to disagree about
+  const turned = !slow && turn(hdg(g), hdg(prev)) > o.maxTurnDeg;
+  const jumped = Math.max(cS, pS) > o.maxSpeedRatio * Math.max(o.minSpeedMph, Math.min(cS, pS));
+  if (!turned && !jumped) return accept(cand, 'consistent');
+  if (g.conf >= prevConf + o.confBonus) return accept(cand, 'changed, but clearly more confident');
+  // disagreement: count how many consecutive candidates have disagreed with the accepted track
+  const streak = (hist.disagree || 0) + 1;
+  if (streak >= o.persist) return accept(cand, 'changed for ' + streak + ' scans in a row · accepting the new track');
+  const h = held(); h.reason = (turned ? 'heading swung ' + Math.round(turn(hdg(g), hdg(prev))) + '°' : 'speed jumped ' + Math.round(pS) + '→' + Math.round(cS) + ' mph') + ' · holding the track from ' + Math.round(ageMin) + ' min ago (' + streak + '/' + o.persist + ')';
+  h.streak = streak; return h;
+}
+function rememberMotion(hist, result, nowMs) {   // bookkeeping for reconcileMotion: push accepted tracks, count held streaks, trim
+  hist = hist || []; const m = result.motion;
+  if (result.held) hist.disagree = result.streak || 0;
+  else { hist.disagree = 0; if (m && m.ok && !m.held) hist.push({ t: nowMs, vx: m.global.vx, vy: m.global.vy, conf: m.global.conf, baselineMin: m.baselineMin }); }
+  while (hist.length && nowMs - hist[0].t > 3 * 3600000) hist.shift();   // three hours of accepted track; the radar window itself is only three scans
+  while (hist.length > 60) hist.shift();
+  return hist;
+}
+function loadMotionHist() {   // the track survives a reload on an always-on display; it is tied to the location it was built for
+  try { const j = JSON.parse(localStorage.getItem('campRadar.motionHist') || 'null'); if (j && st.loc && Math.abs(j.lat - st.loc.lat) < 0.02 && Math.abs(j.lon - st.loc.lon) < 0.02 && Date.now() - j.saved < 3 * 3600000) { const h = j.hist || []; h.disagree = j.disagree || 0; return h; } } catch (e) { }
+  return [];
+}
+function saveMotionHist(h) { try { if (st.loc) localStorage.setItem('campRadar.motionHist', JSON.stringify({ lat: st.loc.lat, lon: st.loc.lon, saved: Date.now(), hist: h, disagree: h.disagree || 0 })); } catch (e) { } }
 function makeVelocityField(motion, fineToCoarse) {
   const zero = { vx: 0, vy: 0 };
   if (!motion || !motion.ok) return () => zero;
@@ -265,6 +309,15 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
   const ringR = [2, 5, 10, 30, 50, 100, 120, 150], farRing = Math.max(opts.maxRingMi || 50, 150);
   let nearest = null, passing = null, hits = 0, eta = Infinity, end = 0, maxDbz = -99, from = null, hitBlob = null, nearestBlob = null, hitDist = null;
   const hitBlobCells = new Map();
+  // Per-ring entry times (minutes) for the range rings: ringIn[r] = {t, maxDbz} earliest a cell that will HIT you enters the circle of
+  // radius r (t = 0 when already inside); ringMiss[r] = earliest a cell that will NOT hit you enters it. Drives the ring styling.
+  const RR = opts.ringRadii || [10, 30, 50], ringIn = {}, ringMiss = {};
+  const enterT = (e, n, ve, vn, a, dist, r) => {
+    if (dist <= r) return 0;
+    if (a < 1e-9) return null;
+    const b = 2 * (e * ve + n * vn), c = dist * dist - r * r, disc = b * b - 4 * a * c; if (disc < 0) return null;
+    const t = (-b - Math.sqrt(disc)) / (2 * a); return t >= 0 && t <= horizon ? t : null;
+  };
   for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
     const d = grid.d[y * grid.w + x];
     if (d < thresh) continue;
@@ -288,6 +341,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
         if (t2 >= 0 && t1 <= horizon) { tIn = Math.max(0, t1); tOut = Math.min(horizon, t2); }
       }
     }
+    if (dist <= farRing) for (const r of RR) { const t = enterT(e, n, ve, vn, a, dist, r); if (t == null) continue; if (tIn !== null) { const q = ringIn[r]; if (!q || t < q.t) ringIn[r] = { t, maxDbz: q && q.maxDbz > d ? q.maxDbz : d }; else if (d > q.maxDbz) q.maxDbz = d; } else if (ringMiss[r] == null || t < ringMiss[r]) ringMiss[r] = t; }
     if (tIn !== null) {
       hits++;
       if (tIn < eta) { eta = tIn; from = bearingDeg(e, n); hitDist = dist; hitBlob = labels ? labels[y * grid.w + x] : null; }
@@ -302,7 +356,7 @@ function predictRain(grid, cellKm, cx, cy, vel, opts, labels) {
     }
   }
   const hit = hits >= (opts.minHitCells || 2) ? { etaMin: eta, endMin: end, maxDbz, fromBearing: from, distMi: hitDist, cells: hits, blob: hitBlob, blobCells: hitBlobCells } : null;
-  return { rings, nearest, passing, hit, nearestBlob };
+  return { rings, nearest, passing, hit, nearestBlob, ringIn, ringMiss };
 }
 /* ---- intensity trends: track each storm cell across frames ---- */
 // Connected rain blobs (8-neighbour) above thresh; returns labels per cell and per-blob stats.
@@ -394,4 +448,4 @@ function edgeCheck(hist, now, nearest, motion) {
   return out;
 }
 
-module.exports={colorToDbz,gridFromRGBA,downsampleMax,despeckle,intensityField,bestShift,centroidOf,estimateMotion,makeVelocityField,predictRain,labelBlobs,matchBlobs,blobTrends,nearestEcho,edgeCheck};
+module.exports={colorToDbz,gridFromRGBA,downsampleMax,despeckle,intensityField,bestShift,centroidOf,estimateMotion,reconcileMotion,rememberMotion,makeVelocityField,predictRain,labelBlobs,matchBlobs,blobTrends,nearestEcho,edgeCheck};
