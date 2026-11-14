@@ -67,7 +67,7 @@ public sealed class RouteService
     {
         var keyOrs = _cfg["Routing:OrsKey"]; var list = new List<Place>();
         if (string.IsNullOrEmpty(keyOrs) || string.IsNullOrWhiteSpace(text)) return list;
-        var url = $"{OrsBase}/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text.Trim())}&size=6&boundary.country=US,CA" +
+        var url = $"{OrsBase}/geocode/search?api_key={Uri.EscapeDataString(keyOrs)}&text={Uri.EscapeDataString(text.Trim())}&size=10&boundary.country=US,CA&layers=locality,localadmin,borough,neighbourhood,venue,address,street" +
                   (nearLat is { } la && nearLon is { } lo ? $"&focus.point.lat={la.ToString(CultureInfo.InvariantCulture)}&focus.point.lon={lo.ToString(CultureInfo.InvariantCulture)}" : "");
         try
         {
@@ -80,7 +80,10 @@ public sealed class RouteService
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "ors geocode"); }
-        return list;
+        // Pelias is fuzzy: keep the ones that actually contain what was typed (first word at least) unless that leaves almost nothing
+        var first = text.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+        var tight = list.Where(p => (p.Name + " " + p.Label).Contains(first, StringComparison.OrdinalIgnoreCase)).ToList();
+        return (tight.Count >= 1 ? tight : list).Take(6).ToList();
     }
 
     /// <summary>Keep at most n points, dropping the least significant (the app only needs the shape to a few hundred metres).</summary>
