@@ -967,7 +967,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14d';
+const APP_VERSION = '2026.11.14e';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2424,10 +2424,13 @@ function addAwayLabel(bearingDeg, distMi, html) {
 function drawTravel() {   // where YOU will be at +15/+30/+60 if you hold heading and speed, in the storm outlines' colours
   const tv = travelling(); if (!st.loc) return;
   const night = document.body.classList.contains('night'), halo = night ? '#000' : '#fff';
-  if (st.route && S.destination) {   // the whole road, faint — shown as soon as a trip is set so it can be checked before pulling out
-    L.polyline(st.route.coords, { pane: 'hazards', color: '#e8eef3', weight: 2, opacity: 0.35, interactive: false }).addTo(motionLayer);
+  if (st.route && S.destination) {   // the whole road — shown as soon as a trip is set so it can be checked before pulling out
+    const roadCol = night ? '#b388ff' : '#7b1fa2';   // violet: not a ring, outline or radar colour
+    L.polyline(st.route.coords, { pane: 'hazards', color: halo, weight: 7, opacity: night ? 0.55 : 0.8, interactive: false }).addTo(motionLayer);
+    L.polyline(st.route.coords, { pane: 'hazards', color: roadCol, weight: 3.5, opacity: night ? 0.75 : 0.95, interactive: false }).addTo(motionLayer);
     const end = st.route.coords[st.route.coords.length - 1];
-    L.circleMarker(end, { pane: 'hazards', radius: 5, color: halo, weight: 3, opacity: 0.6, fillColor: '#e8eef3', fillOpacity: 1, interactive: false }).addTo(motionLayer);
+    L.circleMarker(end, { pane: 'hazards', radius: 7, color: halo, weight: 3, opacity: 0.9, fillColor: roadCol, fillOpacity: 1, interactive: false }).addTo(motionLayer);
+    L.marker(end, { pane: 'hazards', interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl" style="color:' + roadCol + '">' + esc((S.destination.name || '').slice(0, 22)) + '</span>', iconSize: [0, 0], iconAnchor: [-10, 6] }) }).addTo(motionLayer);
   }
   if (!tv.moving || tv.headingDeg == null || !(tv.mph >= 3)) return;
   const path = (st.nc && st.nc.res && st.nc.res.movingFrame && st.nc.res.movingFrame.path) || travelPath(tv.mph, tv.headingDeg, 60); if (!path) return;
