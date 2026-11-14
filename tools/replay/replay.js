@@ -7,24 +7,24 @@ const C = require('./core.js');
 
 const HELP = `VantageWX replay harness — runs the app's nowcast core over a recorded storm and scores it.
 
-usage:  node replay.js <recording-folder> [radiusMi] [flags]
+usage:  node replay.js <recording-folder> [radiusMi] [options]
 
   <recording-folder>   a folder with meta.json and the <t>.png MRMS frames (from /admin/record/page → zip, or the Training repo)
   radiusMi             evaluation radius around the "you" point, default 120 (use 100 with --site so the window stays in frame)
 
-flags
+what to score
   --v4                 score the deployed rule set (V4 strict) and the 12-setting sweep; the deployed row is  bn0_bm75_cl10
   --why                with --v4: list every miss and false alarm with what the tracker saw at the time
   --site=lat,lon[:name]  evaluate a different point inside the same recording (re-centred window, site-relative gauge distances)
-  --gauge-mi=N         gauge truth radius in miles, default 5
+  --gauge-mi=5         gauge truth radius in miles
   --dry                motion and truth only; skip the rule scoring
 
-environment (experiments; defaults are what the app ships)
-  THRESH=10|15|20|30   alert threshold in dBZ, also the radar-truth bar (default 20)
-  PROX_MI=5            proximity rule: no projected hit, echo within N mi not receding → orange (0 = off; app ships 5)
-  FALLBACK=long|oracle motion fallback when tracker confidence < FB_CONF (default 0.5); both measured worse — leave off
-  MOTION_REGIONS=3|4|5 MOTION_REGIONS_AUTO=1 MOTION_SEGMENTS=1 MOTION_SEG_KM=50 MOTION_SEG_MIN_KM=100   motion-field experiments (off in the app)
-  V4_BLUE_MIN=75 V4_BLUE_NEAR_MI=25 V4_CLOSE_MPH=10 V4_NEAR_MI=15 V4_GRAZE_MIN=12 V4_GRAZE_CELLS=6 V4_RECEDE_MPH=5 V4_RESUME_MPH=5   V4 tunables
+experiments (defaults are what the app ships; all take --name=value)
+  --thresh=20          alert threshold in dBZ, also the radar-truth bar: 10 any echo · 15 light (app default) · 20 · 30 moderate
+  --prox-mi=0          proximity rule: no projected hit, echo within N mi not receding → orange (app ships 5; 0 = off)
+  --fallback=long|oracle   motion fallback when tracker confidence is below --fb-conf=0.5 (both measured worse; off by default)
+  --motion-regions=3|4|5  --motion-regions-auto=1  --motion-segments=1  --motion-seg-km=50  --motion-seg-min-km=100   motion-field experiments
+  --v4-blue-min=75  --v4-blue-near-mi=25  --v4-close-mph=10  --v4-near-mi=15  --v4-graze-min=12  --v4-graze-cells=6  --v4-recede-mph=5  --v4-resume-mph=5
 
 reading the output
   "rain (≥T dBZ) at the centre"   when radar truth first hit the point, and a strip of the whole recording (# wet . faint)
@@ -36,11 +36,12 @@ reading the output
 examples
   node replay.js C:\\rec\\Toronto-canada-20261111-1651 120 --v4
   node replay.js C:\\rec\\Toronto-canada-20261111-1651 100 --v4 --site=43.08,-79.48:niagara-s40 --why
-  set THRESH=15 && node replay.js C:\\rec\\Toronto-canada-20261111-1651 120 --v4        (Windows)
-  THRESH=15 node replay.js ~/rec/Toronto-canada-20261111-1651 120 --v4                 (bash)
+  node replay.js C:\\rec\\Toronto-canada-20261111-1651 120 --v4 --thresh=15 --prox-mi=5
 `;
 if (process.argv.length < 3 || ['-h', '--help', 'help'].includes(process.argv[2])) { console.log(HELP); process.exit(0); }
 if (!fs.existsSync(path.join(process.argv[2], 'meta.json'))) { console.error(`no meta.json in ${process.argv[2]} — pass the recording folder itself (the one holding the .png frames)\n`); console.log(HELP); process.exit(1); }
+// options: --name=value on the command line; an environment variable of the upper-case name is accepted too (the batch scripts use that)
+const opt = (name, dflt) => { const a = process.argv.find(x => x === '--' + name || x.startsWith('--' + name + '=')); if (a) return a.includes('=') ? a.slice(a.indexOf('=') + 1) : '1'; const e = process.env[name.toUpperCase().replace(/-/g, '_')]; return e !== undefined && e !== '' ? e : dflt; };
 const dir = process.argv[2]; const radiusMi = +(process.argv[3] || 120);
 const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const MI = 1609.344, mpp = meta.metersPerPx, size = meta.sizePx, half = size / 2;
@@ -54,19 +55,19 @@ const haversineMi = (la1, lo1, la2, lo2) => { const R = 3958.8, dLa = (la2 - la1
 if (SITE) console.log(`site ${SITE.name} (${SITE.lat}, ${SITE.lon}): ${haversineMi(meta.lat, meta.lon, SITE.lat, SITE.lon).toFixed(0)} mi from the recording centre, crop centre px ${cxPx.toFixed(0)},${cyPx.toFixed(0)}`);
 const fineCellPx = 4, coarseF = 2;                 // zoom 8 × 4 px = the page's zoom 7 × 2 px (≈2.05 km)
 const fineKm = mpp * fineCellPx / 1000, coarseKm = fineKm * coarseF;
-const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = +(process.env.THRESH || 20), hitMi = 3;   // THRESH = the app's alert threshold (10 any echo / 15 light / 20 / 30 moderate); radar truth uses the same bar
+const R = Math.round(radiusMi * MI / mpp), c = R / fineCellPx, thresh = +(opt('thresh', 20)), hitMi = 3;   // THRESH = the app's alert threshold (10 any echo / 15 light / 20 / 30 moderate); radar truth uses the same bar
 const times = fs.readdirSync(dir).filter(f => /^\d+\.png$/.test(f)).map(f => +f.slice(0, -4)).sort((a, b) => a - b);
 const tz = 'America/Chicago', clock = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
 
 // motion-field variants (env): MOTION_REGIONS=3|4|5, MOTION_REGIONS_AUTO=1, MOTION_SEGMENTS=1 (+ MOTION_SEG_KM, MOTION_SEG_MIN_KM)
-const MOPTS = { maxKmh: 110, regions: +(process.env.MOTION_REGIONS || 0) || undefined, regionsAuto: !!process.env.MOTION_REGIONS_AUTO, segments: !!process.env.MOTION_SEGMENTS, segKm: +(process.env.MOTION_SEG_KM || 50), segMinKm: +(process.env.MOTION_SEG_MIN_KM || 100), thresh };
+const MOPTS = { maxKmh: 110, regions: +opt('motion-regions', 0) || undefined, regionsAuto: !!+opt('motion-regions-auto', 0), segments: !!+opt('motion-segments', 0), segKm: +opt('motion-seg-km', 50), segMinKm: +opt('motion-seg-min-km', 100), thresh };
 // motion fallback experiment (env): FALLBACK=long  → when the tracker is not ok or its confidence is below FB_CONF (default 0.5), use the
 // 60-minute long-baseline whole-window match instead (real-time capable: it only looks back);  FALLBACK=oracle → use the recording-wide
 // median of confident motions (an upper bound: what a perfect steering wind would buy). FB_CONF overrides the threshold.
 // proximity experiment (env PROX_MI): with no projected hit, echo at/above the threshold within PROX_MI miles that is not receding
 // (edge rate > -5 mph) raises orange — "rain nearby, may drift over you". Targets the stationary light-echo misses (lake effect, drizzle).
-const PROX_MI = +(process.env.PROX_MI || 0);
-const FALLBACK = process.env.FALLBACK || '', FB_CONF = +(process.env.FB_CONF || 0.5);
+const PROX_MI = +opt('prox-mi', 0);
+const FALLBACK = opt('fallback', ''), FB_CONF = +opt('fb-conf', 0.5);
 let fbUsed = 0, fbFrames = 0, oracleVec = null;
 function synthMotion(vx, vy, tag) { return { ok: true, regions: [], global: { vx, vy, conf: FB_CONF }, speedMph: Math.hypot(vx, vy) * 60 * 0.621371, headingDeg: (Math.atan2(vx, -vy) * 180 / Math.PI + 360) % 360, regionSize: 1, fallback: tag, baselineMin: 60 }; }
 const cache = new Map();
@@ -204,7 +205,7 @@ const rows = []; const hist = []; let segFrames = 0, segRegs = 0, regGrid = {}; 
    6. the edge rules (stalled / slow / receding) describe the NEAREST echo; they only speak for the arrival when that echo is part of
       the storm projected to hit, and never override a big strong arrival (≥ 40 dBZ or ≥ 100 cells, which the projection gets right).
    Tunables via env: V4_GRAZE_MIN (12), V4_GRAZE_CELLS (6), V4_RESUME_MPH (5), V4_BLUE_MIN (75), V4_RECEDE_MPH (5), V4_NEAR_MI (15), V4_CLOSE_MPH (10). */
-const V4 = process.argv.includes('--v4'), GRAZE_MIN = +(process.env.V4_GRAZE_MIN || 12), GRAZE_CELLS = +(process.env.V4_GRAZE_CELLS || 6), RESUME_MPH = +(process.env.V4_RESUME_MPH || 5), BLUE_MIN = +(process.env.V4_BLUE_MIN || 75), RECEDE_MPH = +(process.env.V4_RECEDE_MPH || 5), NEAR_MI = +(process.env.V4_NEAR_MI || 15), CLOSE_MPH = +(process.env.V4_CLOSE_MPH || 10), BLUE_NEAR_MI = +(process.env.V4_BLUE_NEAR_MI || 25);
+const V4 = process.argv.includes('--v4'), GRAZE_MIN = +opt('v4-graze-min', 12), GRAZE_CELLS = +opt('v4-graze-cells', 6), RESUME_MPH = +opt('v4-resume-mph', 5), BLUE_MIN = +opt('v4-blue-min', 75), RECEDE_MPH = +opt('v4-recede-mph', 5), NEAR_MI = +opt('v4-near-mi', 15), CLOSE_MPH = +opt('v4-close-mph', 10), BLUE_NEAR_MI = +opt('v4-blue-near-mi', 25);
 let fizzleSeen4 = 0;
 const SWEEP = [];   // name → settings; scored in the summary when --v4 is given
 for (const blueNear of [0, 15, 25]) for (const blueMin of [75, 90]) for (const close of [10, 15])
@@ -315,7 +316,7 @@ if (V4) console.log('v4 rules:  ' + score('v4C') + `  [fizzle escape ${RESUME_MP
    gauge.jsonl: the point's own airport {t, station, precipMm, wx, present}. A report is "wet" when its hourly total is ≥ 0.01 in or
    present weather says rain/drizzle/thunder/snow. The hour it covers ends at t, so rain "arrived" somewhere inside (t − 60 min, t];
    we take the midpoint. Radar truth (≥20 dBZ at the centre) and gauge truth disagree exactly where virga and fine drizzle live. */
-const GAUGE_MI = +(process.argv.find(a => a.startsWith('--gauge-mi='))?.slice(11) || 5);
+const GAUGE_MI = +opt('gauge-mi', 5);
 function loadGauges() {
   const out = [];
   for (const [file, kind] of [['gauge-madis.jsonl', 'madis'], ['gauge.jsonl', 'airport']]) {

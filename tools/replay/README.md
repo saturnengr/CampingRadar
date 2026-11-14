@@ -69,3 +69,7 @@ two flanks, two misses — from one set of frames rather than recording three ov
 Caveat: gauge and camera ground truth are collected by the backend around the recording's sample points, so a site far from
 the centre may have little gauge truth nearby; the radar-truth columns are always available. Site names appear in the output
 header; the batch scripts can loop over `--site` values per recording.
+
+## Options
+
+Every setting is a `--name=value` option; run `node replay.js` with no arguments for the full list with defaults (environment variables of the upper-case name still work, for the batch scripts).
