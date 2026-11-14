@@ -967,7 +967,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14b';
+const APP_VERSION = '2026.11.14c';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -3152,6 +3152,7 @@ $('#routeBtn').onclick = openRouteSheet; $('#routeClose').onclick = () => { $('#
 $('#routeQ').addEventListener('input', e => { clearTimeout(routeSearchTimer); routeSearchTimer = setTimeout(() => routeSearch(e.target.value.trim()), 350); });
 $('#routeClear').onclick = () => { $('#routeSheet').hidden = true; setDestination(null); };
 document.querySelectorAll('#routeMode button').forEach(b => b.onclick = () => { S.travelMode = b.dataset.m; save(); st.ncAt = 0; runNowcast(); updateRouteUi(); });
+updateRouteUi();   // show the Trip button from the start, not only once motion is detected
 $('#snoozeBtn').addEventListener('click', ev => {
   ev.stopPropagation();
   const m = $('#snoozeMenu'); m.style.top = ($('#statusbar').getBoundingClientRect().bottom + 6) + 'px';
