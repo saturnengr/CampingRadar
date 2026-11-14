@@ -931,7 +931,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.13e';
+const APP_VERSION = '2026.11.13f';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2277,8 +2277,23 @@ function addAwayLabel(bearingDeg, distMi, html) {
   } catch (e) {}
   L.marker(ll, { icon: awayLabel(bearingDeg, html), pane: 'hazards', interactive: false }).addTo(motionLayer);
 }
+function drawTravel() {   // where YOU will be at +15/+30/+60 if you hold heading and speed, in the storm outlines' colours
+  const tv = travelling(); if (!tv.moving || tv.headingDeg == null || !(tv.mph >= 3) || !st.loc) return;
+  const dest = (mi) => { const d = mi / 3958.8, b = tv.headingDeg * Math.PI / 180, f1 = st.loc.lat * Math.PI / 180, l1 = st.loc.lon * Math.PI / 180; const f2 = Math.asin(Math.sin(f1) * Math.cos(d) + Math.cos(f1) * Math.sin(d) * Math.cos(b)); const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(f1), Math.cos(d) - Math.sin(f1) * Math.sin(f2)); return [f2 * 180 / Math.PI, l2 * 180 / Math.PI]; };
+  const night = document.body.classList.contains('night'), halo = night ? '#000' : '#fff';
+  const pts = [[st.loc.lat, st.loc.lon], ...[15, 30, 60].map(m => dest(tv.mph * m / 60))];
+  L.polyline(pts, { pane: 'hazards', color: halo, weight: 5, opacity: 0.5, interactive: false }).addTo(motionLayer);
+  L.polyline(pts, { pane: 'hazards', color: '#e8eef3', weight: 2, dashArray: '4 8', opacity: 0.9, interactive: false }).addTo(motionLayer);
+  [15, 30, 60].forEach((m, i) => {
+    const ll = pts[i + 1];
+    L.circleMarker(ll, { pane: 'hazards', radius: 6, color: halo, weight: 4, opacity: 0.6, fillColor: GHOST_COLORS[m], fillOpacity: 1, interactive: false }).addTo(motionLayer);
+    L.circleMarker(ll, { pane: 'hazards', radius: 6, color: GHOST_COLORS[m], weight: 2, fillColor: GHOST_COLORS[m], fillOpacity: 1, interactive: false }).addTo(motionLayer);
+    L.marker(ll, { pane: 'hazards', interactive: false, icon: L.divIcon({ className: '', html: '<span class="ringlbl" style="color:' + GHOST_COLORS[m] + '">you +' + m + '</span>', iconSize: [0, 0], iconAnchor: [-9, 6] }) }).addTo(motionLayer);
+  });
+}
 function drawMotion() {
   motionLayer.clearLayers(); awayLabelCount = 0;
+  try { drawTravel(); } catch (e) { }
   if (S.layers.motion === false || !st.nc || !st.nc.geo || !st.nc.motion || !st.nc.motion.ok) return;
   const { geo, grid, labels, blobs, vel, motion, res } = st.nc, { center, R, z, cellPx, fineKm } = geo;
   const toLL = (cx, cy) => { const p = pxToLonLat(center.x - R + (cx + 0.5) * cellPx, center.y - R + (cy + 0.5) * cellPx, z); return [p.lat, p.lon]; };
