@@ -70,9 +70,9 @@ body.noclock #clock{display:none}
 .ring[data-rs=dotted]::before{content:"\25CC";opacity:1}.ring[data-rs=solid]::before{content:"\25CF";opacity:1}
 #snoozeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
 #routeBtn{background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.3);white-space:nowrap}
-#routeSheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+#routeSheet{position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding-top:max(10px,env(safe-area-inset-top,0px))}
 #routeSheet[hidden]{display:none}
-.rs-box{background:#141a20;color:#e8eef3;width:min(560px,100%);border-radius:14px 14px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom,0px));box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+.rs-box{background:#141a20;color:#e8eef3;width:min(560px,100%);border-radius:14px;max-height:90vh;overflow:auto;box-sizing:border-box;padding:14px 16px calc(16px + env(safe-area-inset-bottom,0px));box-shadow:0 -8px 30px rgba(0,0,0,.5)}
 @media (min-width:700px){#routeSheet{align-items:center}.rs-box{border-radius:14px}}
 .rs-head{display:flex;justify-content:space-between;align-items:center;font-size:16px}.rs-x{background:transparent;border:0;color:#9fb3c2;font-size:18px;cursor:pointer}
 .rs-sub{color:#9fb3c2;font-size:13px;margin:6px 0 10px}
@@ -374,17 +374,6 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <button id="routeBtn" title="Set a destination so rain is judged along your road" hidden>Where to?</button>
   <button id="snoozeBtn">Snooze</button>
 </div>
-<div id="routeSheet" hidden>
-  <div class="rs-box">
-    <div class="rs-head"><b>Where are you heading?</b><button id="routeClose" class="rs-x" aria-label="Close">✕</button></div>
-    <p class="rs-sub">With a destination, rain is judged along your road — where you will be, not a straight line. Type a town, an address or a park.</p>
-    <input id="routeQ" type="search" placeholder="e.g. Lake Texoma, or 400 Main St Denison" autocomplete="off">
-    <div id="routeResults"></div>
-    <div id="routeNow" class="rs-sub"></div>
-    <div class="rs-mode"><span>Travel mode</span><div id="routeMode" role="radiogroup"><button data-m="auto">Auto</button><button data-m="mobile">Driving</button><button data-m="stationary">Parked</button></div><small id="routeModeNow"></small></div>
-    <p class="rs-actions"><button id="routeClear" hidden>Clear destination</button></p>
-  </div>
-</div>
 <div id="clock" hidden><div id="clockTime">--:--</div><div id="clockDate"></div></div>
 </div>
 
@@ -419,6 +408,17 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
   <button id="snoozeCancel" hidden>Cancel snooze</button>
 </div>
 
+<div id="routeSheet" hidden>
+  <div class="rs-box">
+    <div class="rs-head"><b>Where are you heading?</b><button id="routeClose" class="rs-x" aria-label="Close">✕</button></div>
+    <p class="rs-sub">With a destination, rain is judged along your road — where you will be, not a straight line. Type a town, an address or a park.</p>
+    <input id="routeQ" type="search" placeholder="e.g. Lake Texoma, or 400 Main St Denison" autocomplete="off">
+    <div id="routeResults"></div>
+    <div id="routeNow" class="rs-sub"></div>
+    <div class="rs-mode"><span>Travel mode</span><div id="routeMode" role="radiogroup"><button data-m="auto">Auto</button><button data-m="mobile">Driving</button><button data-m="stationary">Parked</button></div><small id="routeModeNow"></small></div>
+    <p class="rs-actions"><button id="routeClear" hidden>Clear destination</button></p>
+  </div>
+</div>
 <div id="modal" hidden><div class="sheetwrap"><button id="sheetClose" aria-label="Close" title="Close">✕</button><div class="sheet" id="sheet"></div></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -967,7 +967,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14c';
+const APP_VERSION = '2026.11.14d';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
