@@ -156,3 +156,21 @@ Public webcams see what radar and gauges cannot: fog and visibility, wet ground 
 ### Weather-station directory and layer (decided 2026-11-13)
 
 Same treatment for surface stations: a `stations` table (network, position, elevation, reported variables, interval, uptime, QC-flag share, trust score) refreshed weekly from MADIS metadata, IEM network lists, NDBC and RWIS; the verify worker picks gauges by trust as well as distance; the Nearby stations layer gains a tap card (latest obs with age, trust badge, 24-h strip; buoys add water temperature and waves) and filters by kind. One scrape framework and one nearest-N query shared with the cameras.
+
+## Travel mode (shipped 2026-11-13/14)
+
+GPS speed moving average decides stationary vs moving (12 mph for a minute in, three minutes under 5 mph out; poor fixes and sub-error displacements ignored); Settings → Travel pins Auto / Driving / Parked, as does the always-present **Trip** button. A destination fetches a road route through the backend (`/route`, openrouteservice with `Routing:OrsKey`; OSRM optional; Nominatim fallback for place search) and draws it in violet; while moving the hit/miss math runs in the vehicle's frame with the observer path laid along the road (`predictRain opts.path`), "you +15/+30/+60" dots on the map, re-route when >0.4 mi off, radar refresh paced to 2 min / 3 mi. Trip line under the header: miles left, drive time, ETA, first road-ahead hazard. Road ahead: NWS alerts at +20/40/60, lightning within 10 mi of the next 30 min of road, very heavy core on the path → "Ahead: …" pills. Overhead wording: when the heavy part passes, heavier still coming, rain ending.
+
+**Next.** NWS hourly grid along the route; a *driving* lead-time row; finer path sampling under 30 mph; edge-closing in the moving frame; `Provider: graphhopper` (hosted API now, self-host on a 16 GB VPS when trails are real work). **Trails (planned):** ORS `foot-hiking` / `cycling-mountain`, foot-speed threshold, elevation along the path ("exposed ridge at +40 min").
+
+## Where things stand — 14 Nov 2026
+
+App 2026.11.14h; backend with cameras, recordings page, routing and forecast archiving.
+
+**Shipped since the 8 Nov plan:** per-point advected 15/30/60 outlines; range rings encoding projection (dashed / dotted / solid, strength colours, blue miss); 5-mile proximity rule; lead time by activity (on/off, mirrored in push); track memory; pass-by timing for rain overhead; day/night rain chance on the cards; the **arrival curve** (6-h projection, qualifying-track gate, width from measured error ±30/45/75 min, height scaled by NWS chance); travel mode (above); webcam directory + classifier + /admin/cams; /admin/record/page; harness `--site`, `--options`, help, `--eta-horizon`; recorder archives NWS hourly (hourly) and Open-Meteo 15-min precipitation (every 15 min); manuals EN/ES current; in-app Help (15 topics, EN/ES, deep links); `tools/video` marketing clips from recordings.
+
+**Measured (replay, 30 recordings, 14 Nov):** threshold FA/miss 10:1136/19 · 15:791/36 · 20:440/67 · 30:77/134; proximity 5 mi 322/222 → 340/207 (shipped), 8 mi overreaches; motion variants and track memory a wash; long-lead ETA with a qualifying track arrives within ±90 min 90 % at 0–1 h, 62 % at 1–2 h, ~40 % at 2–6 h (60 % excluding one stalled band), median timing error 7 / 16 / 16–28 min, ~10 min early bias → the curve, not a clock, past two hours.
+
+**Next, in order:** 1) forecast-vs-app scoring from `.nws.json` / `.om.json` (NWS timing error and point reliability, Open-Meteo minutely as third-party nowcast baseline; claim: "NWS tells you the day, VantageWX the hour"); 2) station directory and camera/station layers, "Camera 4 mi: wet road" status, shift-click sample points on the record page; 3) travel *Next* items, then trails; 4) help topics onto vantagewx.com, ? on the ring legend; 5) native wrapper and the 6×2 in e-ink display; 6) GraphHopper provider.
+
+**Deferred / rejected:** wind-based motion fallback (hurt), finer motion regions/segments (no gain), 8-mile proximity (overreach), alerting past two hours (the curve is the honest form).
