@@ -6,8 +6,9 @@
    usage: node make-video.js <recordingDir> [options]
      --basemap=<png>      1236x1236 basemap aligned with the frames (fetch-basemap.js); without it a plain dark map is drawn
      --from=<epoch ms>    first radar frame to show (default: first frame + 30 min, so the tracker has history)
-     --to=<epoch ms>      last radar frame (default: 25 min after rain first reaches the point, or the end)
-     --hold=0.7           seconds each radar frame is held (video pace)
+     --to=<epoch ms>      last radar frame (default: 20 min after the rain has cleared the point, capped 4 h after arrival)
+     --hold=0.7           seconds each radar frame is held; default: fit --duration=42 seconds of radar (0.3–1.2 s per scan)
+     <recording> may be a folder or the zip from /admin/record (unpacked beside it)
      --title=…            title card text   --sub=…  second line   --place=…  place name on the map ("Rochester, IL")
      --out=<mp4>          output (default <recordingDir>/vantagewx.mp4)
      --radius=170         miles shown each side of the point (crop of the 200-mi recording)
@@ -20,14 +21,18 @@ const { PNG } = require('pngjs');
 const C = require(path.join(__dirname, '..', 'replay', 'core.js'));
 const { chromium } = require('playwright');
 
-const dir = process.argv[2]; if (!dir) { console.error('usage: node make-video.js <recordingDir> [--basemap=png] …'); process.exit(1); }
 const opt = (n, d) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.slice(n.length + 3) : d; };
+let dir = process.argv[2]; if (!dir) { console.error('usage: node make-video.js <recordingDir | recording.zip> [--basemap=png] …'); process.exit(1); }
+if (/\.zip$/i.test(dir)) {   // a zip from /admin/record (or the Training repo): unpack next to it, once
+  const target = dir.replace(/\.zip$/i, ''); if (!fs.existsSync(path.join(target, 'meta.json'))) { fs.mkdirSync(target, { recursive: true }); execFileSync('unzip', ['-q', '-o', dir, '-d', target]); const inner = fs.readdirSync(target).filter(n => fs.existsSync(path.join(target, n, 'meta.json'))); if (inner.length === 1) dir = path.join(target, inner[0]); else dir = target; } else dir = target;
+}
+const prettyPlace = n => n.replace(/-\d{8}-\d{4}$/, '').replace(/[-_]+/g, ' ').replace(/\b([a-z]{2})$/i, (m, st) => st.toUpperCase()).replace(/\b\w/g, ch => ch.toUpperCase());
 const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const MI = 1609.344, mpp = meta.metersPerPx, SIZE = meta.sizePx, HALF = SIZE / 2;
 const fineCellPx = 4, coarseF = 2, fineKm = mpp * fineCellPx / 1000, coarseKm = fineKm * coarseF;
 const RADIUS_MI = +opt('radius', 170), R = Math.round(RADIUS_MI * MI / mpp), c = R / fineCellPx;   // analysis window (px, fine cells)
 const thresh = +opt('thresh', 20), hitMi = 3, HOLD = +opt('hold', 0.7), FPS = +opt('fps', 30), OUT_PX = +opt('size', 1080), TZ = opt('tz', 'America/Chicago');
-const PLACE = opt('place', meta.name), OUT = opt('out', path.join(dir, 'vantagewx.mp4'));
+const PLACE = opt('place', prettyPlace(meta.name || path.basename(dir))), OUT = opt('out', path.join(dir, 'vantagewx.mp4'));
 const times = fs.readdirSync(dir).filter(f => /^\d+\.png$/.test(f)).map(f => +f.slice(0, -4)).sort((a, b) => a - b);
 const clock = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
 const dateLine = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric' });
@@ -122,7 +127,7 @@ async function draw(d){
   document.getElementById('card').style.display='none';
   const S=${OUT_PX}, sc=S/d.cropPx, off=(d.size-d.cropPx)/2, X=x=>(x-off)*sc, Y=y=>(y-off)*sc;
   g.clearRect(0,0,S,S); g.fillStyle='#1b232b'; g.fillRect(0,0,S,S);
-  if(base){g.drawImage(base,off,off,d.cropPx,d.cropPx,0,0,S,S); g.fillStyle='rgba(8,12,16,.35)'; g.fillRect(0,0,S,S);} else { g.strokeStyle='rgba(255,255,255,.06)'; for(let i=0;i<S;i+=S/12){g.beginPath();g.moveTo(i,0);g.lineTo(i,S);g.moveTo(0,i);g.lineTo(S,i);g.stroke();} }
+  if(base){g.filter='saturate(0.6) brightness(0.92)'; g.drawImage(base,off,off,d.cropPx,d.cropPx,0,0,S,S); g.filter='none'; g.fillStyle='rgba(8,12,16,.22)'; g.fillRect(0,0,S,S);} else { g.strokeStyle='rgba(255,255,255,.06)'; for(let i=0;i<S;i+=S/12){g.beginPath();g.moveTo(i,0);g.lineTo(i,S);g.moveTo(0,i);g.lineTo(S,i);g.stroke();} }
   const radar=await img(d.radar); if(radar){g.globalAlpha=.78; g.drawImage(radar,off,off,d.cropPx,d.cropPx,0,0,S,S); g.globalAlpha=1;}
   const cx=X(d.size/2), cy=Y(d.size/2), ppm=d.pxPerMi*sc;
   // rings
@@ -140,10 +145,10 @@ async function draw(d){
   if(d.ov.arrival){const p=d.ov.arrival; g.beginPath(); g.arc(X(p.x),Y(p.y),8,0,Math.PI*2); g.fillStyle='#ff9100'; g.fill(); g.lineWidth=3; g.strokeStyle='#fff'; g.stroke(); g.font='700 22px system-ui'; g.fillStyle='#ffb74d'; g.shadowColor='#000'; g.shadowBlur=6; g.fillText('arrives ≈ '+p.label,X(p.x)+14,Y(p.y)-16); g.shadowBlur=0;}
   // banner
   const BC={green:'#1b5e20',blue:'#0d47a1',orange:'#e65100',red:'#b71c1c'}; g.fillStyle=BC[d.st.cls]; g.globalAlpha=.94; g.fillRect(0,0,S,150); g.globalAlpha=1;
-  g.fillStyle='#fff'; g.font='800 44px system-ui'; g.fillText(d.st.main,32,62); g.font='500 27px system-ui'; g.fillStyle='rgba(255,255,255,.88)'; g.fillText(d.st.sub,32,108);
+  g.fillStyle='#fff'; let fs=44; g.font='800 '+fs+'px system-ui'; while(g.measureText(d.st.main).width>S-56&&fs>28){fs-=2; g.font='800 '+fs+'px system-ui';} g.fillText(d.st.main,32,62); fs=27; g.font='500 '+fs+'px system-ui'; while(g.measureText(d.st.sub).width>S-56&&fs>17){fs-=1; g.font='500 '+fs+'px system-ui';} g.fillStyle='rgba(255,255,255,.88)'; g.fillText(d.st.sub,32,108);
   // clock + legend
   g.fillStyle='rgba(0,0,0,.6)'; g.fillRect(0,S-84,S,84); g.fillStyle='#fff'; g.font='800 40px system-ui'; g.fillText(d.clock,32,S-30); const cw=g.measureText(d.clock).width; g.font='500 24px system-ui'; g.fillStyle='#9fb3c2'; g.fillText(d.date,32+cw+22,S-30);
-  { const lg='NOAA MRMS radar · dotted outlines: where the rain will be in 15 / 30 / 60 min'; g.font='500 20px system-ui'; const w=g.measureText(lg).width; g.fillStyle='rgba(0,0,0,.55)'; g.fillRect(S-w-40,S-126,w+28,36); g.fillStyle='#cfd8dc'; g.textAlign='right'; g.fillText(lg,S-26,S-101); g.textAlign='left'; }
+  { const lg=(base?'© OpenStreetMap contributors · ':'')+'NOAA MRMS radar · dotted outlines: where the rain will be in 15 / 30 / 60 min'; g.font='500 20px system-ui'; const w=g.measureText(lg).width; g.fillStyle='rgba(0,0,0,.55)'; g.fillRect(S-w-40,S-126,w+28,36); g.fillStyle='#cfd8dc'; g.textAlign='right'; g.fillText(lg,S-26,S-101); g.textAlign='left'; }
   if(d.note){g.font='800 34px system-ui'; const w=g.measureText(d.note).width; g.fillStyle='rgba(0,0,0,.72)'; g.fillRect(S/2-w/2-26,S-230,w+52,70); g.fillStyle='#ffd54f'; g.textAlign='center'; g.fillText(d.note,S/2,S-183); g.textAlign='left';}
 }
 function card(h,p){document.getElementById('h1').textContent=h;document.getElementById('p').textContent=p;document.getElementById('card').style.display='flex';}
@@ -155,9 +160,13 @@ function card(h,p){document.getElementById('h1').textContent=h;document.getEleme
   // find when rain first reaches the point, for the default end and the payoff caption
   // first SUSTAINED rain at the point (three scans in a row), so a stray light cell does not end the story early
   let arrivedAt = null; for (let i = 0; i + 2 < times.length; i++) { const t = times[i]; if (t <= from) continue; if ([0, 1, 2].every(k => rainAt(frame(times[i + k])) >= thresh)) { arrivedAt = t; break; } }
-  const to = toOpt || (arrivedAt ? Math.min(times[times.length - 1], arrivedAt + 25 * 60000) : times[times.length - 1]);
+  // ...and until it has passed: the first scan after arrival with three dry scans in a row, plus 20 minutes; capped at 4 h after arrival
+  let clearedAt = null; if (arrivedAt) { const i0 = times.indexOf(arrivedAt) + 3; for (let i = i0; i + 2 < times.length; i++) if ([0, 1, 2].every(k => rainAt(frame(times[i + k])) < thresh)) { clearedAt = times[i]; break; } }
+  const to = toOpt || (arrivedAt ? Math.min(times[times.length - 1], (clearedAt ? clearedAt + 20 * 60000 : arrivedAt + 4 * 3600000), arrivedAt + 4 * 3600000) : times[times.length - 1]);
   const show = times.filter(t => t >= from && t <= to);
-  console.log(`${show.length} radar frames ${clock(from)}–${clock(to)}; rain reaches the point ${arrivedAt ? 'at ' + clock(arrivedAt) : 'never'}`);
+  // pace: --hold wins; otherwise fit --duration (default 50 s of radar) with a floor of 0.3 s per scan
+  const HOLD_EFF = process.argv.some(a => a.startsWith('--hold=')) ? HOLD : Math.max(0.3, Math.min(1.2, (+opt('duration', 42)) / Math.max(1, show.length)));
+  console.log(`${show.length} radar frames ${clock(from)}–${clock(to)} at ${HOLD_EFF.toFixed(2)} s each; rain reaches the point ${arrivedAt ? 'at ' + clock(arrivedAt) : 'never'}${clearedAt ? ', clears ' + clock(clearedAt) : ''}`);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vwx-video-')), pageFile = path.join(work, 'page.html');
   fs.writeFileSync(pageFile, PAGE);
   const browser = await chromium.launch(); const page = await browser.newPage({ viewport: { width: OUT_PX, height: OUT_PX }, deviceScaleFactor: 1 });
@@ -174,9 +183,10 @@ function card(h,p){document.getElementById('h1').textContent=h;document.getEleme
     const t = show[i], a = analyse(t), st = status(a, t), ov = overlay(a, t);
     if (st.eta && (!arrivedAt || t < arrivedAt)) { calls.push({ t, eta: st.eta, main: st.main }); if (!firstCall) firstCall = calls[0]; }
     let note = null;
-    if (arrivedAt && t >= arrivedAt && t < arrivedAt + 26 * 60000 && calls.length) { const b = bestCall(); const off = Math.round((arrivedAt - b.eta) / 60000); note = 'Rain arrived ' + clock(arrivedAt) + ' — called ' + fmtDurExact((arrivedAt - b.t) / 60000) + ' ahead' + (Math.abs(off) <= 3 ? ', on time' : ', ' + Math.abs(off) + ' min ' + (off > 0 ? 'late' : 'early')); }
+    if (clearedAt && t >= clearedAt) note = 'Storm passed · ' + clock(clearedAt) + (arrivedAt ? ' — ' + fmtDurExact((clearedAt - arrivedAt) / 60000) + ' of rain' : '');
+    else if (arrivedAt && t >= arrivedAt && t < arrivedAt + 26 * 60000 && calls.length) { const b = bestCall(); const off = Math.round((arrivedAt - b.eta) / 60000); note = 'Rain arrived ' + clock(arrivedAt) + ' — called ' + fmtDurExact((arrivedAt - b.t) / 60000) + ' ahead' + (Math.abs(off) <= 3 ? ', on time' : ', ' + Math.abs(off) + ' min ' + (off > 0 ? 'late' : 'early')); }
     await page.evaluate(d => draw(d), { radar: 'file://' + path.join(dir, t + '.png'), size: SIZE, cropPx, pxPerMi, ov, st, clock: clock(t), date: dateLine(t), place: PLACE, note });
-    const hold = note ? HOLD * 2.2 : (i === 0 ? HOLD * 2.5 : HOLD);
+    const hold = note ? HOLD_EFF * 2.2 : (i === 0 ? HOLD_EFF * 2.5 : HOLD_EFF);
     await shot('f' + String(i).padStart(4, '0'), hold); lastSt = st;
     process.stdout.write(`\r${i + 1}/${show.length} ${clock(t)}  ${st.main.padEnd(60)}`);
   }

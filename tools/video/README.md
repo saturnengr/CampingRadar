@@ -15,3 +15,8 @@ tracker needs history), ends 25 minutes after rain first reaches the point for t
 earliest call whose arrival time was within 10 minutes of the truth.
 
 Attribution when a basemap is used: © OpenStreetMap contributors (and © CARTO for the dark/light styles).
+
+**If this machine cannot reach the tile servers**, the same stitch runs in any browser: open a tile URL on the server (so fetches are
+same-origin), paste the loop from `fetch-basemap.js` into the console with the recording's `z, x0, y0, size` and tile range,
+`canvas.toDataURL('image/jpeg', 0.92)`, and save the result as `basemap-osm.jpg` in the recording folder. `make-video.js --basemap=`
+takes PNG or JPEG.
