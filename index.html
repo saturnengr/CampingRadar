@@ -303,7 +303,7 @@ body.side #side::after{content:"";flex:1;order:9}
 #huWrap{background:rgba(255,183,77,.08)}
 #msgWrap{background:rgba(124,77,255,.12)}#msgRow{display:block}.msg{font-size:15px;padding:2px 0}.msg.mine{opacity:.75}
 body.side #msgWrap{order:6}body.side #olWrap{order:5}
-#olWrap{background:rgba(79,195,247,.07)}#olRow{display:flex;gap:3px;align-items:flex-end;height:68px}
+#olWrap{background:rgba(79,195,247,.07)}#olRow{display:flex;gap:3px;align-items:flex-end;height:68px;position:relative}
 .ol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;height:100%;background:none;border:0;padding:0;color:var(--text);font:inherit;min-width:0}
 .ol .bar{border-radius:3px 3px 0 0;background:rgba(255,255,255,.14);min-height:4px;position:relative}.ol .bar.pop{background:#4fc3f7}.ol .bar.wet{background:#1e88e5}.ol .bar.thu{background:#ffb74d}
 .ol .bar.radar{box-shadow:0 0 0 2px var(--rc) inset;background:var(--rc)}.ol .bar.clear{box-shadow:0 0 0 2px #43a047 inset;background:transparent}
@@ -680,6 +680,15 @@ function reconcileMotion(hist, cand, nowMs, opts) {
   const h = held(); h.reason = (turned ? 'heading swung ' + Math.round(turn(hdg(g), hdg(prev))) + '°' : 'speed jumped ' + Math.round(pS) + '→' + Math.round(cS) + ' mph') + ' · holding the track from ' + Math.round(ageMin) + ' min ago (' + streak + '/' + o.persist + ')';
   h.streak = streak; return h;
 }
+/* A track is "steady" when the accepted motions of the last hour (track memory) all agree with the current one: heading within 30°,
+   speed within 35 % (or 6 mph). At least four accepted scans. This is the gate for showing an arrival more than two hours out. */
+function trackSteady(motion, nowMs) {
+  const hist = st.motionHist || []; if (!motion || !motion.ok) return false;
+  const recent = hist.filter(h => nowMs - h.t <= 60 * 60000 && nowMs - h.t > 0); if (recent.length < 4) return false;
+  const hd = (vx, vy) => (Math.atan2(vx, -vy) * 180 / Math.PI + 360) % 360, sp = (vx, vy) => Math.hypot(vx, vy) * 60 * 0.621371;
+  const H = hd(motion.global.vx, motion.global.vy), V = sp(motion.global.vx, motion.global.vy);
+  return recent.every(h => { let d = ((hd(h.vx, h.vy) - H) % 360 + 540) % 360 - 180; return Math.abs(d) <= 30 && Math.abs(sp(h.vx, h.vy) - V) <= Math.max(6, 0.35 * V); });
+}
 function rememberMotion(hist, result, nowMs) {   // bookkeeping for reconcileMotion: push accepted tracks, count held streaks, trim
   hist = hist || []; const m = result.motion;
   if (result.held) hist.disagree = result.streak || 0;
@@ -970,7 +979,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14f';
+const APP_VERSION = '2026.11.14g';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -2087,8 +2096,21 @@ async function runNowcast() {
     { const sres = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: NC.coreDbz, hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, minHitCells: 2 });
       res.core = sres.hit ? { hit: true, etaMin: sres.hit.etaMin, endMin: sres.hit.endMin, maxDbz: sres.hit.maxDbz, fromBearing: sres.hit.fromBearing, distMi: sres.hit.distMi }
         : sres.passing && sres.passing.distMi <= 40 ? { hit: false, distMi: sres.passing.distMi, bearing: sres.passing.bearing, passBearing: sres.passing.passBearing, closestMi: sres.passing.closestMi, maxDbz: sres.nearest ? sres.nearest.dbz : NC.coreDbz } : null; }
-    // beyond the two hours the tracker trusts, a straight-line look out to three hours: informational only (blue), never an alert
-    if (!res.hit) { const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: 180, maxRingMi: 50, minHitCells: 6 }, labelled[2].labels); res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null; }
+    // beyond the two hours the tracker trusts, a straight-line look out to six hours: informational only (blue), never an alert.
+    // Measured on the 14 Nov replay (tools/replay --eta-horizon): with a QUALIFYING track (confident, steady for an hour, strong or big
+    // echo) the timing holds to 3–4 h (median error 16–28 min) but about 40 % of projected arrivals never come — one stalled band
+    // supplied most of those. So past 2 h the projection is shown as a spread (sigmaMin below) and scaled by the NWS chance for that hour.
+    if (!res.hit) {
+      const far = predictRain(cleaned[2], fineKm, c, c, vel, { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: 360, maxRingMi: radiusMi, minHitCells: 6 }, labelled[2].labels);
+      res.far = far.hit && far.hit.etaMin > NC.horizonMin - 5 ? far.hit : null;
+      if (res.far) {
+        const f = res.far, steady = trackSteady(motion, fr[2].t);
+        f.qualified = !!(motion.ok && motion.global.conf >= 0.5 && steady && (f.maxDbz >= 40 || f.cells >= 60));
+        f.sigmaMin = f.etaMin < 180 ? 30 : f.etaMin < 240 ? 45 : 75;
+        f.strength = f.maxDbz >= 50 ? 'red' : f.maxDbz >= 40 ? 'orange' : f.maxDbz >= 30 ? 'yellow' : 'white';
+        delete f.blobCells;
+      }
+    }
     // how the nearest rain's edge has actually moved over the last hour (reset when the location changes)
     if (!st.edgeHist || !st.edgeLoc || distMi(st.edgeLoc, st.loc) > 2) { st.edgeHist = []; st.edgeLoc = { ...st.loc }; st.fizzleSeen = 0; }
     const tNow = fr[2].t;
@@ -2789,7 +2811,39 @@ function computeOutlook() {
     }
     hours.push(h);
   }
-  return { hours, status: st_, any: hours.some(h => (h.pop || 0) >= 20 || h.thu >= 10 || (h.radar && h.radar.kind === 'rain')) };
+  /* Radar arrival curve past the 2-h horizon: a bell centred on the projected arrival whose width is the measured timing error at that
+     lead (±30 min at 2–3 h, ±45 at 3–4 h, ±75 at 4–6 h) and whose height is the track's strength scaled by the NWS chance for that
+     hour — the forecast is what knows whether a far-off band will still exist when it gets here. Only with a qualifying track. */
+  let curve = null;
+  const far = res && res.far;
+  if (fresh && far && far.qualified && !hit) {
+    const centre = now + Math.max(0, far.etaMin - lag) * 60000, sigma = far.sigmaMin * 60000;
+    const popAt = t => { const p = byHour.get(Math.floor(t / 3600e3) * 3600e3); return p && p.probabilityOfPrecipitation ? (p.probabilityOfPrecipitation.value || 0) : null; };
+    const pop = popAt(centre), popF = pop == null ? 0.6 : 0.3 + 0.7 * Math.min(1, pop / 70);   // 0 % → a low hint, 70 %+ → full height
+    const base = far.maxDbz >= 40 ? 1 : 0.75;
+    const pts = []; for (let k = 0; k <= 96; k++) { const t = h0 + k * 450e3; pts.push({ t, y: base * popF * Math.exp(-0.5 * ((t - centre) / sigma) ** 2) }); }   // every 7.5 min
+    curve = { centre, sigma: far.sigmaMin, pts, color: far.strength === 'white' ? '#cfd8dc' : RING_COL[far.strength], strength: far.strength, maxDbz: far.maxDbz, pop, popF, distMi: far.distMi, fromBearing: far.fromBearing, agree: pop != null && pop >= 40, lowPop: pop != null && pop < 20 };
+  }
+  return { hours, curve, status: st_, any: hours.some(h => (h.pop || 0) >= 20 || h.thu >= 10 || (h.radar && h.radar.kind === 'rain')) || !!curve };
+}
+function drawOutlookCurve(o) {
+  const row = $('#olRow'); let svg = $('#olCurve'); if (svg) svg.remove();
+  if (!o.curve) return;
+  const bars = row.querySelectorAll('.bar'); if (bars.length < 12) return;
+  const rr = row.getBoundingClientRect(), b0 = bars[0].getBoundingClientRect(), b11 = bars[11].getBoundingClientRect();
+  const bottom = rr.bottom - b0.bottom, left = b0.left - rr.left, width = b11.right - b0.left, H = 30;   // 30 px = a 100 % bar
+  const t0 = o.hours[0].t, span = 12 * 3600e3;
+  const X = t => left + (t - t0) / span * width, Y = y => H - y * H;
+  const pts = o.curve.pts.filter(q => q.y >= 0.015); if (pts.length < 2) return;   // only the bump, not a flat line along the whole strip
+  let d = 'M' + X(pts[0].t).toFixed(1) + ',' + Y(pts[0].y).toFixed(1);
+  for (let i = 1; i < pts.length; i++) d += 'L' + X(pts[i].t).toFixed(1) + ',' + Y(pts[i].y).toFixed(1);
+  const area = d + 'L' + X(pts[pts.length - 1].t).toFixed(1) + ',' + H + 'L' + X(pts[0].t).toFixed(1) + ',' + H + 'Z';
+  const c = o.curve.color;
+  svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.id = 'olCurve';
+  svg.setAttribute('width', rr.width); svg.setAttribute('height', H); svg.style.cssText = 'position:absolute;left:0;bottom:' + bottom + 'px;pointer-events:none;overflow:visible';
+  svg.innerHTML = '<path d="' + area + '" fill="' + c + '" fill-opacity="0.22"/><path d="' + d + '" fill="none" stroke="' + c + '" stroke-width="2" stroke-linejoin="round"/>' +
+    '<line x1="' + X(o.curve.centre).toFixed(1) + '" x2="' + X(o.curve.centre).toFixed(1) + '" y1="0" y2="' + H + '" stroke="' + c + '" stroke-width="1" stroke-dasharray="2 3" opacity="0.8"/>';
+  row.appendChild(svg);
 }
 function renderOutlook() {
   const wrap = $('#olWrap'); if (!wrap) return;
@@ -2804,8 +2858,15 @@ function renderOutlook() {
     else if (h.radar && h.radar.kind === 'clear') { cls = 'clear'; style = 'height:' + Math.max(8, ht) + 'px'; }
     return '<button class="ol" data-ol="' + i + '" title="' + esc(h.sky) + '"><div class="pct">' + (h.radar && h.radar.kind === 'rain' ? '◉' : h.radar && h.radar.kind === 'clear' ? '✓' : v >= 10 ? v + '%' : '') + '</div><div class="bar ' + cls + '" style="' + style + '"></div><div class="tmp">' + (h.temp != null ? h.temp + '°' : '') + '</div><div class="lbl">' + (i === 0 ? 'now' : hrLbl(h.t)) + '</div></button>';
   }).join('');
+  requestAnimationFrame(() => { try { drawOutlookCurve(o); } catch (e) { } });
   const first = o.hours.find(h => (h.pop || 0) >= 40 || h.thu >= 20), rad = o.hours.find(h => h.radar && h.radar.kind === 'rain');
   const barShowsRadar = document.body.classList.contains('urgent');
+  if (o.curve && !rad) {
+    const cv = o.curve, lo = clock(cv.centre - cv.sigma * 60000), hi = clock(cv.centre + cv.sigma * 60000);
+    $('#olNote').textContent = 'Radar track: ' + intensityWord(cv.maxDbz).toLowerCase() + ' rain ' + Math.round(cv.distMi) + ' mi ' + compass(cv.fromBearing) + ' heading this way, ' + lo + '–' + hi + ' if it holds together' +
+      (cv.agree ? ' · forecast agrees (' + cv.pop + '%)' : cv.lowPop ? ' · forecast has only ' + cv.pop + '% then, so it may not get here' : cv.pop != null ? ' · forecast ' + cv.pop + '% then' : '');
+    wrap.hidden = false; return;
+  }
   const passing = o.status && o.status.level === 'passing' && !barShowsRadar, radarWord = passing ? 'Radar: ' + o.status.main.replace(/^Rain /, 'rain ') + ', nothing heading your way' : 'Radar clear for the next 2 hours';
   $('#olNote').textContent = rad && !barShowsRadar ? 'Radar: ' + rad.radar.main : rad && first && first.t > Date.now() + 2 * 3600e3 ? 'Later: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : rad ? '' : first ? radarWord + ' · forecast: ' + (first.thu >= 20 ? first.thu + '% thunder' : first.pop + '% rain') + ' around ' + clock(first.t) : o.any ? radarWord : radarWord + ' · forecast dry through ' + clock(o.hours[11].t + 3600e3);
   wrap.hidden = false;
@@ -2816,6 +2877,7 @@ $('#olRow').addEventListener('click', e => {
   const lines = [];
   if (h.radar && h.radar.kind === 'rain') lines.push('Radar: ' + h.radar.main + (h.radar.arrives ? '' : ' (continuing through this hour)') + ' — ' + intensityWord(h.radar.maxDbz).toLowerCase() + ' rain on the latest scan.');
   else if (h.radar && h.radar.kind === 'clear') lines.push('Radar: nothing tracked toward you within this hour.');
+  if (st.outlook.curve && Math.abs(h.t + 1800e3 - st.outlook.curve.centre) <= st.outlook.curve.sigma * 60000 + 1800e3) { const cv = st.outlook.curve; lines.push('Radar track: a ' + intensityWord(cv.maxDbz).toLowerCase() + ' storm ' + Math.round(cv.distMi) + ' mi away is projected to arrive around ' + clock(cv.centre) + ' (±' + cv.sigma + ' min). Projections this far out are right about half the time on their own; the forecast chance for the hour (' + (cv.pop == null ? 'unknown' : cv.pop + '%') + ') sets how much to trust it.'); }
   if (h.pop != null) lines.push('NWS forecast: ' + h.pop + '% chance of rain' + (h.thu ? ', ' + h.thu + '% chance of thunder' : '') + (h.sky ? ' · ' + h.sky : '') + '.');
   if (h.temp != null) lines.push(deg(h.temp) + (h.wind ? ' · wind ' + h.wind + (h.dir ? ' ' + h.dir : '') : '') + (h.gust ? ', gusts to ' + h.gust + ' mph' : '') + '.');
   lines.push(h.t < Date.now() + NC.horizonMin * 60000 ? 'Within radar range: the arrival estimate is extrapolated from the last 30 minutes of radar; the forecast line is the NWS hourly product.' : 'Beyond what radar extrapolation can see: this hour is the NWS hourly forecast only. The radar will take over as it gets within about two hours.');
