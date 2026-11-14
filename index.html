@@ -79,6 +79,8 @@ body.noclock #clock{display:none}
 #routeQ{width:100%;font:inherit;font-size:16px;padding:10px 12px;border-radius:8px;border:1px solid #2a3642;background:#0f1317;color:#e8eef3}
 #routeResults{margin-top:6px}#routeResults button{display:block;width:100%;text-align:left;font:inherit;background:#1b232b;color:#e8eef3;border:1px solid #2a3642;border-radius:8px;padding:9px 12px;margin-top:6px;cursor:pointer}
 #routeResults button small{display:block;color:#9fb3c2;font-size:12px}
+.rs-mode{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 0;font-size:13px;color:#9fb3c2}
+.rs-mode #routeMode{display:inline-flex;border:1px solid #34506a;border-radius:8px;overflow:hidden}.rs-mode #routeMode button{font:inherit;font-size:13px;background:#0f1317;color:#e8eef3;border:0;border-right:1px solid #34506a;padding:7px 12px;cursor:pointer}.rs-mode #routeMode button:last-child{border-right:0}.rs-mode #routeMode button.on{background:#2a6fb0;color:#fff}
 .rs-actions{margin:10px 0 0}.rs-actions button{font:inherit;background:#223040;color:#e8eef3;border:1px solid #34506a;border-radius:8px;padding:8px 12px;cursor:pointer}
 #snoozeMenu{position:fixed;right:12px;z-index:1500;background:var(--chrome2);border:1px solid var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 #snoozeMenu .hdr{font-size:13px;color:var(--muted);padding:0 4px}
@@ -379,6 +381,7 @@ body.night #banner,body.night #statusbar,body.night #warnbar,body.night #control
     <input id="routeQ" type="search" placeholder="e.g. Lake Texoma, or 400 Main St Denison" autocomplete="off">
     <div id="routeResults"></div>
     <div id="routeNow" class="rs-sub"></div>
+    <div class="rs-mode"><span>Travel mode</span><div id="routeMode" role="radiogroup"><button data-m="auto">Auto</button><button data-m="mobile">Driving</button><button data-m="stationary">Parked</button></div><small id="routeModeNow"></small></div>
     <p class="rs-actions"><button id="routeClear" hidden>Clear destination</button></p>
   </div>
 </div>
@@ -964,7 +967,7 @@ const st = {
   hz: { gauges: [], fires: [], floodAlerts: [], firewx: [], storms: [], at: 0, err: null, nearest: {} }, hzEvt: {}, windAt: 0,
 };
 const BE = () => (S.backend || '').trim().replace(/\/+$/, '');
-const APP_VERSION = '2026.11.14a';
+const APP_VERSION = '2026.11.14b';
 /* Anonymous usage ping for the admin page: a random install id, location rounded to about 7 miles, activity, language,
    platform and version. No account, no name, no exact position; the server forgets installs not seen for 90 days. */
 function pingBackend(opened) {
@@ -1680,9 +1683,12 @@ function travelPath(mph, headingDeg, horizonMin) {
 }
 function updateRouteUi() {
   const tv = travelling(), btn = $('#routeBtn'); if (!btn) return;
-  btn.hidden = !tv.moving; btn.textContent = S.destination ? '→ ' + (S.destination.name || 'destination').slice(0, 18) : 'Where to?';
-  const now = $('#routeNow'); if (now) now.textContent = S.destination ? ('Heading to ' + S.destination.name + (st.route ? ' · ' + st.route.summary : st.routeErr ? ' · ' + st.routeErr : st.routeBusy ? ' · finding the road…' : '')) : '';
+  // always reachable: a trip is set up BEFORE driving, never while. Auto mode still only switches the math once the vehicle is moving.
+  btn.hidden = !S.backend; btn.textContent = S.destination ? '→ ' + (S.destination.name || 'destination').slice(0, 18) : tv.moving ? 'Where to?' : 'Trip';
+  const now = $('#routeNow'); if (now) now.textContent = S.destination ? ('Heading to ' + S.destination.name + (st.route ? ' · ' + st.route.summary : st.routeErr ? ' · ' + st.routeErr : st.routeBusy ? ' · finding the road…' : '') + (!tv.moving ? ' · the road is on the map; rain is judged along it once you are moving' : '')) : '';
   const clr = $('#routeClear'); if (clr) clr.hidden = !S.destination;
+  document.querySelectorAll('#routeMode button').forEach(b => b.classList.toggle('on', b.dataset.m === S.travelMode));
+  const mn = $('#routeModeNow'); if (mn) mn.textContent = S.travelMode === 'auto' ? ('Auto · ' + (st.travel.moving ? 'moving' : 'stationary') + ' now' + (st.travel.mph >= 1 ? ' · ' + Math.round(st.travel.mph) + ' mph' : '')) : S.travelMode === 'mobile' ? 'Pinned: rain judged along your heading or road' : 'Pinned: rain judged at this spot';
 }
 function openRouteSheet() { $('#routeSheet').hidden = false; updateRouteUi(); $('#routeResults').innerHTML = ''; setTimeout(() => $('#routeQ').focus(), 50); }
 let routeSearchTimer = null;
@@ -2045,8 +2051,8 @@ async function runNowcast() {
     // origin — which is exact as long as you hold your heading and speed. The map layers keep the ground-relative field.
     const tv = travelling();
     const path = tv.moving ? travelPath(tv.mph, tv.headingDeg, NC.horizonMin) : null;   // along the road with a destination, straight line without
-    if (tv.moving && S.destination && !st.route && !st.routeBusy && !st.routeErr) fetchRoute();
-    if (st.route) { const pr = routeProgress(); if (pr && pr.offMi > 0.4 && Date.now() - st.route.at > 60000) { st.route = null; fetchRoute(); } }   // drifted off the road (or turned off): re-route from here
+    if (S.destination && !st.route && !st.routeBusy && !st.routeErr) fetchRoute();   // moving or not: the road goes on the map as soon as a trip exists
+    if (st.route && tv.moving) { const pr = routeProgress(); if (pr && pr.offMi > 0.4 && Date.now() - st.route.at > 60000) { st.route = null; fetchRoute(); } }   // drifted off the road (or turned off): re-route from here
     const res = predictRain(cleaned[2], fineKm, c, c, vel,
       { thresh: threshDbz(), hitRadiusMi: S.hitMi, horizonMin: NC.horizonMin, maxRingMi: 50, ringRadii: ranges(), path }, labelled[2].labels);
     res.movingFrame = path ? { mph: Math.round(tv.mph), headingDeg: tv.headingDeg == null ? null : Math.round(tv.headingDeg), onRoute: !!path.onRoute, path } : null;
@@ -2416,11 +2422,16 @@ function addAwayLabel(bearingDeg, distMi, html) {
   L.marker(ll, { icon: awayLabel(bearingDeg, html), pane: 'hazards', interactive: false }).addTo(motionLayer);
 }
 function drawTravel() {   // where YOU will be at +15/+30/+60 if you hold heading and speed, in the storm outlines' colours
-  const tv = travelling(); if (!tv.moving || tv.headingDeg == null || !(tv.mph >= 3) || !st.loc) return;
-  const path = (st.nc && st.nc.res && st.nc.res.movingFrame && st.nc.res.movingFrame.path) || travelPath(tv.mph, tv.headingDeg, 60); if (!path) return;
+  const tv = travelling(); if (!st.loc) return;
   const night = document.body.classList.contains('night'), halo = night ? '#000' : '#fff';
+  if (st.route && S.destination) {   // the whole road, faint — shown as soon as a trip is set so it can be checked before pulling out
+    L.polyline(st.route.coords, { pane: 'hazards', color: '#e8eef3', weight: 2, opacity: 0.35, interactive: false }).addTo(motionLayer);
+    const end = st.route.coords[st.route.coords.length - 1];
+    L.circleMarker(end, { pane: 'hazards', radius: 5, color: halo, weight: 3, opacity: 0.6, fillColor: '#e8eef3', fillOpacity: 1, interactive: false }).addTo(motionLayer);
+  }
+  if (!tv.moving || tv.headingDeg == null || !(tv.mph >= 3)) return;
+  const path = (st.nc && st.nc.res && st.nc.res.movingFrame && st.nc.res.movingFrame.path) || travelPath(tv.mph, tv.headingDeg, 60); if (!path) return;
   const line = path.filter(p => p.lat != null && p.t <= 60).map(p => [p.lat, p.lon]); line.unshift([st.loc.lat, st.loc.lon]);
-  if (st.route) L.polyline(st.route.coords, { pane: 'hazards', color: '#e8eef3', weight: 2, opacity: 0.35, interactive: false }).addTo(motionLayer);   // the whole road, faint
   L.polyline(line, { pane: 'hazards', color: halo, weight: 5, opacity: 0.5, interactive: false }).addTo(motionLayer);
   L.polyline(line, { pane: 'hazards', color: '#e8eef3', weight: 2, dashArray: path.onRoute ? null : '4 8', opacity: 0.9, interactive: false }).addTo(motionLayer);
   const at = (m) => { let best = path[0]; for (const p of path) if (p.lat != null && Math.abs(p.t - m) < Math.abs(best.t - m)) best = p; return best.lat != null ? [best.lat, best.lon] : null; };
@@ -3140,6 +3151,7 @@ function renderSnooze() {
 $('#routeBtn').onclick = openRouteSheet; $('#routeClose').onclick = () => { $('#routeSheet').hidden = true; }; $('#routeSheet').addEventListener('click', e => { if (e.target.id === 'routeSheet') $('#routeSheet').hidden = true; });
 $('#routeQ').addEventListener('input', e => { clearTimeout(routeSearchTimer); routeSearchTimer = setTimeout(() => routeSearch(e.target.value.trim()), 350); });
 $('#routeClear').onclick = () => { $('#routeSheet').hidden = true; setDestination(null); };
+document.querySelectorAll('#routeMode button').forEach(b => b.onclick = () => { S.travelMode = b.dataset.m; save(); st.ncAt = 0; runNowcast(); updateRouteUi(); });
 $('#snoozeBtn').addEventListener('click', ev => {
   ev.stopPropagation();
   const m = $('#snoozeMenu'); m.style.top = ($('#statusbar').getBoundingClientRect().bottom + 6) + 'px';
@@ -4196,7 +4208,7 @@ setTimeout(() => setVoiceStatus(voice.status), 100);
 /* ------------------------------ settings --------------------------- */
 const SETTINGS = {
   general: [
-    ['travelMode', 'Travel — when you are moving (12+ mph for a minute), rain is judged against where you are heading, not just where you are; Auto detects it from GPS', [['auto', 'Auto'], ['stationary', 'Stationary'], ['mobile', 'Mobile']]],
+    ['travelMode', 'Travel — when you are moving (12+ mph for a minute), rain is judged against where you are heading, not just where you are; Auto detects it from GPS. The Trip button on the main screen switches this too, and lets you set a destination before you pull out', [['auto', 'Auto'], ['stationary', 'Parked'], ['mobile', 'Driving']]],
     ['activity', 'Activity (shapes the day forecast view and the briefing)', [['camping', 'Camping'], ['rv', 'RV'], ['hunting', 'Hunting'], ['fishing', 'Fishing & boating'], ['trail', 'Hiking / running / cycling'], ['beach', 'Beach'], ['skiing', 'Skiing'], ['sentinel', 'Sentinel — fixed display watching one spot']], 'select'],
     ['bottomGap', 'Phone: extra space under the toolbar (Auto measures what Android covers; use a fixed value only if Auto leaves the toolbar under the navigation bar)', [['auto', 'Auto'], ['0', 'None'], ['24', '+24 px'], ['48', '+48 px']]],
     isPhoneDevice()
