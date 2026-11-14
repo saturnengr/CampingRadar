@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 /* Stitch a basemap that lines up pixel-for-pixel with a recording's frames (Web Mercator, the recording's zoom, centred on its point).
    usage: node fetch-basemap.js <recordingDir> [--style=osm|dark|light] [--out=basemap.png]
-   Tiles: osm = tile.openstreetmap.org (attribution © OpenStreetMap contributors), dark/light = CARTO basemaps (© CARTO, © OSM). */
+   Tiles: osm = tile.openstreetmap.org (attribution © OpenStreetMap contributors). CARTO's dark/light styles now need an API key
+   (Basemaps:CartoKey or --carto-key=…); without one use osm and render dark with make-video.js --night. */
 const fs = require('fs'), path = require('path');
 module.paths.push(path.join(__dirname, '..', 'replay', 'node_modules'));   // pngjs from the replay harness install, or npm install here
 const { PNG } = require('pngjs');
 const dir = process.argv[2]; const opt = (n, d) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.slice(n.length + 3) : d; };
-const style = opt('style', 'osm'), out = opt('out', path.join(dir, 'basemap-' + style + '.png'));
+const style = opt('style', 'osm'), out = opt('out', path.join(dir, 'basemap-' + style + '.png')), cartoKey = opt('carto-key', process.env.CARTO_KEY || '');
+if (style !== 'osm' && !cartoKey) { console.error('CARTO basemaps require an API key now: pass --carto-key=… or use --style=osm and render dark with make-video.js --night'); process.exit(2); }
 const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json')));
 const z = meta.zoom, size = meta.sizePx, n = 256 * 2 ** z;
 const merc = (lat, lon) => { const x = (lon + 180) / 360 * n, s = Math.sin(lat * Math.PI / 180), y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n; return [x, y]; };
 const [cx, cy] = merc(meta.lat, meta.lon), x0 = Math.round(cx - size / 2), y0 = Math.round(cy - size / 2);
-const url = (tx, ty) => style === 'osm' ? `https://tile.openstreetmap.org/${z}/${tx}/${ty}.png` : `https://a.basemaps.cartocdn.com/${style === 'dark' ? 'dark_all' : 'light_all'}/${z}/${tx}/${ty}.png`;
+const url = (tx, ty) => style === 'osm' ? `https://tile.openstreetmap.org/${z}/${tx}/${ty}.png` : `https://a.basemaps.cartocdn.com/${style === 'dark' ? 'dark_all' : 'light_all'}/${z}/${tx}/${ty}.png?api_key=${encodeURIComponent(cartoKey)}`;
 (async () => {
   const outPng = new PNG({ width: size, height: size });
   const tx0 = Math.floor(x0 / 256), ty0 = Math.floor(y0 / 256), tx1 = Math.floor((x0 + size - 1) / 256), ty1 = Math.floor((y0 + size - 1) / 256);

@@ -13,6 +13,7 @@
      --out=<mp4>          output (default <recordingDir>/vantagewx.mp4)
      --radius=170         miles shown each side of the point (crop of the 200-mi recording)
      --thresh=20          rain threshold in dBZ for the status and the arrival moment
+     --night              render the OSM basemap as a dark map (inverted, desaturated) — the look of the app at night
      --fps=30 --size=1080 --tz=America/Chicago
    Needs: pngjs (tools/replay/node_modules), playwright + chromium, ffmpeg. */
 const fs = require('fs'), path = require('path'), os = require('os'), { execFileSync } = require('child_process');
@@ -32,6 +33,7 @@ const MI = 1609.344, mpp = meta.metersPerPx, SIZE = meta.sizePx, HALF = SIZE / 2
 const fineCellPx = 4, coarseF = 2, fineKm = mpp * fineCellPx / 1000, coarseKm = fineKm * coarseF;
 const RADIUS_MI = +opt('radius', 170), R = Math.round(RADIUS_MI * MI / mpp), c = R / fineCellPx;   // analysis window (px, fine cells)
 const thresh = +opt('thresh', 20), hitMi = 3, HOLD = +opt('hold', 0.7), FPS = +opt('fps', 30), OUT_PX = +opt('size', 1080), TZ = opt('tz', 'America/Chicago');
+const NIGHT = process.argv.includes('--night');
 const PLACE = opt('place', prettyPlace(meta.name || path.basename(dir))), OUT = opt('out', path.join(dir, 'vantagewx.mp4'));
 const times = fs.readdirSync(dir).filter(f => /^\d+\.png$/.test(f)).map(f => +f.slice(0, -4)).sort((a, b) => a - b);
 const clock = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
@@ -127,7 +129,7 @@ async function draw(d){
   document.getElementById('card').style.display='none';
   const S=${OUT_PX}, sc=S/d.cropPx, off=(d.size-d.cropPx)/2, X=x=>(x-off)*sc, Y=y=>(y-off)*sc;
   g.clearRect(0,0,S,S); g.fillStyle='#1b232b'; g.fillRect(0,0,S,S);
-  if(base){g.filter='saturate(0.6) brightness(0.92)'; g.drawImage(base,off,off,d.cropPx,d.cropPx,0,0,S,S); g.filter='none'; g.fillStyle='rgba(8,12,16,.22)'; g.fillRect(0,0,S,S);} else { g.strokeStyle='rgba(255,255,255,.06)'; for(let i=0;i<S;i+=S/12){g.beginPath();g.moveTo(i,0);g.lineTo(i,S);g.moveTo(0,i);g.lineTo(S,i);g.stroke();} }
+  if(base){g.filter=d.night?'invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.8) contrast(0.9)':'saturate(0.6) brightness(0.92)'; g.drawImage(base,off,off,d.cropPx,d.cropPx,0,0,S,S); g.filter='none'; g.fillStyle=d.night?'rgba(0,0,0,.15)':'rgba(8,12,16,.22)'; g.fillRect(0,0,S,S);} else { g.strokeStyle='rgba(255,255,255,.06)'; for(let i=0;i<S;i+=S/12){g.beginPath();g.moveTo(i,0);g.lineTo(i,S);g.moveTo(0,i);g.lineTo(S,i);g.stroke();} }
   const radar=await img(d.radar); if(radar){g.globalAlpha=.78; g.drawImage(radar,off,off,d.cropPx,d.cropPx,0,0,S,S); g.globalAlpha=1;}
   const cx=X(d.size/2), cy=Y(d.size/2), ppm=d.pxPerMi*sc;
   // rings
@@ -185,7 +187,7 @@ function card(h,p){document.getElementById('h1').textContent=h;document.getEleme
     let note = null;
     if (clearedAt && t >= clearedAt) note = 'Storm passed · ' + clock(clearedAt) + (arrivedAt ? ' — ' + fmtDurExact((clearedAt - arrivedAt) / 60000) + ' of rain' : '');
     else if (arrivedAt && t >= arrivedAt && t < arrivedAt + 26 * 60000 && calls.length) { const b = bestCall(); const off = Math.round((arrivedAt - b.eta) / 60000); note = 'Rain arrived ' + clock(arrivedAt) + ' — called ' + fmtDurExact((arrivedAt - b.t) / 60000) + ' ahead' + (Math.abs(off) <= 3 ? ', on time' : ', ' + Math.abs(off) + ' min ' + (off > 0 ? 'late' : 'early')); }
-    await page.evaluate(d => draw(d), { radar: 'file://' + path.join(dir, t + '.png'), size: SIZE, cropPx, pxPerMi, ov, st, clock: clock(t), date: dateLine(t), place: PLACE, note });
+    await page.evaluate(d => draw(d), { radar: 'file://' + path.join(dir, t + '.png'), size: SIZE, cropPx, pxPerMi, ov, st, clock: clock(t), date: dateLine(t), place: PLACE, note, night: NIGHT });
     const hold = note ? HOLD_EFF * 2.2 : (i === 0 ? HOLD_EFF * 2.5 : HOLD_EFF);
     await shot('f' + String(i).padStart(4, '0'), hold); lastSt = st;
     process.stdout.write(`\r${i + 1}/${show.length} ${clock(t)}  ${st.main.padEnd(60)}`);
